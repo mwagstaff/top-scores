@@ -502,7 +502,8 @@ struct APIClient {
     }
 
     func fetchCompetitionCatalog() async throws -> CompetitionCatalogResponse {
-        let request = try buildRequest(path: "competitions/catalog", queryItems: [])
+        var request = try buildRequest(path: "competitions/catalog", queryItems: [])
+        request.timeoutInterval = 5
         let (data, http) = try await performRequest(request, operation: "competition_catalog")
         try validateSuccess(http, data: data, operation: "competition_catalog")
         return try JSONDecoder().decode(CompetitionCatalogResponse.self, from: data)
@@ -772,7 +773,8 @@ struct APIClient {
     }
 
     func fetchChannels() async throws -> [String] {
-        let request = try buildRequest(path: "channels", queryItems: [])
+        var request = try buildRequest(path: "channels", queryItems: [])
+        request.timeoutInterval = 5
         let (data, httpResponse) = try await performRequest(request, operation: "channels")
 
         if httpResponse.statusCode == 404 {
@@ -1080,6 +1082,7 @@ struct APIClient {
         let urlString = request.url?.absoluteString ?? "<unknown>"
 
         for attempt in 1...maxAttempts {
+            try Task.checkCancellation()
             let startedAt = Date()
             Self.log("INFO", "start id=\(requestID) op=\(operation) attempt=\(attempt) method=\(method) url=\(urlString)")
 
@@ -1102,6 +1105,7 @@ struct APIClient {
                 if attempt < maxAttempts && Self.retryableStatusCodes.contains(httpResponse.statusCode) {
                     Self.log("WARN", "retrying id=\(requestID) op=\(operation) next_attempt=\(attempt + 1) reason=status_\(httpResponse.statusCode)")
                     try? await Task.sleep(nanoseconds: Self.retryDelayNanos)
+                    try Task.checkCancellation()
                     continue
                 }
 
@@ -1113,6 +1117,7 @@ struct APIClient {
                 if attempt < maxAttempts, Self.isRetryable(error: error) {
                     Self.log("WARN", "retrying id=\(requestID) op=\(operation) next_attempt=\(attempt + 1) reason=transient_error")
                     try? await Task.sleep(nanoseconds: Self.retryDelayNanos)
+                    try Task.checkCancellation()
                     continue
                 }
 

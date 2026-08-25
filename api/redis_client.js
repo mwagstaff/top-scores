@@ -798,6 +798,30 @@ function recordUpdatedAtMs(record) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function normalizedPreferencesRevision(value) {
+  if (
+    value === null ||
+    value === undefined ||
+    typeof value === "boolean" ||
+    (typeof value === "string" && value.trim() === "")
+  ) {
+    return null;
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) return null;
+  return parsed;
+}
+
+function isStalePreferencesRevision(incoming, existing) {
+  const incomingRevision = normalizedPreferencesRevision(incoming);
+  const existingRevision = normalizedPreferencesRevision(existing);
+  return (
+    incomingRevision !== null &&
+    existingRevision !== null &&
+    incomingRevision < existingRevision
+  );
+}
+
 function freshestUserRecord(...records) {
   return records
     .filter((record) => record && typeof record === "object")
@@ -835,6 +859,20 @@ async function saveUserPreferences(
         : await mongoStore.getUserPreferences(normalizedToken);
     }
 
+    const incomingPreferencesRevision = normalizedPreferencesRevision(
+      options && options.preferencesRevision
+    );
+    const existingPreferencesRevision = normalizedPreferencesRevision(
+      existing && existing.preferencesRevision
+    );
+    if (isStalePreferencesRevision(incomingPreferencesRevision, existingPreferencesRevision)) {
+      console.warn(
+        `[Redis] Ignoring stale preferences revision ${incomingPreferencesRevision} for ` +
+        `${normalizedToken.substring(0, 12)}...; latest is ${existingPreferencesRevision}`
+      );
+      return attachRedisMetricMeta(existing, { payloadBytes: utf8ByteLength(JSON.stringify(existing)) });
+    }
+
     const resolvedAPNSToken = apnsToken !== undefined
       ? normalizeOptionalToken(apnsToken)
       : normalizeOptionalToken(existing && existing.apnsToken);
@@ -866,6 +904,7 @@ async function saveUserPreferences(
     const data = {
       ...(existing && typeof existing === "object" ? existing : {}),
       deviceToken: normalizedToken,
+      preferencesRevision: incomingPreferencesRevision ?? existingPreferencesRevision,
       apnsToken: resolvedAPNSToken,
       isDevelopmentBuild: resolvedIsDevelopmentBuild,
       preferences: resolvedPreferences,
@@ -3454,6 +3493,8 @@ module.exports = {
     readRedisMetricMeta,
     normalizeLiveActivityStatePatch,
     mergedLiveActivityState,
+    normalizedPreferencesRevision,
+    isStalePreferencesRevision,
     buildUserPreferencesKey,
     userPreferencesTokenFromKey,
     resetRedisMetricsForTests,

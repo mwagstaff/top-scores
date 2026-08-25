@@ -240,36 +240,54 @@ actor PreferencesSyncService {
     static let shared = PreferencesSyncService()
 
     private var syncTask: Task<Void, Never>?
+    private var pendingSnapshot: PreferencesSnapshot?
+    private var pendingSyncDeadline: Date?
     private var lastSyncAttempt: Date?
     private var lastSyncSuccess: Date?
     private var lastSyncFailure: Date?
     private var lastSyncHTTPStatus: Int?
     private var lastSyncFailureReason: String?
     private let minSyncInterval: TimeInterval = 2.0 // Debounce syncs to max once per 2 seconds
+    private let revisionDefaultsKey = "preferences.syncRevision"
+    private var lastIssuedRevision: Int
 
-    private init() {}
+    private init() {
+        lastIssuedRevision = UserDefaults.standard.integer(forKey: revisionDefaultsKey)
+    }
 
     /// Syncs user preferences to the Redis backend
     func syncPreferences(_ snapshot: PreferencesSnapshot) async {
-        // Cancel any pending sync
-        syncTask?.cancel()
-
-        // Check if we should debounce
-        if let lastSync = lastSyncAttempt {
-            let timeSinceLastSync = Date().timeIntervalSince(lastSync)
-            if timeSinceLastSync < minSyncInterval {
-                // Schedule a delayed sync
-                syncTask = Task {
-                    try? await Task.sleep(nanoseconds: UInt64(minSyncInterval * 1_000_000_000))
-                    if !Task.isCancelled {
-                        await performSync(snapshot)
-                    }
-                }
-                return
-            }
+        let now = Date()
+        pendingSnapshot = snapshot
+        if syncTask == nil,
+           lastSyncAttempt.map({ now.timeIntervalSince($0) >= minSyncInterval }) ?? true {
+            pendingSyncDeadline = now
+        } else {
+            pendingSyncDeadline = now.addingTimeInterval(minSyncInterval)
         }
+        guard syncTask == nil else { return }
 
-        await performSync(snapshot)
+        syncTask = Task {
+            await drainSyncQueue()
+        }
+    }
+
+    private func drainSyncQueue() async {
+        while pendingSnapshot != nil {
+            guard let deadline = pendingSyncDeadline else { break }
+            let wait = deadline.timeIntervalSinceNow
+            if wait > 0 {
+                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+            }
+
+            // A newer edit may have extended the quiet period while this task slept.
+            guard pendingSyncDeadline == deadline else { continue }
+            guard let snapshot = pendingSnapshot else { continue }
+            pendingSnapshot = nil
+            pendingSyncDeadline = nil
+            await performSync(snapshot)
+        }
+        syncTask = nil
     }
 
     func diagnostics() -> PreferencesSyncDiagnostics {
@@ -288,6 +306,8 @@ actor PreferencesSyncService {
 
         let now = Date()
         lastSyncAttempt = now
+        lastIssuedRevision += 1
+        UserDefaults.standard.set(lastIssuedRevision, forKey: revisionDefaultsKey)
 
         let deviceToken = getDeviceToken()
 
@@ -305,6 +325,7 @@ actor PreferencesSyncService {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.timeoutInterval = 5
         DeviceIdentity.applyHeader(to: &request)
 
         // Get APNS token and development build status
@@ -314,6 +335,7 @@ actor PreferencesSyncService {
 
         let payload: [String: Any] = [
             "deviceToken": deviceToken,
+            "preferencesRevision": lastIssuedRevision,
             "apnsToken": apnsToken as Any,
             "isDevelopmentBuild": isDevelopmentBuild,
             "fantasy": fantasyState,

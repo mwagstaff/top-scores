@@ -5280,6 +5280,91 @@ test("emits all newly discovered goals when score jumps", () => {
   assert.equal(events[1].body, "Mainz 05 1 - 1 Hamburger SV (N. Amiri, assist: D. da Costa)");
 });
 
+test("credits a home player's own goal to the away score delta", () => {
+  const monitorState = newMonitorState();
+  const oldMatch = {
+    home_team: "Nottingham Forest",
+    away_team: "Leeds United",
+    score_status: "73'",
+    home_score: 0,
+    away_score: 1,
+    home_goal_scorers: [],
+    away_goal_scorers: [{ player: "D. James", goal_times: ["50'"] }],
+    home_assists: [],
+    away_assists: [],
+  };
+  const newMatch = {
+    ...oldMatch,
+    score_status: "75'",
+    home_score: 0,
+    away_score: 2,
+    home_goal_scorers: [{ player: "N. Williams", own_goal_times: ["75'"] }],
+  };
+
+  const goals = __testHooks
+    .buildMatchEvents(oldMatch, newMatch, monitorState, Date.now())
+    .filter((event) => event.type === "goal");
+
+  assert.equal(goals.length, 1);
+  assert.equal(goals[0].team, "away");
+  assert.equal(goals[0].title, "Own goal 75'");
+  assert.equal(
+    goals[0].body,
+    "Nottingham Forest 0 - 2 Leeds United (N. Williams, own goal)"
+  );
+});
+
+test("retains credited-team own-goal grouping when it matches the score delta", () => {
+  const reconciled = __testHooks.reconcileGoalEventScoringTeams(
+    [{ team: "away", player: "N. Williams", ownGoal: true }],
+    0,
+    1
+  );
+
+  assert.equal(reconciled[0].team, "away");
+  assert.equal(reconciled[0].playerTeam, undefined);
+});
+
+test("credits a delayed own-goal timeline using the earlier away score delta", () => {
+  const monitorState = newMonitorState();
+  const snap0 = {
+    home_team: "Nottingham Forest",
+    away_team: "Leeds United",
+    score_status: "73'",
+    home_score: 0,
+    away_score: 1,
+    home_goal_scorers: [],
+    away_goal_scorers: [{ player: "D. James", goal_times: ["50'"] }],
+    home_assists: [],
+    away_assists: [],
+  };
+  const snap1 = {
+    ...snap0,
+    score_status: "74'",
+    away_score: 2,
+  };
+  const snap2 = {
+    ...snap1,
+    score_status: "75'",
+    home_goal_scorers: [{ player: "N. Williams", own_goal_times: ["75'"] }],
+  };
+
+  assert.deepStrictEqual(
+    __testHooks.buildMatchEvents(snap0, snap1, monitorState, Date.now()),
+    []
+  );
+  const goals = __testHooks
+    .buildMatchEvents(snap1, snap2, monitorState, Date.now())
+    .filter((event) => event.type === "goal");
+
+  assert.equal(goals.length, 1);
+  assert.equal(goals[0].team, "away");
+  assert.equal(
+    goals[0].body,
+    "Nottingham Forest 0 - 2 Leeds United (N. Williams, own goal)"
+  );
+});
+
 test("backfilled goals use existing scorer timeline when current score regresses", () => {
   const monitorState = newMonitorState({
     unresolvedGoalCount: 3,
@@ -6280,6 +6365,138 @@ test("evaluateUserNotificationDecision uses custom competition and team view opt
   } finally {
     __testHooks.setNotificationFixtureCategoryFilter(null);
   }
+});
+
+test("evaluateUserNotificationDecision treats an empty custom selection as no coverage", () => {
+  __testHooks.setNotificationFixtureCategoryFilter(() => true);
+  try {
+    const decision = __testHooks.evaluateUserNotificationDecision(
+      {
+        apnsToken: "apns-token",
+        preferences: {
+          notificationsEnabled: true,
+          notificationDelayMinutes: 2,
+          notificationEventTypes: ["goal"],
+          notificationMatchesFixturesEnabled: false,
+          notificationAllMajorMatchesEnabled: false,
+          selectedNotificationViewOptionIDs: [],
+        },
+      },
+      {
+        home_team: "Cardiff City",
+        away_team: "Norwich City",
+        league: "EFL Cup",
+        tv_channels: [],
+      },
+      { type: "goal" }
+    );
+
+    assert.deepStrictEqual(decision, {
+      shouldNotify: false,
+      reason: "notification_selection_empty",
+      delayMinutes: 2,
+    });
+  } finally {
+    __testHooks.setNotificationFixtureCategoryFilter(null);
+  }
+});
+
+test("resolveDelayedNotificationRecipient rechecks the latest preferences", async () => {
+  __testHooks.setNotificationFixtureCategoryFilter((_user, match, context) => {
+    assert.equal(context.mode, "notification_custom");
+    return context.optionIDs.includes("team:norwich-city") && match.away_team === "Norwich City";
+  });
+  try {
+    const result = await __testHooks.resolveDelayedNotificationRecipient(
+      {
+        deviceToken: "device-1",
+        apnsToken: "old-apns-token",
+        preferences: {
+          notificationsEnabled: true,
+          notificationEventTypes: ["goal"],
+          notificationAllMajorMatchesEnabled: false,
+          selectedNotificationViewOptionIDs: ["competition:english-league-cup"],
+        },
+      },
+      {
+        home_team: "Cardiff City",
+        away_team: "Norwich City",
+        league: "EFL Cup",
+        tv_channels: [],
+      },
+      { type: "goal" },
+      async (deviceToken) => {
+        assert.equal(deviceToken, "device-1");
+        return {
+          deviceToken,
+          apnsToken: "new-apns-token",
+          preferences: {
+            notificationsEnabled: true,
+            notificationDelayMinutes: 1,
+            notificationEventTypes: ["goal"],
+            notificationMatchesFixturesEnabled: false,
+            notificationAllMajorMatchesEnabled: false,
+            selectedNotificationViewOptionIDs: ["team:arsenal"],
+          },
+        };
+      }
+    );
+
+    assert.equal(result.user, null);
+    assert.deepStrictEqual(result.decision, {
+      shouldNotify: false,
+      reason: "notification_view_filtered_out",
+      delayMinutes: 1,
+    });
+  } finally {
+    __testHooks.setNotificationFixtureCategoryFilter(null);
+  }
+});
+
+test("resolveDelayedNotificationRecipient uses the latest APNS token when still eligible", async () => {
+  __testHooks.setNotificationFixtureCategoryFilter(() => true);
+  try {
+    const result = await __testHooks.resolveDelayedNotificationRecipient(
+      { deviceToken: "device-1" },
+      { home_team: "Arsenal", away_team: "Chelsea", league: "Premier League", tv_channels: [] },
+      { type: "goal" },
+      async (deviceToken) => ({
+        deviceToken,
+        apnsToken: "latest-apns-token",
+        preferences: {
+          notificationsEnabled: true,
+          notificationDelayMinutes: 0,
+          notificationEventTypes: ["goal"],
+          notificationMatchesFixturesEnabled: false,
+          notificationAllMajorMatchesEnabled: false,
+          selectedNotificationViewOptionIDs: ["team:arsenal"],
+        },
+      })
+    );
+
+    assert.equal(result.decision.shouldNotify, true);
+    assert.equal(result.user.apnsToken, "latest-apns-token");
+  } finally {
+    __testHooks.setNotificationFixtureCategoryFilter(null);
+  }
+});
+
+test("resolveDelayedNotificationRecipient fails closed when preferences cannot be reloaded", async () => {
+  const result = await __testHooks.resolveDelayedNotificationRecipient(
+    { deviceToken: "device-1" },
+    { home_team: "Arsenal", away_team: "Chelsea", league: "Premier League", tv_channels: [] },
+    { type: "goal" },
+    async () => {
+      throw new Error("Redis unavailable");
+    }
+  );
+
+  assert.equal(result.user, null);
+  assert.deepStrictEqual(result.decision, {
+    shouldNotify: false,
+    reason: "preferences_lookup_failed_at_dispatch",
+    delayMinutes: 0,
+  });
 });
 
 test("evaluateUserNotificationDecision mirrors the Fixtures view when configured", () => {

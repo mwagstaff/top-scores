@@ -1,5 +1,6 @@
 const {
   getAllUserPreferences,
+  getUserPreferences,
   getAllOperationalMatchDetails,
   getOperationalDatasets,
   updateUserLiveActivityState,
@@ -1388,6 +1389,44 @@ function diffGoalEvents(oldMatch, newMatch) {
   return newEvents;
 }
 
+function reconcileGoalEventScoringTeams(goalEvents, unresolvedHomeGoals, unresolvedAwayGoals) {
+  const events = Array.isArray(goalEvents) ? goalEvents : [];
+  let remainingHome = Math.max(0, Math.floor(Number(unresolvedHomeGoals) || 0));
+  let remainingAway = Math.max(0, Math.floor(Number(unresolvedAwayGoals) || 0));
+
+  // Reserve score deltas for ordinary goals first. Own-goal feeds are inconsistent:
+  // some group the incident under the player's team, while others group it under
+  // the team that was awarded the goal. The numeric score delta is authoritative.
+  events.forEach((goal) => {
+    if (goal && goal.ownGoal) return;
+    if (goal && goal.team === "home" && remainingHome > 0) remainingHome -= 1;
+    if (goal && goal.team === "away" && remainingAway > 0) remainingAway -= 1;
+  });
+
+  return events.map((goal) => {
+    if (!goal || !goal.ownGoal) return goal;
+
+    let scoringTeam = goal.team;
+    if (goal.team === "home") {
+      if (remainingHome > 0) {
+        remainingHome -= 1;
+      } else if (remainingAway > 0) {
+        scoringTeam = "away";
+        remainingAway -= 1;
+      }
+    } else if (remainingAway > 0) {
+      remainingAway -= 1;
+    } else if (remainingHome > 0) {
+      scoringTeam = "home";
+      remainingHome -= 1;
+    }
+
+    return scoringTeam === goal.team
+      ? goal
+      : { ...goal, team: scoringTeam, playerTeam: goal.team };
+  });
+}
+
 function buildMatchEvents(oldMatch, newMatch, monitorState, nowMs = Date.now(), context = null) {
   const events = [];
   const lifecycle = monitorState.lifecycle;
@@ -1397,8 +1436,16 @@ function buildMatchEvents(oldMatch, newMatch, monitorState, nowMs = Date.now(), 
   const unresolvedGoalCount = Number.isFinite(monitorState.unresolvedGoalCount)
     ? Math.max(0, Math.floor(monitorState.unresolvedGoalCount))
     : 0;
+  const unresolvedHomeGoalCount = Number.isFinite(monitorState.unresolvedHomeGoalCount)
+    ? Math.max(0, Math.floor(monitorState.unresolvedHomeGoalCount))
+    : 0;
+  const unresolvedAwayGoalCount = Number.isFinite(monitorState.unresolvedAwayGoalCount)
+    ? Math.max(0, Math.floor(monitorState.unresolvedAwayGoalCount))
+    : 0;
   monitorState.goalTimelineBacklog = goalTimelineBacklog;
   monitorState.unresolvedGoalCount = unresolvedGoalCount;
+  monitorState.unresolvedHomeGoalCount = unresolvedHomeGoalCount;
+  monitorState.unresolvedAwayGoalCount = unresolvedAwayGoalCount;
   const oldStatus = normalizeStatusToken(oldMatch && oldMatch.score_status);
   const newStatus = normalizeStatusToken(newMatch && newMatch.score_status);
   const previousHighestSnapshot =
@@ -1489,6 +1536,8 @@ function buildMatchEvents(oldMatch, newMatch, monitorState, nowMs = Date.now(), 
   const expectedGoalDelta = Math.max(0, homeScoreDelta) + Math.max(0, awayScoreDelta);
   if (expectedGoalDelta > 0) {
     monitorState.unresolvedGoalCount += expectedGoalDelta;
+    monitorState.unresolvedHomeGoalCount += Math.max(0, homeScoreDelta);
+    monitorState.unresolvedAwayGoalCount += Math.max(0, awayScoreDelta);
   }
 
   let newGoalEvents = [];
@@ -1496,7 +1545,23 @@ function buildMatchEvents(oldMatch, newMatch, monitorState, nowMs = Date.now(), 
     const emitCount = Math.min(monitorState.unresolvedGoalCount, goalTimelineBacklog.length);
     // Use the latest timeline entries so delayed backfills do not replay stale historical goals.
     newGoalEvents = goalTimelineBacklog.splice(goalTimelineBacklog.length - emitCount, emitCount);
+    newGoalEvents = reconcileGoalEventScoringTeams(
+      newGoalEvents,
+      monitorState.unresolvedHomeGoalCount,
+      monitorState.unresolvedAwayGoalCount
+    );
+    newGoalEvents.forEach((goal) => {
+      if (goal && goal.team === "home" && monitorState.unresolvedHomeGoalCount > 0) {
+        monitorState.unresolvedHomeGoalCount -= 1;
+      } else if (goal && goal.team === "away" && monitorState.unresolvedAwayGoalCount > 0) {
+        monitorState.unresolvedAwayGoalCount -= 1;
+      }
+    });
     monitorState.unresolvedGoalCount = Math.max(0, monitorState.unresolvedGoalCount - emitCount);
+    if (monitorState.unresolvedGoalCount === 0) {
+      monitorState.unresolvedHomeGoalCount = 0;
+      monitorState.unresolvedAwayGoalCount = 0;
+    }
   }
 
   let newHomeGoalsCount = 0;
@@ -2910,6 +2975,13 @@ function evaluateUserNotificationDecision(user, match, event) {
       ? prefs.selectedNotificationViewOptionIDs
       : null;
     if (notificationViewOptionIDs) {
+      if (notificationViewOptionIDs.length === 0) {
+        return {
+          shouldNotify: false,
+          reason: "notification_selection_empty",
+          delayMinutes,
+        };
+      }
       const matchesNotificationSelection = notificationFixtureCategoryFilter
         ? notificationFixtureCategoryFilter(user, match, {
           mode: "notification_custom",
@@ -2988,6 +3060,55 @@ function evaluateUserNotificationDecision(user, match, event) {
     shouldNotify: true,
     reason: "eligible",
     delayMinutes,
+  };
+}
+
+async function resolveDelayedNotificationRecipient(
+  scheduledUser,
+  match,
+  event,
+  loadPreferences = getUserPreferences
+) {
+  const deviceToken = String(scheduledUser && scheduledUser.deviceToken ? scheduledUser.deviceToken : "").trim();
+  if (!deviceToken) {
+    return {
+      user: null,
+      decision: {
+        shouldNotify: false,
+        reason: "missing_device_token_at_dispatch",
+        delayMinutes: 0,
+      },
+    };
+  }
+
+  let latestUser;
+  try {
+    latestUser = await loadPreferences(deviceToken);
+  } catch (_error) {
+    return {
+      user: null,
+      decision: {
+        shouldNotify: false,
+        reason: "preferences_lookup_failed_at_dispatch",
+        delayMinutes: 0,
+      },
+    };
+  }
+  if (!latestUser) {
+    return {
+      user: null,
+      decision: {
+        shouldNotify: false,
+        reason: "missing_preferences_at_dispatch",
+        delayMinutes: 0,
+      },
+    };
+  }
+
+  const decision = evaluateUserNotificationDecision(latestUser, match, event);
+  return {
+    user: decision.shouldNotify ? latestUser : null,
+    decision,
   };
 }
 
@@ -7643,12 +7764,29 @@ async function scheduleNotificationForUser(user, matchId, match, event) {
         result: "delayed_dispatch_start",
         delay_minutes: delayMinutes,
       });
-      await sendNotificationToUser(user, matchId, match, event, {
-        notificationId,
-        delayMinutes,
-        dispatchMode: "delayed",
-      });
-      scheduledNotifications.delete(notificationId);
+      try {
+        const latest = await resolveDelayedNotificationRecipient(user, match, event);
+        if (!latest.user) {
+          logDecision("notification_schedule", {
+            match_id: matchId,
+            event_type: event.type,
+            event_key: event.eventKey || null,
+            user_device_short: shortDeviceToken(user.deviceToken),
+            notification_id: notificationId,
+            result: "delayed_dispatch_cancelled",
+            reason: latest.decision.reason,
+            delay_minutes: delayMinutes,
+          });
+          return;
+        }
+        await sendNotificationToUser(latest.user, matchId, match, event, {
+          notificationId,
+          delayMinutes,
+          dispatchMode: "delayed",
+        });
+      } finally {
+        scheduledNotifications.delete(notificationId);
+      }
     }, delayMs);
 
     scheduledNotifications.set(notificationId, timeout);
@@ -7979,6 +8117,7 @@ module.exports = {
     countGoals,
     mergeSnapshotWithFallback,
     diffGoalEvents,
+    reconcileGoalEventScoringTeams,
     isMatchRelevant,
     isLiveMatchStatus,
     isFinishedMatchStatus,
@@ -8012,6 +8151,7 @@ module.exports = {
     formatFantasyDeadlineReminderTime,
     monitoredMatchStatesSnapshot,
     evaluateUserNotificationDecision,
+    resolveDelayedNotificationRecipient,
     filterCanonicalLiveActivityMatchesForUser,
     setLiveActivityFixtureCategoryFilter,
     setNotificationFixtureCategoryFilter,

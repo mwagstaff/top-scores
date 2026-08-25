@@ -5,8 +5,29 @@ const {
   __private: {
     mergedLiveActivityState,
     normalizeLiveActivityStatePatch,
+    normalizedPreferencesRevision,
+    isStalePreferencesRevision,
   },
 } = require("./redis_client");
+
+test("normalizedPreferencesRevision accepts only non-negative safe integers", () => {
+  assert.equal(normalizedPreferencesRevision(0), 0);
+  assert.equal(normalizedPreferencesRevision("42"), 42);
+  assert.equal(normalizedPreferencesRevision(-1), null);
+  assert.equal(normalizedPreferencesRevision(1.5), null);
+  assert.equal(normalizedPreferencesRevision("not-a-number"), null);
+  assert.equal(normalizedPreferencesRevision(null), null);
+  assert.equal(normalizedPreferencesRevision(""), null);
+  assert.equal(normalizedPreferencesRevision(false), null);
+});
+
+test("isStalePreferencesRevision rejects only an older versioned update", () => {
+  assert.equal(isStalePreferencesRevision(9, 10), true);
+  assert.equal(isStalePreferencesRevision(10, 10), false);
+  assert.equal(isStalePreferencesRevision(11, 10), false);
+  assert.equal(isStalePreferencesRevision(null, 10), false);
+  assert.equal(isStalePreferencesRevision(9, null), false);
+});
 
 test("normalizeLiveActivityStatePatch preserves push-to-start attempts", () => {
   assert.deepEqual(

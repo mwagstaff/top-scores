@@ -2,6 +2,23 @@ import Foundation
 import Combine
 import os
 
+func fantasyFixtureMatchesMatch(
+    _ fixture: FantasyFixture,
+    homeTeamID: Int,
+    awayTeamID: Int,
+    fixtureKickoff: Date?,
+    matchKickoff: Date?,
+    kickoffTolerance: TimeInterval = 12 * 60 * 60
+) -> Bool {
+    guard fixture.teamH == homeTeamID,
+          fixture.teamA == awayTeamID,
+          let fixtureKickoff,
+          let matchKickoff else {
+        return false
+    }
+    return abs(fixtureKickoff.timeIntervalSince(matchKickoff)) <= kickoffTolerance
+}
+
 @MainActor
 final class FantasyViewModel: ObservableObject {
     private static let gameUpdatingUserMessage = "Fantasy Premier League data is temporarily unavailable while the official game is being updated. Please try again in a few minutes."
@@ -21,6 +38,7 @@ final class FantasyViewModel: ObservableObject {
     @Published private(set) var requiresAuthentication = false
     @Published private(set) var authenticatedEntryID: Int?
     @Published var errorMessage: String?
+    @Published private(set) var matchHistoryRevision = 0
     /// Pre-computed context for MatchRow. Updated whenever squad data, expected points, or the
     /// bootstrap lookup changes. MatchRow observes this value rather than the whole FantasyViewModel,
     /// so rows only re-render when fantasy data actually changes (not on isLoading / isRefreshing etc).
@@ -56,8 +74,13 @@ final class FantasyViewModel: ObservableObject {
     private var assistantManagerPrewarmTask: Task<Void, Never>?
     private var detailedExpectedPointsTask: Task<Void, Never>?
     private var currentSquadSnapshot: FantasySquadSnapshot?
+    private var previousSquadSnapshot: FantasySquadSnapshot?
     private var currentSquadBootstrap: FantasyBootstrapLookup?
     private var currentSquadSeasonFixtures: [FantasyFixture] = []
+    private var historicalMatchRecordsByKey: [String: FantasyMatchHistoryRecord] = [:]
+    private var preparedHistoricalMatchContexts: [String: FantasyMatchFixtureContext] = [:]
+    private var preparedHistoricalRecordDates: [String: Date] = [:]
+    private var loadedHistoryEntryID: Int?
     private var isRefreshingCurrentScores = false
     private let trackedLeaguePageWindowRadius = 1
     private let setupRivalPageWindowRadius = 1
@@ -67,6 +90,19 @@ final class FantasyViewModel: ObservableObject {
     var isShowingGameUpdatingState: Bool {
         guard let errorMessage else { return false }
         return Self.containsGameUpdatingText(errorMessage)
+    }
+
+    var activeFantasySeasonKey: String {
+        let bootstrap = currentSquadBootstrap ?? cachedBootstrapLookup
+        let gameweek = currentSquadSnapshot?.gameweek ?? bootstrap?.events.first
+        if let bootstrap, let gameweek {
+            return FantasyMatchHistoryRecord.seasonKey(
+                gameweek: gameweek,
+                events: bootstrap.events,
+                fixtures: currentSquadSeasonFixtures
+            )
+        }
+        return FantasyMatchHistoryRecord.seasonKey(containing: Date())
     }
 
     func playerProfileImageURL(for elementID: Int) -> URL? {
@@ -165,8 +201,14 @@ final class FantasyViewModel: ObservableObject {
         cachedSeasonFixtures = []
         cachedSeasonFixturesFetchedAt = nil
         currentSquadSnapshot = nil
+        previousSquadSnapshot = nil
         currentSquadBootstrap = nil
         currentSquadSeasonFixtures = []
+        historicalMatchRecordsByKey = [:]
+        preparedHistoricalMatchContexts = [:]
+        preparedHistoricalRecordDates = [:]
+        loadedHistoryEntryID = nil
+        matchHistoryRevision += 1
         isRefreshingCurrentScores = false
         rebuildMatchRowContext()
     }
@@ -318,12 +360,13 @@ final class FantasyViewModel: ObservableObject {
                 bootstrap: refreshedBootstrap
             )
 
-            currentSquadSnapshot = FantasySquadSnapshot(
+            let refreshedSnapshot = FantasySquadSnapshot(
                 gameweek: refreshedGameweek,
                 picksResponse: refreshedPicks,
                 liveResponse: refreshedLive,
                 fixtures: refreshedFixtures
             )
+            currentSquadSnapshot = refreshedSnapshot
             currentSquadBootstrap = refreshedBootstrap
             currentSquadSeasonFixtures = mergedSeasonFixtures
             cachedBootstrapLookup = refreshedBootstrap
@@ -332,6 +375,11 @@ final class FantasyViewModel: ObservableObject {
             cachedSeasonFixturesFetchedAt = Date()
             data = refreshedData
             lastUpdated = Date()
+            await persistHistoricalSnapshot(
+                managerEntryID: entryID,
+                snapshot: refreshedSnapshot,
+                bootstrap: refreshedBootstrap
+            )
             rebuildMatchRowContext()
             errorMessage = nil
 
@@ -391,6 +439,379 @@ final class FantasyViewModel: ObservableObject {
             !awayTeamKeys.isDisjoint(with: premierLeagueTeamKeys)
     }
 
+    func matchFixtureContext(
+        for match: Match,
+        managerEntryID rawManagerEntryID: String
+    ) -> FantasyMatchFixtureContext? {
+        let trimmedManagerEntryID = rawManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !match.isPostponed,
+              isPremierLeagueMatch(match),
+              let managerEntryID = Int(trimmedManagerEntryID),
+              managerEntryID > 0 else {
+            return nil
+        }
+
+        if match.isFinished {
+            guard loadedHistoryEntryID == managerEntryID else { return nil }
+            return preparedHistoricalMatchContexts[match.id]
+        }
+
+        if authenticatedEntryID == managerEntryID,
+           let context = inMemoryMatchFixtureContext(for: match) {
+            return context
+        }
+
+        return loadedHistoryEntryID == managerEntryID
+            ? preparedHistoricalMatchContexts[match.id]
+            : nil
+    }
+
+    func prepareMatchHistory(
+        for match: Match,
+        managerEntryID rawManagerEntryID: String
+    ) async {
+        let trimmedManagerEntryID = rawManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !match.isPostponed,
+              isPremierLeagueMatch(match),
+              let managerEntryID = Int(trimmedManagerEntryID),
+              managerEntryID > 0 else {
+            return
+        }
+
+        await loadPersistedMatchHistoryIfNeeded(managerEntryID: managerEntryID)
+        guard !Task.isCancelled, loadedHistoryEntryID == managerEntryID else { return }
+
+        let cachedMatch = historicalRecordMatch(for: match)
+        if let cachedMatch {
+            await prepareHistoricalMatchContext(
+                record: cachedMatch.record,
+                fixture: cachedMatch.fixture,
+                match: match
+            )
+            if cachedMatch.record.hasCompleteFinalData {
+                return
+            }
+        } else if !match.isFinished,
+                  authenticatedEntryID == managerEntryID,
+                  inMemoryMatchFixtureContext(for: match) != nil {
+            return
+        }
+
+        guard let bootstrap = currentSquadBootstrap,
+              let homeTeamID = fantasyTeamID(for: match.homeTeam, in: bootstrap),
+              let awayTeamID = fantasyTeamID(for: match.awayTeam, in: bootstrap),
+              let fixture = matchingFixture(
+                  in: currentSquadSeasonFixtures,
+                  homeTeamID: homeTeamID,
+                  awayTeamID: awayTeamID,
+                  match: match,
+                  allowMissingKickoffFallback: false
+              ),
+              let gameweekID = fixture.event,
+              let gameweek = bootstrap.events.first(where: { $0.id == gameweekID }) else {
+            return
+        }
+
+        do {
+            let snapshot = try await fetchSquadSnapshot(
+                entryID: managerEntryID,
+                gameweek: gameweek,
+                labelPrefix: "history"
+            )
+            guard !Task.isCancelled, loadedHistoryEntryID == managerEntryID else { return }
+            let record = await persistHistoricalSnapshot(
+                managerEntryID: managerEntryID,
+                snapshot: snapshot,
+                bootstrap: bootstrap
+            )
+            guard let storedFixture = record.fixtures.first(where: { $0.id == fixture.id }) else {
+                return
+            }
+            await prepareHistoricalMatchContext(
+                record: record,
+                fixture: storedFixture,
+                match: match
+            )
+        } catch {
+            if !Self.isCancellationError(error) {
+                logPerf(
+                    "history_match_unavailable event_id=\(gameweekID) error=\"\(error.localizedDescription)\""
+                )
+            }
+        }
+    }
+
+    private func inMemoryMatchFixtureContext(for match: Match) -> FantasyMatchFixtureContext? {
+        guard isEligibleFantasyFixture(match),
+              let bootstrap = currentSquadBootstrap,
+              let homeTeamID = fantasyTeamID(for: match.homeTeam, in: bootstrap),
+              let awayTeamID = fantasyTeamID(for: match.awayTeam, in: bootstrap) else {
+            return nil
+        }
+
+        let candidates: [(FantasySquadDisplayData?, FantasySquadSnapshot?)] = [
+            (data, currentSquadSnapshot),
+            (previousTeamData, previousSquadSnapshot)
+        ]
+
+        for (squad, snapshot) in candidates {
+            guard let squad, let snapshot else {
+                continue
+            }
+            guard let fixture = matchingFixture(
+                in: snapshot.fixtures,
+                homeTeamID: homeTeamID,
+                awayTeamID: awayTeamID,
+                match: match
+            ) else {
+                continue
+            }
+
+            return makeMatchFixtureContext(
+                squad: squad,
+                gameweek: snapshot.gameweek,
+                liveResponse: snapshot.liveResponse,
+                fixtures: snapshot.fixtures,
+                fixture: fixture,
+                bootstrap: bootstrap
+            )
+        }
+
+        return nil
+    }
+
+    private func isPremierLeagueMatch(_ match: Match) -> Bool {
+        match.league.trimmingCharacters(in: .whitespacesAndNewlines)
+            .localizedCaseInsensitiveCompare("Premier League") == .orderedSame
+    }
+
+    private func matchingFixture(
+        in fixtures: [FantasyFixture],
+        homeTeamID: Int,
+        awayTeamID: Int,
+        match: Match,
+        allowMissingKickoffFallback: Bool = true
+    ) -> FantasyFixture? {
+        let teamFixtures = fixtures.filter {
+            $0.teamH == homeTeamID && $0.teamA == awayTeamID
+        }
+        if let exactFixture = teamFixtures.first(where: {
+            fantasyFixtureMatchesMatch(
+                $0,
+                homeTeamID: homeTeamID,
+                awayTeamID: awayTeamID,
+                fixtureKickoff: Self.parseISO8601Date($0.kickoffTime),
+                matchKickoff: match.dateTime
+            )
+        }) {
+            return exactFixture
+        }
+        guard allowMissingKickoffFallback,
+              teamFixtures.count == 1,
+              match.dateTime == nil || teamFixtures[0].kickoffTime == nil else {
+            return nil
+        }
+        return teamFixtures[0]
+    }
+
+    private func fantasyTeamID(
+        for teamName: String,
+        in bootstrap: FantasyBootstrapLookup
+    ) -> Int? {
+        let matchKeys = fantasyTeamLookupKeys(teamName)
+        return bootstrap.teams.first(where: {
+            !fantasyTeamLookupKeys($0.name).isDisjoint(with: matchKeys)
+        })?.id
+    }
+
+    private func makeMatchFixtureContext(
+        squad: FantasySquadDisplayData,
+        gameweek: FantasyGameweek,
+        liveResponse: FantasyEventLiveResponse,
+        fixtures: [FantasyFixture],
+        fixture: FantasyFixture,
+        bootstrap: FantasyBootstrapLookup
+    ) -> FantasyMatchFixtureContext {
+        let elementsByID = Dictionary(uniqueKeysWithValues: bootstrap.elements.map { ($0.id, $0) })
+        let liveByElementID = Dictionary(uniqueKeysWithValues: liveResponse.elements.map { ($0.id, $0) })
+        let effectiveMultipliersByElementID = squad.effectivePlayerMultipliersByElementID
+        let fixtureCountsByTeamID = fixtures.reduce(into: [Int: Int]()) { counts, fixture in
+            counts[fixture.teamH, default: 0] += 1
+            counts[fixture.teamA, default: 0] += 1
+        }
+
+        var expectedPointsByElementID: [Int: Double] = [:]
+        var pointsByElementID: [Int: Int] = [:]
+
+        for player in squad.allPlayers {
+            let teamID = elementsByID[player.elementID]?.team
+            if let teamID,
+               let fixtureCount = fixtureCountsByTeamID[teamID],
+               fixtureCount > 0 {
+                // FPL exposes ep_this for the gameweek rather than per fixture.
+                // Split it evenly in a double gameweek so every match retains a
+                // useful estimate without repeating the full projection.
+                let officialGameweekExpectedPoints = elementsByID[player.elementID]?
+                    .expectedPoints(for: gameweek)
+                let gameweekExpectedPoints = officialGameweekExpectedPoints ?? {
+                    fixtureCount == 1 ? player.expectedPointsThisGameweek : nil
+                }()
+                if let gameweekExpectedPoints {
+                    let expectedFixturePoints = gameweekExpectedPoints / Double(fixtureCount)
+                    let multiplier = effectiveMultipliersByElementID[player.elementID] ?? 0
+                    expectedPointsByElementID[player.elementID] = expectedFixturePoints * Double(multiplier)
+                }
+            }
+
+            let rawFixturePoints: Int
+            if let explainedPoints = liveByElementID[player.elementID]?.points(forFixtureID: fixture.id) {
+                rawFixturePoints = explainedPoints
+            } else if let teamID, fixtureCountsByTeamID[teamID] == 1 {
+                // Older cached payloads may predate decoding `explain`; the
+                // gameweek total is still exact when the club has one fixture.
+                rawFixturePoints = player.rawPoints
+            } else {
+                rawFixturePoints = 0
+            }
+            let effectiveMultiplier = effectiveMultipliersByElementID[player.elementID] ?? 0
+            pointsByElementID[player.elementID] = rawFixturePoints * effectiveMultiplier
+        }
+
+        return FantasyMatchFixtureContext(
+            squad: squad,
+            fixtureID: fixture.id,
+            seasonKey: FantasyMatchHistoryRecord.seasonKey(
+                gameweek: gameweek,
+                events: bootstrap.events,
+                fixtures: fixtures
+            ),
+            expectedPointsByElementID: expectedPointsByElementID,
+            pointsByElementID: pointsByElementID
+        )
+    }
+
+    private func loadPersistedMatchHistoryIfNeeded(managerEntryID: Int) async {
+        guard loadedHistoryEntryID != managerEntryID else { return }
+        loadedHistoryEntryID = managerEntryID
+        historicalMatchRecordsByKey = [:]
+        preparedHistoricalMatchContexts = [:]
+        preparedHistoricalRecordDates = [:]
+        matchHistoryRevision += 1
+
+        let records = await FantasyMatchHistoryStore.shared.loadRecords(
+            managerEntryID: managerEntryID
+        )
+        guard loadedHistoryEntryID == managerEntryID else { return }
+        historicalMatchRecordsByKey = Dictionary(
+            records.map { ($0.storageKey, $0) },
+            uniquingKeysWith: { existing, candidate in
+                candidate.savedAt > existing.savedAt ? candidate : existing
+            }
+        )
+        matchHistoryRevision += 1
+    }
+
+    private func historicalRecordMatch(
+        for match: Match
+    ) -> (record: FantasyMatchHistoryRecord, fixture: FantasyFixture)? {
+        var exactMatches: [(FantasyMatchHistoryRecord, FantasyFixture, TimeInterval)] = []
+        var missingKickoffMatches: [(FantasyMatchHistoryRecord, FantasyFixture)] = []
+
+        for record in historicalMatchRecordsByKey.values {
+            guard let homeTeamID = fantasyTeamID(for: match.homeTeam, in: record.bootstrap),
+                  let awayTeamID = fantasyTeamID(for: match.awayTeam, in: record.bootstrap) else {
+                continue
+            }
+            let teamFixtures = record.fixtures.filter {
+                $0.teamH == homeTeamID && $0.teamA == awayTeamID
+            }
+            for fixture in teamFixtures {
+                let fixtureKickoff = Self.parseISO8601Date(fixture.kickoffTime)
+                if fantasyFixtureMatchesMatch(
+                    fixture,
+                    homeTeamID: homeTeamID,
+                    awayTeamID: awayTeamID,
+                    fixtureKickoff: fixtureKickoff,
+                    matchKickoff: match.dateTime
+                ), let fixtureKickoff, let matchKickoff = match.dateTime {
+                    exactMatches.append((record, fixture, abs(fixtureKickoff.timeIntervalSince(matchKickoff))))
+                } else if teamFixtures.count == 1,
+                          match.dateTime == nil || fixture.kickoffTime == nil {
+                    missingKickoffMatches.append((record, fixture))
+                }
+            }
+        }
+
+        if let exactMatch = exactMatches.min(by: { $0.2 < $1.2 }) {
+            return (exactMatch.0, exactMatch.1)
+        }
+        guard missingKickoffMatches.count == 1, let match = missingKickoffMatches.first else {
+            return nil
+        }
+        return (match.0, match.1)
+    }
+
+    private func prepareHistoricalMatchContext(
+        record: FantasyMatchHistoryRecord,
+        fixture: FantasyFixture,
+        match: Match
+    ) async {
+        guard !Task.isCancelled,
+              loadedHistoryEntryID == record.managerEntryID,
+              historicalMatchRecordsByKey[record.storageKey]?.savedAt == record.savedAt else {
+            return
+        }
+        if preparedHistoricalRecordDates[match.id] == record.savedAt,
+           preparedHistoricalMatchContexts[match.id] != nil {
+            return
+        }
+        let squad = await buildSquadDisplayData(
+            gameweek: record.gameweek,
+            picksResponse: record.picksResponse,
+            liveResponse: record.liveResponse,
+            fixtures: record.fixtures,
+            seasonFixtures: record.fixtures,
+            bootstrap: record.bootstrap
+        )
+        guard !Task.isCancelled,
+              loadedHistoryEntryID == record.managerEntryID,
+              historicalMatchRecordsByKey[record.storageKey]?.savedAt == record.savedAt else {
+            return
+        }
+        preparedHistoricalMatchContexts[match.id] = makeMatchFixtureContext(
+            squad: squad,
+            gameweek: record.gameweek,
+            liveResponse: record.liveResponse,
+            fixtures: record.fixtures,
+            fixture: fixture,
+            bootstrap: record.bootstrap
+        )
+        preparedHistoricalRecordDates[match.id] = record.savedAt
+        matchHistoryRevision += 1
+    }
+
+    @discardableResult
+    private func persistHistoricalSnapshot(
+        managerEntryID: Int,
+        snapshot: FantasySquadSnapshot,
+        bootstrap: FantasyBootstrapLookup
+    ) async -> FantasyMatchHistoryRecord {
+        await loadPersistedMatchHistoryIfNeeded(managerEntryID: managerEntryID)
+        let proposedRecord = FantasyMatchHistoryRecord(
+            managerEntryID: managerEntryID,
+            gameweek: snapshot.gameweek,
+            picksResponse: snapshot.picksResponse,
+            liveResponse: snapshot.liveResponse,
+            fixtures: snapshot.fixtures,
+            bootstrap: bootstrap
+        )
+        let storedRecord = await FantasyMatchHistoryStore.shared.save(proposedRecord)
+        guard loadedHistoryEntryID == managerEntryID else { return storedRecord }
+        historicalMatchRecordsByKey[storedRecord.storageKey] = storedRecord
+        matchHistoryRevision += 1
+        return storedRecord
+    }
+
     func refresh(
         managerEntryID: String,
         apiBaseURL: String,
@@ -411,6 +832,8 @@ final class FantasyViewModel: ObservableObject {
             errorMessage = "Invalid API base URL in preferences."
             return
         }
+
+        await loadPersistedMatchHistoryIfNeeded(managerEntryID: entryID)
 
         let hadExistingData = data != nil
         if hadExistingData {
@@ -482,6 +905,11 @@ final class FantasyViewModel: ObservableObject {
             currentSquadSnapshot = currentSnapshot
             currentSquadBootstrap = bootstrapLookup
             currentSquadSeasonFixtures = mergedSeasonFixtures
+            await persistHistoricalSnapshot(
+                managerEntryID: activeEntryID,
+                snapshot: currentSnapshot,
+                bootstrap: bootstrapLookup
+            )
             rebuildMatchRowContext()
             detailedExpectedPointsTask?.cancel()
             detailedExpectedPointsTask = Task(priority: .utility) { [weak self] in
@@ -510,6 +938,11 @@ final class FantasyViewModel: ObservableObject {
                         seasonFixtures: mergedSeasonFixtures,
                         bootstrap: bootstrapLookup
                     )
+                    await persistHistoricalSnapshot(
+                        managerEntryID: activeEntryID,
+                        snapshot: snapshot,
+                        bootstrap: bootstrapLookup
+                    )
                     previousSnapshot = snapshot
                 } catch {
                     logPerf("previous_team_unavailable error=\"\(error.localizedDescription)\"")
@@ -520,6 +953,7 @@ final class FantasyViewModel: ObservableObject {
                 previousTeamData = nil
                 previousSnapshot = nil
             }
+            previousSquadSnapshot = previousSnapshot
 
             let normalizedRivals = deduplicatedRivals(
                 rivalManagers: rivalManagers,

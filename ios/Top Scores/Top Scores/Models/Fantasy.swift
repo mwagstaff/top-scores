@@ -5,7 +5,7 @@ struct FantasySeasonStatus: Codable, Hashable {
     let checkedAt: String?
 }
 
-struct FantasyGameweek: Codable, Hashable {
+nonisolated struct FantasyGameweek: Codable, Hashable {
     let id: Int
     let name: String?
     let isCurrent: Bool?
@@ -47,7 +47,7 @@ struct FantasyGameweek: Codable, Hashable {
     }
 }
 
-struct FantasyBootstrapLookup: Codable, Hashable {
+nonisolated struct FantasyBootstrapLookup: Codable, Hashable {
     let updatedAt: String?
     let totalPlayers: Int?
     let elements: [FantasyBootstrapElement]
@@ -81,7 +81,7 @@ struct FantasyBootstrapLookup: Codable, Hashable {
     }
 }
 
-struct FantasyBootstrapElement: Codable, Hashable {
+nonisolated struct FantasyBootstrapElement: Codable, Hashable {
     let id: Int
     let code: Int?
     let webName: String
@@ -171,7 +171,7 @@ extension FantasyBootstrapElement {
     }
 }
 
-struct FantasyBootstrapTeam: Codable, Hashable {
+nonisolated struct FantasyBootstrapTeam: Codable, Hashable {
     let id: Int
     let name: String
     let shortName: String
@@ -209,7 +209,7 @@ struct FantasyBootstrapTeam: Codable, Hashable {
     }
 }
 
-struct FantasyBootstrapElementType: Codable, Hashable {
+nonisolated struct FantasyBootstrapElementType: Codable, Hashable {
     let id: Int
     let singularName: String
     let singularNameShort: String
@@ -272,7 +272,7 @@ struct FantasyChip: Hashable, Sendable {
     }
 }
 
-struct FantasyPicksResponse: Codable, Hashable {
+nonisolated struct FantasyPicksResponse: Codable, Hashable {
     let picks: [FantasyPick]
     let entryHistory: FantasyEntryHistory
     let activeChipCodes: [String]
@@ -333,7 +333,7 @@ struct FantasyCurrentTeamResponse: Codable, Hashable {
     }
 }
 
-struct FantasyPick: Codable, Hashable {
+nonisolated struct FantasyPick: Codable, Hashable {
     let element: Int
     let position: Int
     let multiplier: Int
@@ -351,13 +351,14 @@ struct FantasyPick: Codable, Hashable {
     }
 }
 
-struct FantasyEntryHistory: Codable, Hashable {
+nonisolated struct FantasyEntryHistory: Codable, Hashable {
     let event: Int
     let points: Int
     let rank: Int?
     let overallRank: Int?
     let eventTransfersCost: Int?
     let pointsOnBench: Int?
+    let teamValue: Int?
 
     enum CodingKeys: String, CodingKey {
         case event
@@ -366,6 +367,25 @@ struct FantasyEntryHistory: Codable, Hashable {
         case overallRank = "overall_rank"
         case eventTransfersCost = "event_transfers_cost"
         case pointsOnBench = "points_on_bench"
+        case teamValue = "value"
+    }
+
+    init(
+        event: Int,
+        points: Int,
+        rank: Int?,
+        overallRank: Int?,
+        eventTransfersCost: Int?,
+        pointsOnBench: Int?,
+        teamValue: Int? = nil
+    ) {
+        self.event = event
+        self.points = points
+        self.rank = rank
+        self.overallRank = overallRank
+        self.eventTransfersCost = eventTransfersCost
+        self.pointsOnBench = pointsOnBench
+        self.teamValue = teamValue
     }
 }
 
@@ -405,7 +425,7 @@ enum FantasyTeamGameweekResolver {
     }
 }
 
-struct FantasyEventLiveResponse: Codable, Hashable {
+nonisolated struct FantasyEventLiveResponse: Codable, Hashable {
     let elements: [FantasyLiveElement]
 }
 
@@ -599,12 +619,63 @@ struct FantasyElementSummaryHistory: Codable, Hashable {
     }
 }
 
-struct FantasyLiveElement: Codable, Hashable {
+nonisolated struct FantasyLiveElement: Codable, Hashable {
     let id: Int
     let stats: FantasyLiveStats
+    let explain: [FantasyLiveFixtureExplanation]
+
+    init(
+        id: Int,
+        stats: FantasyLiveStats,
+        explain: [FantasyLiveFixtureExplanation] = []
+    ) {
+        self.id = id
+        self.stats = stats
+        self.explain = explain
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(Int.self, forKey: .id)
+        stats = try container.decode(FantasyLiveStats.self, forKey: .stats)
+        explain = try container.decodeIfPresent(
+            [FantasyLiveFixtureExplanation].self,
+            forKey: .explain
+        ) ?? []
+    }
+
+    func points(forFixtureID fixtureID: Int) -> Int? {
+        guard let fixture = explain.first(where: { $0.fixture == fixtureID }) else {
+            return nil
+        }
+        return fixture.stats.reduce(0) {
+            $0 + $1.points + ($1.pointsModification ?? 0)
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case stats
+        case explain
+    }
 }
 
-struct FantasyLiveStats: Codable, Hashable {
+nonisolated struct FantasyLiveFixtureExplanation: Codable, Hashable {
+    let fixture: Int
+    let stats: [FantasyLiveFixtureStat]
+}
+
+nonisolated struct FantasyLiveFixtureStat: Codable, Hashable {
+    let points: Int
+    let pointsModification: Int?
+
+    enum CodingKeys: String, CodingKey {
+        case points
+        case pointsModification = "points_modification"
+    }
+}
+
+nonisolated struct FantasyLiveStats: Codable, Hashable {
     let totalPoints: Int
     let minutes: Int?
     let goalsScored: Int?
@@ -622,7 +693,7 @@ struct FantasyLiveStats: Codable, Hashable {
     }
 }
 
-struct FantasyFixture: Codable, Hashable {
+nonisolated struct FantasyFixture: Codable, Hashable {
     let id: Int
     let event: Int?
     let teamH: Int
@@ -1692,10 +1763,9 @@ struct FantasyDisplayPlayer: Identifiable, Hashable, Sendable {
 
     nonisolated var shouldAutoSubAsNonParticipant: Bool {
         guard minutesPlayed == 0 else { return false }
-        if hasActiveFixtureThisGameweek { return true }
-        if isDefinitelyUnavailable { return true }
+        if hasUpcomingFixtureThisGameweek || hasActiveFixtureThisGameweek { return false }
         if !hasAnyFixtureThisGameweek { return true }
-        return !hasUpcomingFixtureThisGameweek && !hasActiveFixtureThisGameweek
+        return true
     }
 
     nonisolated var isEligibleAutoSubReplacement: Bool {
@@ -1762,6 +1832,30 @@ struct FantasyMatchTeamSquadSection: Identifiable, Hashable, Sendable {
     }
 }
 
+struct FantasyMatchFixtureContext: Hashable, Sendable {
+    let squad: FantasySquadDisplayData
+    let fixtureID: Int
+    let seasonKey: String
+    let expectedPointsByElementID: [Int: Double]
+    let pointsByElementID: [Int: Int]
+
+    func expectedPoints(for player: FantasyDisplayPlayer) -> Double? {
+        expectedPointsByElementID[player.elementID]
+    }
+
+    func points(for player: FantasyDisplayPlayer) -> Int {
+        pointsByElementID[player.elementID] ?? 0
+    }
+}
+
+func fantasyPlayerDetailsAreAvailable(
+    selectionSeasonKey: String?,
+    activeSeasonKey: String
+) -> Bool {
+    guard let selectionSeasonKey else { return true }
+    return selectionSeasonKey == activeSeasonKey
+}
+
 struct FantasyEffectivePlayerContribution: Hashable, Sendable {
     let elementID: Int
     let displayName: String
@@ -1771,7 +1865,7 @@ struct FantasyEffectivePlayerContribution: Hashable, Sendable {
 }
 
 struct FantasySquadDisplayData: Hashable, Sendable {
-    enum ScorePhase: Hashable, Sendable {
+    nonisolated enum ScorePhase: Hashable, Sendable {
         case expected
         case provisional
         case final
@@ -1799,6 +1893,7 @@ struct FantasySquadDisplayData: Hashable, Sendable {
     let midfielders: [FantasyDisplayPlayer]
     let forwards: [FantasyDisplayPlayer]
     let bench: [FantasyDisplayPlayer]
+    var reportedTeamValueMillions: Double? = nil
 
     nonisolated var starters: [FantasyDisplayPlayer] {
         (goalkeepers + defenders + midfielders + forwards)
@@ -1814,7 +1909,7 @@ struct FantasySquadDisplayData: Hashable, Sendable {
     }
 
     nonisolated var currentTeamValueMillions: Double {
-        allPlayers.reduce(0) { $0 + $1.nowCostMillions }
+        reportedTeamValueMillions ?? allPlayers.reduce(0) { $0 + $1.nowCostMillions }
     }
 
     nonisolated var resolvedCurrentScore: Int {
@@ -1912,7 +2007,8 @@ struct FantasySquadDisplayData: Hashable, Sendable {
             defenders: defenders.map(apply),
             midfielders: midfielders.map(apply),
             forwards: forwards.map(apply),
-            bench: bench.map(apply)
+            bench: bench.map(apply),
+            reportedTeamValueMillions: reportedTeamValueMillions
         )
     }
 
@@ -2052,18 +2148,19 @@ struct FantasySquadDisplayData: Hashable, Sendable {
             defenders: defenders,
             midfielders: midfielders,
             forwards: forwards,
-            bench: bench
+            bench: bench,
+            reportedTeamValueMillions: reportedTeamValueMillions
         )
     }
 
-    nonisolated var effectivePlayerContributions: [FantasyEffectivePlayerContribution] {
-        var contributionsByElementID: [Int: Int] = [:]
+    nonisolated var effectivePlayerMultipliersByElementID: [Int: Int] {
+        var multipliersByElementID: [Int: Int] = [:]
 
         for starter in starters {
-            contributionsByElementID[starter.elementID] = starter.appliedPoints
+            multipliersByElementID[starter.elementID] = max(starter.multiplier, 0)
         }
         for benchPlayer in bench {
-            contributionsByElementID[benchPlayer.elementID] = hasBenchBoostActive ? benchPlayer.rawPoints : 0
+            multipliersByElementID[benchPlayer.elementID] = hasBenchBoostActive ? 1 : 0
         }
 
         if !hasBenchBoostActive {
@@ -2071,8 +2168,8 @@ struct FantasySquadDisplayData: Hashable, Sendable {
                 player.positionType == .goalkeeper && player.shouldAutoSubAsNonParticipant
             }),
                let benchGoalkeeper = bench.first(where: { $0.positionType == .goalkeeper && $0.isEligibleAutoSubReplacement }) {
-                contributionsByElementID[unavailableStartingGoalkeeper.elementID] = 0
-                contributionsByElementID[benchGoalkeeper.elementID] = benchGoalkeeper.rawPoints
+                multipliersByElementID[unavailableStartingGoalkeeper.elementID] = 0
+                multipliersByElementID[benchGoalkeeper.elementID] = 1
             }
 
             let minimumFormation: [FantasyPositionType: Int] = [
@@ -2111,19 +2208,27 @@ struct FantasySquadDisplayData: Hashable, Sendable {
                 activeOutfieldCounts[replacedStarter.positionType, default: 0] -= 1
                 activeOutfieldCounts[benchPlayer.positionType, default: 0] += 1
 
-                contributionsByElementID[replacedStarter.elementID] = 0
-                contributionsByElementID[benchPlayer.elementID] = benchPlayer.rawPoints
+                multipliersByElementID[replacedStarter.elementID] = 0
+                multipliersByElementID[benchPlayer.elementID] = 1
             }
         }
 
         if let captain = starters.first(where: { $0.isCaptain && $0.shouldAutoSubAsNonParticipant }),
            let viceCaptain = allPlayers.first(where: { $0.isViceCaptain && $0.isEligibleAutoSubReplacement }) {
-            contributionsByElementID[captain.elementID] = 0
-            contributionsByElementID[viceCaptain.elementID, default: 0] += viceCaptain.rawPoints
+            let captainMultiplier = max(captain.multiplier, viceCaptain.multiplier, 2)
+            multipliersByElementID[captain.elementID] = 0
+            multipliersByElementID[viceCaptain.elementID] = captainMultiplier
         }
 
+        return multipliersByElementID
+    }
+
+    nonisolated var effectivePlayerContributions: [FantasyEffectivePlayerContribution] {
+        let multipliersByElementID = effectivePlayerMultipliersByElementID
+
         return allPlayers.compactMap { player in
-            guard let points = contributionsByElementID[player.elementID], points != 0 else { return nil }
+            let points = player.rawPoints * (multipliersByElementID[player.elementID] ?? 0)
+            guard points != 0 else { return nil }
             return FantasyEffectivePlayerContribution(
                 elementID: player.elementID,
                 displayName: player.displayName,
@@ -3471,9 +3576,12 @@ enum FantasySquadBuilder {
 
             if let captain = starters.first(where: { $0.isCaptain && $0.shouldAutoSubAsNonParticipant }),
                let viceCaptain = players.first(where: { $0.isViceCaptain && $0.isEligibleAutoSubReplacement }) {
-                runningEstimatedTotal += viceCaptain.rawPoints
+                let captainMultiplier = max(captain.multiplier, 2)
+                let viceCaptainBonus = viceCaptain.rawPoints * (captainMultiplier - 1)
+                let multiplierDescription = captainMultiplier == 3 ? "tripled" : "doubled"
+                runningEstimatedTotal += viceCaptainBonus
                 scoreCalculationRulesApplied.append(
-                    "Vice-captain boost applied: \(captain.displayName) did not play, so \(viceCaptain.displayName) was doubled (+\(viceCaptain.rawPoints) pts)."
+                    "Vice-captain boost applied: \(captain.displayName) did not play, so \(viceCaptain.displayName) was \(multiplierDescription) (+\(viceCaptainBonus) pts)."
                 )
             }
 
@@ -3532,7 +3640,8 @@ enum FantasySquadBuilder {
             defenders: defenders,
             midfielders: midfielders,
             forwards: forwards,
-            bench: bench
+            bench: bench,
+            reportedTeamValueMillions: picksResponse.entryHistory.teamValue.map { Double($0) / 10 }
         )
     }
 

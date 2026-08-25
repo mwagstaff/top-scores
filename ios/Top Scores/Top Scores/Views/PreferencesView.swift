@@ -24,6 +24,36 @@ private struct ProfileFixtureRegion: Identifiable {
     let name: String
 }
 
+private struct NotificationTeamSelectionEditor: View {
+    let apiBaseURL: String
+    let onCommit: (Set<String>) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var draftTeamIDs: Set<String>
+
+    init(
+        apiBaseURL: String,
+        selectedTeamIDs: Set<String>,
+        onCommit: @escaping (Set<String>) -> Void
+    ) {
+        self.apiBaseURL = apiBaseURL
+        self.onCommit = onCommit
+        _draftTeamIDs = State(initialValue: selectedTeamIDs)
+    }
+
+    var body: some View {
+        TeamSelectionView(
+            apiBaseURL: apiBaseURL,
+            selectedTeamIDs: $draftTeamIDs,
+            onCancel: { dismiss() },
+            onDone: {
+                onCommit(draftTeamIDs)
+                dismiss()
+            }
+        )
+    }
+}
+
 struct PreferencesView: View {
     var embeddedInNavigation: Bool = false
     var showsOnlyAdvancedSettings: Bool = false
@@ -54,7 +84,7 @@ struct PreferencesView: View {
             }
         }
         .task {
-            await viewModel.reload(baseURL: preferences.apiBaseURL)
+            await reloadVisibleCatalogs(baseURL: preferences.apiBaseURL)
         }
         .onAppear {
             let openedAt = Date()
@@ -66,7 +96,7 @@ struct PreferencesView: View {
             reloadTask = Task {
                 try? await Task.sleep(nanoseconds: 600_000_000)
                 guard !Task.isCancelled else { return }
-                await viewModel.reload(baseURL: newValue)
+                await reloadVisibleCatalogs(baseURL: newValue)
             }
         }
     }
@@ -77,6 +107,17 @@ struct PreferencesView: View {
             subtitle: showsOnlyAdvancedSettings ? "Advanced settings" : "Scores, notifications and display"
         ) {
             content
+        }
+    }
+
+    private func reloadVisibleCatalogs(baseURL: String) async {
+        await viewModel.reload(
+            baseURL: baseURL,
+            loadCompetitions: !showsOnlyAdvancedSettings,
+            loadChannels: showsOnlyAdvancedSettings
+        )
+        if !showsOnlyAdvancedSettings {
+            canonicalizeNotificationCompetitionSelection()
         }
     }
 
@@ -119,14 +160,17 @@ struct PreferencesView: View {
                                 if !preferences.notificationAllMajorMatchesEnabled {
                                     competitionPicker(
                                         search: $notificationLeagueSearch,
-                                        selectedLeagues: preferences.selectedNotificationLeagues,
+                                        selectionIsActive: notificationLeagueIsSelected,
                                         selectionChanged: toggleNotificationLeague
                                     )
 
                                     NavigationLink {
-                                        TeamSelectionView(
+                                        NotificationTeamSelectionEditor(
                                             apiBaseURL: preferences.apiBaseURL,
-                                            selectedTeamIDs: notificationTeamSelectionBinding
+                                            selectedTeamIDs: notificationTeamSelectionBinding.wrappedValue,
+                                            onCommit: { teamIDs in
+                                                notificationTeamSelectionBinding.wrappedValue = teamIDs
+                                            }
                                         )
                                     } label: {
                                         LabeledContent("Teams") {
@@ -443,7 +487,7 @@ struct PreferencesView: View {
     @ViewBuilder
     private func competitionPicker(
         search: Binding<String>,
-        selectedLeagues: [String],
+        selectionIsActive: @escaping (String) -> Bool,
         selectionChanged: @escaping (String) -> Void
     ) -> some View {
         TextField("Search competitions", text: search)
@@ -459,7 +503,7 @@ struct PreferencesView: View {
             ForEach(filteredLeagues(matching: search.wrappedValue), id: \.self) { league in
                 MultiSelectRow(
                     title: league,
-                    isSelected: selectedLeagues.contains(league),
+                    isSelected: selectionIsActive(league),
                     action: { selectionChanged(league) }
                 )
             }
@@ -875,20 +919,38 @@ struct PreferencesView: View {
     }
 
     private func toggleNotificationLeague(_ league: String) {
-        let optionID = viewModel.competitionCatalog
-            .first { $0.allNames.contains(where: { $0.localizedCaseInsensitiveCompare(league) == .orderedSame }) }
-            .map { FixtureViewOptionID.competition($0.stableID) }
-            ?? FixtureViewOptionID.legacyCompetition(league)
-        if let index = preferences.selectedNotificationLeagues.firstIndex(of: league) {
-            preferences.selectedNotificationLeagues.remove(at: index)
-            preferences.selectedNotificationViewOptionIDs.removeAll { $0 == optionID }
-        } else {
-            preferences.selectedNotificationLeagues.append(league)
-            preferences.selectedNotificationLeagues.sort { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
-            if !preferences.selectedNotificationViewOptionIDs.contains(optionID) {
-                preferences.selectedNotificationViewOptionIDs.append(optionID)
-                preferences.selectedNotificationViewOptionIDs.sort()
-            }
+        preferences.selectedNotificationViewOptionIDs = NotificationCompetitionSelection.toggling(
+            leagueName: league,
+            optionIDs: preferences.selectedNotificationViewOptionIDs,
+            catalog: viewModel.competitionCatalog
+        )
+        canonicalizeNotificationCompetitionSelection()
+    }
+
+    private func notificationLeagueIsSelected(_ league: String) -> Bool {
+        NotificationCompetitionSelection.isSelected(
+            leagueName: league,
+            optionIDs: preferences.selectedNotificationViewOptionIDs,
+            catalog: viewModel.competitionCatalog
+        )
+    }
+
+    private func canonicalizeNotificationCompetitionSelection() {
+        let canonicalOptionIDs = NotificationCompetitionSelection.canonicalOptionIDs(
+            optionIDs: preferences.selectedNotificationViewOptionIDs,
+            existingLeagueNames: preferences.selectedNotificationLeagues,
+            catalog: viewModel.competitionCatalog
+        )
+        if canonicalOptionIDs != preferences.selectedNotificationViewOptionIDs {
+            preferences.selectedNotificationViewOptionIDs = canonicalOptionIDs
+        }
+        let canonicalNames = NotificationCompetitionSelection.canonicalLeagueNames(
+            optionIDs: canonicalOptionIDs,
+            existingLeagueNames: preferences.selectedNotificationLeagues,
+            catalog: viewModel.competitionCatalog
+        )
+        if canonicalNames != preferences.selectedNotificationLeagues {
+            preferences.selectedNotificationLeagues = canonicalNames
         }
     }
 

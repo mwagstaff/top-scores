@@ -329,6 +329,8 @@ struct MatchesView: View {
     @State private var fixtureBrowseGroupedDays: [MatchDay] = []
     @State private var fixtureBrowsePageGroupedDays: [String: [MatchDay]] = [:]
     @State private var fixtureBrowsePageSourceMatchesByDate: [String: [Match]] = [:]
+    @State private var isFixtureDatePickerPresented = false
+    @State private var fixtureDatePickerSelection = Date()
     init(
         mode: MatchesViewMode,
         isSelected: Bool = true,
@@ -667,6 +669,35 @@ struct MatchesView: View {
                 .transition(fixtureRecoveryButtonTransition)
             }
 
+            Button(action: presentFixtureDatePicker) {
+                Image(systemName: "calendar")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(Color.primary)
+                    .frame(width: 44, height: 44)
+                    .background(Color.accentColor.opacity(0.12), in: Circle())
+                    .overlay {
+                        Circle()
+                            .stroke(Color.accentColor.opacity(0.48), lineWidth: 1)
+                    }
+                    .shadow(
+                        color: isFixtureDatePickerPresented
+                            ? Color.accentColor.opacity(0.24)
+                            : .clear,
+                        radius: 8
+                    )
+            }
+            .buttonStyle(.plain)
+            .disabled(fixtureBrowser.availableDays.isEmpty)
+            .accessibilityLabel("Choose fixture date")
+            .accessibilityValue(scoresHeaderSubtitle ?? "No date selected")
+            .accessibilityHint("Opens a calendar to jump to another date")
+            .popover(isPresented: $isFixtureDatePickerPresented) {
+                fixtureDatePickerPopover
+                    .presentationCompactAdaptation(.sheet)
+                    .presentationDetents([.height(fixtureDatePickerSheetHeight)])
+                    .presentationDragIndicator(.visible)
+            }
+
             Button(action: togglePredictedScores) {
                 Image(systemName: "sparkles")
                     .font(.system(size: 18, weight: .semibold))
@@ -703,6 +734,161 @@ struct MatchesView: View {
             .accessibilityValue(preferences.showPredictedScores ? "On" : "Off")
             .accessibilityHint("Toggles AI score predictions")
         }
+    }
+
+    private var fixtureDatePickerPopover: some View {
+        let competitionsByDate = fixtureBrowser.calendarCompetitionSummariesByDate
+        let selectedDateCompetitions = competitionsByDate[fixtureDatePickerSelectionKey] ?? []
+        let showsCompetitionOverflow = selectedDateCompetitions.count > 4
+        let visibleCompetitionCount = showsCompetitionOverflow
+            ? 3
+            : min(4, selectedDateCompetitions.count)
+        let visibleDateCompetitions = Array(
+            selectedDateCompetitions.prefix(visibleCompetitionCount)
+        )
+        let hiddenMatchCount = selectedDateCompetitions
+            .dropFirst(visibleCompetitionCount)
+            .reduce(0) { $0 + $1.matchCount }
+
+        return VStack(spacing: 10) {
+            HStack {
+                Text("Jump to date")
+                    .font(.headline)
+
+                Spacer()
+
+                Button("Done") {
+                    isFixtureDatePickerPresented = false
+                }
+                .fontWeight(.semibold)
+            }
+            .padding(.horizontal, 16)
+
+            DatePicker(
+                "Fixture date",
+                selection: $fixtureDatePickerSelection,
+                in: fixtureDatePickerRange,
+                displayedComponents: .date
+            )
+            .datePickerStyle(.graphical)
+            .labelsHidden()
+            .tint(Color.accentColor)
+
+            if selectedDateCompetitions.isEmpty {
+                Text("No fixtures in your current Match View on this date")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 16)
+            } else {
+                LazyVGrid(
+                    columns: [
+                        GridItem(.flexible(), spacing: 12, alignment: .leading),
+                        GridItem(.flexible(), alignment: .leading),
+                    ],
+                    alignment: .leading,
+                    spacing: 7
+                ) {
+                    ForEach(visibleDateCompetitions) { competition in
+                        fixtureDateCompetitionSummary(competition)
+                    }
+
+                    if hiddenMatchCount > 0 {
+                        Text(
+                            "+ \(hiddenMatchCount) more " +
+                            (hiddenMatchCount == 1 ? "match" : "matches")
+                        )
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(Color.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+                        .accessibilityLabel(
+                            "\(hiddenMatchCount) more " +
+                            (hiddenMatchCount == 1 ? "match" : "matches")
+                        )
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 16)
+            }
+
+            HStack(spacing: 12) {
+                Spacer(minLength: 0)
+
+                Button("Jump") {
+                    jumpToFixtureDatePickerSelection()
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(!isFixtureDatePickerSelectionAvailable)
+            }
+            .padding(.horizontal, 16)
+        }
+        .padding(.vertical, 12)
+        .frame(width: 340)
+        .frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    private var fixtureDatePickerSheetHeight: CGFloat {
+        dynamicTypeSize.isAccessibilitySize ? 590 : 500
+    }
+
+    private func fixtureDateCompetitionSummary(
+        _ competition: FixtureCalendarCompetitionSummary
+    ) -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(
+                    FixtureCalendarCompetitionColor.color(
+                        competitionID: competition.id,
+                        competitionName: competition.name
+                    )
+                )
+                .frame(width: 6, height: 6)
+                .accessibilityHidden(true)
+
+            Text("\(competition.name) (\(competition.matchCount))")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(Color.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private var fixtureDatePickerRange: ClosedRange<Date> {
+        let fallback = Calendar.current.startOfDay(for: Date())
+        guard let firstDateKey = fixtureBrowser.availableDays.first?.date,
+              let lastDateKey = fixtureBrowser.availableDays.last?.date,
+              let firstDate = Self.fixtureDate(from: firstDateKey),
+              let lastDate = Self.fixtureDate(from: lastDateKey) else {
+            return fallback...fallback
+        }
+        return min(firstDate, lastDate)...max(firstDate, lastDate)
+    }
+
+    private var fixtureDatePickerSelectionKey: String {
+        Self.fixtureDateKey(from: fixtureDatePickerSelection)
+    }
+
+    private var isFixtureDatePickerSelectionAvailable: Bool {
+        fixtureBrowser.availableDays.contains { $0.date == fixtureDatePickerSelectionKey }
+    }
+
+    private func presentFixtureDatePicker() {
+        if let selectedDateKey = fixtureBrowser.selectedDateKey,
+           let selectedDate = Self.fixtureDate(from: selectedDateKey) {
+            fixtureDatePickerSelection = selectedDate
+        } else {
+            fixtureDatePickerSelection = fixtureDatePickerRange.lowerBound
+        }
+        isFixtureDatePickerPresented = true
+    }
+
+    private func jumpToFixtureDatePickerSelection() {
+        guard isFixtureDatePickerSelectionAvailable else { return }
+        fixtureBrowser.selectDate(fixtureDatePickerSelectionKey)
+        isFixtureDatePickerPresented = false
     }
 
     private var fixtureRecoveryButtonTransition: AnyTransition {
@@ -1356,13 +1542,7 @@ struct MatchesView: View {
     }
 
     private static func friendlyFixtureDateLabel(_ dateKey: String) -> String? {
-        let parts = dateKey.split(separator: "-").compactMap { Int($0) }
-        guard parts.count == 3,
-              let date = Calendar.current.date(
-                from: DateComponents(year: parts[0], month: parts[1], day: parts[2])
-              ) else {
-            return nil
-        }
+        guard let date = fixtureDate(from: dateKey) else { return nil }
 
         let day = Calendar.current.component(.day, from: date)
         let formattedDate = date.formatted(
@@ -1373,6 +1553,24 @@ struct MatchesView: View {
                 .locale(Locale(identifier: "en_US"))
         )
         return "\(formattedDate)\(ordinalSuffix(for: day))"
+    }
+
+    private static func fixtureDate(from dateKey: String) -> Date? {
+        let parts = dateKey.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return nil }
+        return Calendar.current.date(
+            from: DateComponents(year: parts[0], month: parts[1], day: parts[2])
+        )
+    }
+
+    private static func fixtureDateKey(from date: Date) -> String {
+        let components = Calendar.current.dateComponents([.year, .month, .day], from: date)
+        guard let year = components.year,
+              let month = components.month,
+              let day = components.day else {
+            return ""
+        }
+        return String(format: "%04d-%02d-%02d", year, month, day)
     }
 
     private static func ordinalSuffix(for day: Int) -> String {

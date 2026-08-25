@@ -64,6 +64,7 @@ final class TeamColorCatalog: ObservableObject {
     private var refreshTask: Task<TeamColorsCatalogResponse, Error>?
 
     private init() {
+        loadBundledCatalog()
         loadCache()
     }
 
@@ -98,9 +99,27 @@ final class TeamColorCatalog: ObservableObject {
         }
     }
 
-    func lineupColors(for teamName: String, opponentTeamName: String?, isAway: Bool) -> TeamLineupNumberColors {
-        let entry = resolve(teamName) ?? fallbackEntry
+    func lineupColors(
+        for teamName: String,
+        opponentTeamName: String?,
+        isAway: Bool,
+        fallbackColors: TeamLineupNumberColors? = nil
+    ) -> TeamLineupNumberColors {
+        guard let entry = resolve(teamName) else {
+            if let fallbackColors {
+                return fallbackColors
+            }
+            return colors(for: fallbackEntry, opponent: nil, isAway: isAway)
+        }
         let opponent = opponentTeamName.flatMap(resolve)
+        return colors(for: entry, opponent: opponent, isAway: isAway)
+    }
+
+    private func colors(
+        for entry: TeamColorEntry,
+        opponent: TeamColorEntry?,
+        isAway: Bool
+    ) -> TeamLineupNumberColors {
         let invert = isAway && shouldInvert(entry, against: opponent)
         let backgroundHex = invert ? entry.secondary : entry.primary
         let preferredForegroundHex = invert ? entry.primary : entry.secondary
@@ -196,6 +215,16 @@ final class TeamColorCatalog: ObservableObject {
 
         return entry.primary.caseInsensitiveCompare(opponent.primary) == .orderedSame &&
             entry.secondary.caseInsensitiveCompare(opponent.secondary) == .orderedSame
+    }
+
+    private func loadBundledCatalog() {
+        guard let url = Bundle.main.url(forResource: "team_colors", withExtension: "json"),
+              let data = try? Data(contentsOf: url),
+              let catalog = try? JSONDecoder().decode(TeamColorsCatalogResponse.self, from: data) else {
+            return
+        }
+
+        apply(catalog: catalog, fetchedAt: .distantPast, notify: false)
     }
 
     private func loadCache() {

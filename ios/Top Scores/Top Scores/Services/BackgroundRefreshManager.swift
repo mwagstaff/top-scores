@@ -134,6 +134,15 @@ enum BackgroundRefreshManager {
                 bootstrap: bootstrap
             )
             FantasySyncStore.persist(managerEntryID: String(entryID), squad: squad)
+            let historyRecord = FantasyMatchHistoryRecord(
+                managerEntryID: entryID,
+                gameweek: gameweek,
+                picksResponse: picks,
+                liveResponse: live,
+                fixtures: eventFixtures,
+                bootstrap: bootstrap
+            )
+            await FantasyMatchHistoryStore.shared.save(historyRecord)
         } catch is CancellationError {
             return
         } catch {

@@ -591,6 +591,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     let firstLegHomeScore: Int?
     let firstLegAwayScore: Int?
     let scoreStatus: String?
+    let updatedAt: String?
     let homeGoalScorers: [MatchGoalScorer]
     let awayGoalScorers: [MatchGoalScorer]
     let homeAssists: [MatchAssistProvider]
@@ -633,6 +634,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         firstLegHomeScore: Int? = nil,
         firstLegAwayScore: Int? = nil,
         scoreStatus: String? = nil,
+        updatedAt: String? = nil,
         homeGoalScorers: [MatchGoalScorer] = [],
         awayGoalScorers: [MatchGoalScorer] = [],
         homeAssists: [MatchAssistProvider] = [],
@@ -674,6 +676,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         self.firstLegHomeScore = firstLegHomeScore
         self.firstLegAwayScore = firstLegAwayScore
         self.scoreStatus = scoreStatus
+        self.updatedAt = updatedAt
         self.homeGoalScorers = homeGoalScorers
         self.awayGoalScorers = awayGoalScorers
         self.homeAssists = homeAssists
@@ -914,6 +917,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             firstLegHomeScore: firstLegHomeScore,
             firstLegAwayScore: firstLegAwayScore,
             scoreStatus: status,
+            updatedAt: updatedAt,
             homeGoalScorers: homeGoalScorers,
             awayGoalScorers: awayGoalScorers,
             homeAssists: homeAssists,
@@ -959,6 +963,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             firstLegHomeScore: firstLegHomeScore,
             firstLegAwayScore: firstLegAwayScore,
             scoreStatus: scoreStatus,
+            updatedAt: updatedAt,
             homeGoalScorers: homeGoalScorers,
             awayGoalScorers: awayGoalScorers,
             homeAssists: homeAssists,
@@ -1006,6 +1011,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         firstLegHomeScore = try container.decodeIfPresent(Int.self, forKey: .firstLegHomeScore)
         firstLegAwayScore = try container.decodeIfPresent(Int.self, forKey: .firstLegAwayScore)
         scoreStatus = try container.decodeIfPresent(String.self, forKey: .scoreStatus)
+        updatedAt = try container.decodeIfPresent(String.self, forKey: .updatedAt)
         homeGoalScorers = try container.decodeIfPresent([MatchGoalScorer].self, forKey: .homeGoalScorers) ?? []
         awayGoalScorers = try container.decodeIfPresent([MatchGoalScorer].self, forKey: .awayGoalScorers) ?? []
         homeAssists = try container.decodeIfPresent([MatchAssistProvider].self, forKey: .homeAssists) ?? []
@@ -1050,6 +1056,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         case firstLegHomeScore = "first_leg_home_score"
         case firstLegAwayScore = "first_leg_away_score"
         case scoreStatus = "score_status"
+        case updatedAt = "updated_at"
         case homeGoalScorers = "home_goal_scorers"
         case awayGoalScorers = "away_goal_scorers"
         case homeAssists = "home_assists"
@@ -1094,6 +1101,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         try container.encodeIfPresent(firstLegHomeScore, forKey: .firstLegHomeScore)
         try container.encodeIfPresent(firstLegAwayScore, forKey: .firstLegAwayScore)
         try container.encodeIfPresent(scoreStatus, forKey: .scoreStatus)
+        try container.encodeIfPresent(updatedAt, forKey: .updatedAt)
         try container.encode(homeGoalScorers, forKey: .homeGoalScorers)
         try container.encode(awayGoalScorers, forKey: .awayGoalScorers)
         try container.encode(homeAssists, forKey: .homeAssists)
@@ -1135,6 +1143,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         lhs.firstLegHomeScore == rhs.firstLegHomeScore &&
         lhs.firstLegAwayScore == rhs.firstLegAwayScore &&
         lhs.scoreStatus == rhs.scoreStatus &&
+        lhs.updatedAt == rhs.updatedAt &&
         lhs.homeGoalScorers == rhs.homeGoalScorers &&
         lhs.awayGoalScorers == rhs.awayGoalScorers &&
         lhs.homeAssists == rhs.homeAssists &&
@@ -1207,6 +1216,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             firstLegHomeScore: details.firstLegHomeScore ?? firstLegHomeScore,
             firstLegAwayScore: details.firstLegAwayScore ?? firstLegAwayScore,
             scoreStatus: isPostponedStatus ? mergedScoreStatus : (shouldClearScores ? nil : mergedScoreStatus),
+            updatedAt: details.updatedAt ?? updatedAt,
             homeGoalScorers: details.homeGoalScorers,
             awayGoalScorers: details.awayGoalScorers,
             homeAssists: details.homeAssists,
@@ -1255,6 +1265,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             firstLegHomeScore: refreshed.firstLegHomeScore,
             firstLegAwayScore: refreshed.firstLegAwayScore,
             scoreStatus: refreshed.scoreStatus,
+            updatedAt: refreshed.updatedAt,
             homeGoalScorers: homeGoalScorers,
             awayGoalScorers: awayGoalScorers,
             homeAssists: homeAssists,

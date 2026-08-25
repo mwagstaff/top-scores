@@ -2826,6 +2826,493 @@ struct Top_ScoresTests {
         #expect(section?.bench.map(\.displayName) == ["Foster"])
     }
 
+    @Test func fantasyMatchPointsPhase_usesMatchStatusBeforeGameweekStatus() {
+        #expect(
+            fantasyMatchPointsPhase(
+                isMatchInProgress: false,
+                isMatchFinished: false,
+                squadScorePhase: .provisional
+            ) == .expected
+        )
+        #expect(
+            fantasyMatchPointsPhase(
+                isMatchInProgress: true,
+                isMatchFinished: false,
+                squadScorePhase: .expected
+            ) == .provisional
+        )
+        #expect(
+            fantasyMatchPointsPhase(
+                isMatchInProgress: false,
+                isMatchFinished: true,
+                squadScorePhase: .provisional
+            ) == .provisional
+        )
+        #expect(
+            fantasyMatchPointsPhase(
+                isMatchInProgress: false,
+                isMatchFinished: true,
+                squadScorePhase: .final
+            ) == .final
+        )
+    }
+
+    @Test func fantasyMatchPointsPhase_alwaysUsesPointsColumnHeading() {
+        #expect(FantasyMatchPointsPhase.expected.columnTitle == "Points")
+        #expect(FantasyMatchPointsPhase.provisional.columnTitle == "Points")
+        #expect(FantasyMatchPointsPhase.final.columnTitle == "Points")
+        #expect(FantasyMatchPointsPhase.expected.statusTitle == "Expected")
+        #expect(FantasyMatchPointsPhase.provisional.statusTitle == "Provisional")
+        #expect(FantasyMatchPointsPhase.final.statusTitle == "Final")
+    }
+
+    @Test func fantasyMatchShortPlayerName_usesFPLDisplayName() {
+        #expect(
+            fantasyMatchShortPlayerName(
+                displayName: "João Pedro",
+                fullName: "João Pedro Junqueira de Jesus"
+            ) == "J. Pedro"
+        )
+        #expect(
+            fantasyMatchShortPlayerName(
+                displayName: "Salah",
+                fullName: "Mohamed Salah"
+            ) == "M. Salah"
+        )
+        #expect(
+            fantasyMatchShortPlayerName(
+                displayName: "Haaland",
+                fullName: "Erling Haaland"
+            ) == "E. Haaland"
+        )
+        #expect(
+            fantasyMatchShortPlayerName(
+                displayName: "Gabriel",
+                fullName: "Gabriel Magalhães"
+            ) == "Gabriel"
+        )
+    }
+
+    @Test func fantasyMatchPlayers_sortByDisplayedPointsDescendingWithStableTies() {
+        let players = [
+            makeFantasyPlayer(
+                elementID: 1,
+                pickPosition: 7,
+                positionType: .midfielder,
+                displayName: "Two",
+                fullName: "Player Two",
+                teamName: "Arsenal"
+            ),
+            makeFantasyPlayer(
+                elementID: 2,
+                pickPosition: 8,
+                positionType: .midfielder,
+                displayName: "Missing",
+                fullName: "Player Missing",
+                teamName: "Arsenal"
+            ),
+            makeFantasyPlayer(
+                elementID: 3,
+                pickPosition: 5,
+                positionType: .midfielder,
+                displayName: "High A",
+                fullName: "Player High A",
+                teamName: "Chelsea"
+            ),
+            makeFantasyPlayer(
+                elementID: 4,
+                pickPosition: 6,
+                positionType: .midfielder,
+                displayName: "High B",
+                fullName: "Player High B",
+                teamName: "Chelsea"
+            )
+        ]
+        func points(for player: FantasyDisplayPlayer) -> Double? {
+            switch player.elementID {
+            case 1: return 2.1
+            case 2: return nil
+            case 3, 4: return 7.5
+            default: return nil
+            }
+        }
+
+        let sorted = players.sorted {
+            fantasyMatchPlayerPrecedes(
+                $0,
+                points: points(for: $0),
+                $1,
+                points: points(for: $1)
+            )
+        }
+
+        #expect(sorted.map(\.elementID) == [3, 4, 1, 2])
+    }
+
+    @Test func fantasyMatchPointsTotal_sumsManagerContributionsAndRequiresCompleteXP() {
+        let captain = makeFantasyPlayer(
+            elementID: 1,
+            pickPosition: 1,
+            positionType: .forward,
+            displayName: "Captain",
+            fullName: "Test Captain",
+            teamName: "Liverpool",
+            rawPoints: 4,
+            appliedPoints: 8,
+            displayPoints: 8,
+            multiplier: 2,
+            isCaptain: true,
+            expectedPointsThisGameweek: 5.25
+        )
+        let benchPlayer = makeFantasyPlayer(
+            elementID: 2,
+            pickPosition: 12,
+            positionType: .defender,
+            displayName: "Bench",
+            fullName: "Test Bench Player",
+            teamName: "Everton",
+            rawPoints: 8,
+            appliedPoints: 0,
+            displayPoints: 8,
+            multiplier: 0,
+            expectedPointsThisGameweek: 2.75
+        )
+
+        #expect(
+            fantasyMatchPointsValue(
+                phase: .expected,
+                expectedPoints: 10.5,
+                points: 8
+            ) == 10.5
+        )
+        #expect(
+            fantasyMatchPointsValue(
+                phase: .provisional,
+                expectedPoints: 10.5,
+                points: 8
+            ) == 8
+        )
+        #expect(fantasyMatchPointsTotal([10.5, 0]) == 10.5)
+        #expect(fantasyMatchPointsTotal([10.5, nil]) == nil)
+    }
+
+    @Test func fantasyEffectivePlayerContributions_transfersTripleCaptainMultiplierToViceCaptain() {
+        let squad = FantasySquadDisplayData(
+            gameweekID: 30,
+            gameweekTitle: "GW30",
+            deadlineGameweekID: nil,
+            deadlineTime: nil,
+            totalPoints: 0,
+            gameweekAverageScore: nil,
+            hasActiveFixtures: false,
+            hasStartedFixturesInGameweek: true,
+            hasFixturesPlayedToday: false,
+            isEstimatedScore: true,
+            estimatedCurrentScore: 0,
+            scoreCalculationRulesApplied: [],
+            rank: nil,
+            overallRank: nil,
+            transfersCost: nil,
+            pointsOnBench: nil,
+            activeChips: [],
+            goalkeepers: [],
+            defenders: [],
+            midfielders: [
+                makeFantasyPlayer(
+                    elementID: 1,
+                    pickPosition: 5,
+                    positionType: .midfielder,
+                    displayName: "Captain",
+                    fullName: "Test Captain",
+                    teamName: "Liverpool",
+                    hasStartedFixtureThisGameweek: true,
+                    hasUpcomingFixtureThisGameweek: false,
+                    multiplier: 3,
+                    isCaptain: true
+                ),
+                makeFantasyPlayer(
+                    elementID: 2,
+                    pickPosition: 6,
+                    positionType: .midfielder,
+                    displayName: "Vice",
+                    fullName: "Test Vice Captain",
+                    teamName: "Arsenal",
+                    hasStartedFixtureThisGameweek: true,
+                    hasUpcomingFixtureThisGameweek: false,
+                    minutesPlayed: 90,
+                    rawPoints: 5,
+                    appliedPoints: 5,
+                    displayPoints: 5,
+                    isViceCaptain: true
+                )
+            ],
+            forwards: [],
+            bench: []
+        )
+
+        #expect(
+            squad.effectivePlayerContributions.first(where: { $0.elementID == 2 })?.points == 15
+        )
+        #expect(squad.effectivePlayerMultipliersByElementID[2] == 3)
+    }
+
+    @Test func fantasyLiveElement_resolvesPointsForOneFixture() {
+        let liveElement = FantasyLiveElement(
+            id: 1,
+            stats: FantasyLiveStats(
+                totalPoints: 7,
+                minutes: 90,
+                goalsScored: 0,
+                assists: 0,
+                yellowCards: 0,
+                redCards: 0
+            ),
+            explain: [
+                FantasyLiveFixtureExplanation(
+                    fixture: 101,
+                    stats: [
+                        FantasyLiveFixtureStat(points: 2, pointsModification: nil),
+                        FantasyLiveFixtureStat(points: 4, pointsModification: 1)
+                    ]
+                )
+            ]
+        )
+
+        #expect(liveElement.points(forFixtureID: 101) == 7)
+        #expect(liveElement.points(forFixtureID: 102) == nil)
+    }
+
+    @Test func fantasyLiveElement_decodesPayloadWithoutExplain() throws {
+        let payload = #"{"id":1,"stats":{"total_points":2}}"#
+        let liveElement = try JSONDecoder().decode(
+            FantasyLiveElement.self,
+            from: Data(payload.utf8)
+        )
+
+        #expect(liveElement.stats.totalPoints == 2)
+        #expect(liveElement.explain.isEmpty)
+    }
+
+    @Test func fantasyFixtureMatchesMatch_requiresTeamsAndKickoff() {
+        let kickoff = Date(timeIntervalSince1970: 1_778_000_000)
+        let fixture = FantasyFixture(
+            id: 101,
+            event: 30,
+            teamH: 1,
+            teamA: 2,
+            kickoffTime: nil,
+            started: false,
+            finished: false,
+            finishedProvisional: false
+        )
+
+        #expect(
+            fantasyFixtureMatchesMatch(
+                fixture,
+                homeTeamID: 1,
+                awayTeamID: 2,
+                fixtureKickoff: kickoff,
+                matchKickoff: kickoff.addingTimeInterval(60)
+            )
+        )
+        #expect(
+            !fantasyFixtureMatchesMatch(
+                fixture,
+                homeTeamID: 2,
+                awayTeamID: 1,
+                fixtureKickoff: kickoff,
+                matchKickoff: kickoff
+            )
+        )
+        #expect(
+            !fantasyFixtureMatchesMatch(
+                fixture,
+                homeTeamID: 1,
+                awayTeamID: 2,
+                fixtureKickoff: kickoff,
+                matchKickoff: kickoff.addingTimeInterval(24 * 60 * 60)
+            )
+        )
+    }
+
+    @Test func fantasyMatchHistoryStore_persistsTeamsByManagerSeasonAndGameweek() async throws {
+        let rootDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: rootDirectory) }
+
+        let firstStore = FantasyMatchHistoryStore(rootDirectory: rootDirectory)
+        await firstStore.save(
+            makeFantasyHistoryRecord(
+                managerEntryID: 42,
+                gameweekID: 1,
+                seasonStartYear: 2026,
+                elementID: 101,
+                teamID: 1,
+                dataChecked: true,
+                points: 6
+            )
+        )
+        await firstStore.save(
+            makeFantasyHistoryRecord(
+                managerEntryID: 42,
+                gameweekID: 2,
+                seasonStartYear: 2026,
+                elementID: 202,
+                teamID: 2,
+                dataChecked: true,
+                points: 9
+            )
+        )
+        await firstStore.save(
+            makeFantasyHistoryRecord(
+                managerEntryID: 42,
+                gameweekID: 1,
+                seasonStartYear: 2027,
+                elementID: 303,
+                teamID: 2,
+                dataChecked: true,
+                points: 4
+            )
+        )
+
+        let reloadedStore = FantasyMatchHistoryStore(rootDirectory: rootDirectory)
+        let records = await reloadedStore.loadRecords(managerEntryID: 42)
+
+        #expect(records.count == 3)
+        #expect(
+            records.first(where: { $0.seasonKey == "2026-2027" && $0.gameweek.id == 1 })?
+                .picksResponse.picks.first?.element == 101
+        )
+        #expect(
+            records.first(where: { $0.seasonKey == "2026-2027" && $0.gameweek.id == 2 })?
+                .picksResponse.picks.first?.element == 202
+        )
+        #expect(
+            records.first(where: { $0.seasonKey == "2027-2028" && $0.gameweek.id == 1 })?
+                .picksResponse.picks.first?.element == 303
+        )
+        #expect(
+            records.first(where: { $0.gameweek.id == 2 })?
+                .liveResponse.elements.first?.points(forFixtureID: 1_002) == 9
+        )
+        #expect(records.allSatisfy { $0.liveResponse.elements.count == 1 })
+        let otherManagerRecords = await reloadedStore.loadRecords(managerEntryID: 99)
+        #expect(otherManagerRecords.isEmpty)
+    }
+
+    @Test func fantasyMatchHistoryStore_neverRegressesFinalFixturePoints() async throws {
+        let rootDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: rootDirectory) }
+
+        let store = FantasyMatchHistoryStore(rootDirectory: rootDirectory)
+        await store.save(
+            makeFantasyHistoryRecord(
+                managerEntryID: 42,
+                gameweekID: 3,
+                seasonStartYear: 2026,
+                elementID: 101,
+                teamID: 1,
+                dataChecked: true,
+                points: 12
+            )
+        )
+        await store.save(
+            makeFantasyHistoryRecord(
+                managerEntryID: 42,
+                gameweekID: 3,
+                seasonStartYear: 2026,
+                elementID: 999,
+                teamID: 2,
+                dataChecked: false,
+                points: nil
+            )
+        )
+
+        let record = await store.loadRecords(managerEntryID: 42).first
+        #expect(record?.isFinal == true)
+        #expect(record?.picksResponse.picks.first?.element == 101)
+        #expect(record?.liveResponse.elements.first?.points(forFixtureID: 1_003) == 12)
+    }
+
+    @Test func fantasyMatchHistoryStore_freezesFinalSquadMetadataAcrossTransfers() async throws {
+        let rootDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: rootDirectory) }
+
+        let store = FantasyMatchHistoryStore(rootDirectory: rootDirectory)
+        await store.save(
+            makeFantasyHistoryRecord(
+                managerEntryID: 42,
+                gameweekID: 3,
+                seasonStartYear: 2026,
+                elementID: 101,
+                teamID: 1,
+                dataChecked: true,
+                points: 12
+            )
+        )
+        await store.save(
+            makeFantasyHistoryRecord(
+                managerEntryID: 42,
+                gameweekID: 3,
+                seasonStartYear: 2026,
+                elementID: 101,
+                teamID: 2,
+                dataChecked: true,
+                points: 13
+            )
+        )
+        await store.save(
+            makeFantasyHistoryRecord(
+                managerEntryID: 42,
+                gameweekID: 3,
+                seasonStartYear: 2026,
+                elementID: 202,
+                teamID: 2,
+                dataChecked: true,
+                points: 7
+            )
+        )
+
+        let record = await store.loadRecords(managerEntryID: 42).first
+        #expect(record?.picksResponse.picks.first?.element == 101)
+        #expect(record?.bootstrap.elements.first?.team == 1)
+        #expect(record?.liveResponse.elements.first?.points(forFixtureID: 1_003) == 13)
+    }
+
+    @Test func fantasySelectedPlayerSelection_keepsHistoricalGameweek() {
+        let player = makeFantasyPlayer(
+            elementID: 101,
+            pickPosition: 4,
+            positionType: .defender,
+            displayName: "Gabriel",
+            fullName: "Gabriel Magalhães",
+            teamName: "Arsenal"
+        )
+        let selection = FantasySelectedPlayerSelection(
+            player: player,
+            gameweekID: 8,
+            seasonKey: "2025-2026"
+        )
+
+        #expect(selection.player.elementID == 101)
+        #expect(selection.gameweekID == 8)
+        #expect(selection.seasonKey == "2025-2026")
+        #expect(
+            !fantasyPlayerDetailsAreAvailable(
+                selectionSeasonKey: selection.seasonKey,
+                activeSeasonKey: "2026-2027"
+            )
+        )
+        #expect(
+            fantasyPlayerDetailsAreAvailable(
+                selectionSeasonKey: "2026-2027",
+                activeSeasonKey: "2026-2027"
+            )
+        )
+    }
+
     @Test func fantasySquadBuilder_countsBenchBoostBenchPointsInCurrentScore() async throws {
         let gameweek = FantasyGameweek(
             id: 30,
@@ -3012,7 +3499,7 @@ struct Top_ScoresTests {
         #expect(abs((squad.officialExpectedPointsNextGameweek ?? 0) - 12.2) < 0.001)
     }
 
-    @Test func fantasySquadBuilder_appliesBenchPointsForLiveZeroMinuteStarter() async throws {
+    @Test func fantasySquadBuilder_waitsToApplyBenchPointsForLiveZeroMinuteStarter() async throws {
         let gameweek = FantasyGameweek(
             id: 30,
             name: "Gameweek 30",
@@ -3146,15 +3633,15 @@ struct Top_ScoresTests {
             now: Date(timeIntervalSince1970: 1_773_961_200)
         )
 
-        #expect(squad.resolvedCurrentScore == 48)
+        #expect(squad.resolvedCurrentScore == 40)
         #expect(
-            squad.scoreCalculationRulesApplied.contains {
+            !squad.scoreCalculationRulesApplied.contains {
                 $0.contains("Bench Def") && $0.contains("Fwd A")
             }
         )
         #expect(
-            squad.effectivePlayerContributions.contains {
-                $0.elementID == 13 && $0.points == 8
+            !squad.effectivePlayerContributions.contains {
+                $0.elementID == 13
             }
         )
         #expect(
@@ -3381,6 +3868,51 @@ struct Top_ScoresTests {
         #expect(lineupPlayerMarkerLabel(name: "Virgil van Dijk", fantasyPoints: nil) == "VvD")
     }
 
+    @Test func lineupRowProgress_reservesSpaceForPlayersInNearbyLanes() async throws {
+        let awayRowCounts = [1, 2, 4, 3, 1]
+        let homeRowCounts = Array(awayRowCounts.reversed())
+        let portraitDiameter: CGFloat = 48
+
+        for screenWidth: CGFloat in [375, 393] {
+            let pitchWidth = screenWidth - 32
+            let halfHeight = (pitchWidth * 11 / 6) / 2
+            let topInset = min(40, halfHeight * 0.11)
+            let bottomInset = min(72, halfHeight * 0.22)
+            let availableHeight = halfHeight - topInset - bottomInset
+            let awayProgress = awayRowCounts.indices.map {
+                lineupRowProgress(
+                    rowCounts: awayRowCounts,
+                    index: $0,
+                    availableHeight: availableHeight,
+                    portraitDiameter: portraitDiameter
+                )
+            }
+            let awayGaps = zip(awayProgress, awayProgress.dropFirst()).map {
+                ($1 - $0) * availableHeight
+            }
+
+            #expect(awayProgress.first == 0)
+            #expect(awayProgress.last == 1)
+            #expect(awayGaps.last! >= portraitDiameter + 14)
+            #expect(awayGaps.last! > awayGaps.first!)
+
+            let homeProgress = homeRowCounts.indices.map {
+                lineupRowProgress(
+                    rowCounts: homeRowCounts,
+                    index: $0,
+                    availableHeight: availableHeight,
+                    portraitDiameter: portraitDiameter
+                )
+            }
+            let homeGaps = zip(homeProgress, homeProgress.dropFirst()).map {
+                ($1 - $0) * availableHeight
+            }
+
+            #expect(homeGaps.first! >= portraitDiameter + 14)
+            #expect(homeGaps.first! > homeGaps.last!)
+        }
+    }
+
     @Test func shouldShowFantasySubstituteWarning_treatsZeroPointFantasyPlayersAsTracked() async throws {
         #expect(shouldShowFantasySubstituteWarning(fantasyPoints: nil) == false)
         #expect(shouldShowFantasySubstituteWarning(fantasyPoints: 0) == true)
@@ -3406,7 +3938,7 @@ struct Top_ScoresTests {
         #expect(!player.hasFinishedScoringForGameweek)
     }
 
-    @Test func fantasyDisplayPlayerShouldAutoSub_onlyForLiveOrClosedZeroMinuteCases() async throws {
+    @Test func fantasyDisplayPlayerShouldAutoSub_waitsUntilZeroMinuteFixtureIsClosed() async throws {
         let liveZeroMinutePlayer = makeFantasyPlayer(
             elementID: 1,
             pickPosition: 10,
@@ -3431,9 +3963,36 @@ struct Top_ScoresTests {
             hasActiveFixtureThisGameweek: false,
             minutesPlayed: 0
         )
+        let closedZeroMinutePlayer = makeFantasyPlayer(
+            elementID: 3,
+            pickPosition: 9,
+            positionType: .forward,
+            displayName: "Closed Fwd",
+            fullName: "Closed Forward",
+            teamName: "Liverpool",
+            hasAnyFixtureThisGameweek: true,
+            hasStartedFixtureThisGameweek: true,
+            hasUpcomingFixtureThisGameweek: false,
+            hasActiveFixtureThisGameweek: false,
+            minutesPlayed: 0
+        )
+        let unavailableUpcomingPlayer = makeFantasyPlayer(
+            elementID: 4,
+            pickPosition: 8,
+            positionType: .forward,
+            displayName: "Unavailable Fwd",
+            fullName: "Unavailable Forward",
+            teamName: "Liverpool",
+            hasAnyFixtureThisGameweek: true,
+            hasUpcomingFixtureThisGameweek: true,
+            minutesPlayed: 0,
+            isDefinitelyUnavailable: true
+        )
 
-        #expect(liveZeroMinutePlayer.shouldAutoSubAsNonParticipant)
+        #expect(!liveZeroMinutePlayer.shouldAutoSubAsNonParticipant)
         #expect(!upcomingZeroMinutePlayer.shouldAutoSubAsNonParticipant)
+        #expect(closedZeroMinutePlayer.shouldAutoSubAsNonParticipant)
+        #expect(!unavailableUpcomingPlayer.shouldAutoSubAsNonParticipant)
     }
 
     @Test func fantasyDisplayPlayerGameweekScoreState_distinguishesCompletedAndBlankGameweeks() async throws {
@@ -4182,6 +4741,9 @@ struct Top_ScoresTests {
         displayPoints: Int = 0,
         multiplier: Int = 1,
         isCaptain: Bool = false,
+        isViceCaptain: Bool = false,
+        isDefinitelyUnavailable: Bool = false,
+        expectedPointsThisGameweek: Double? = nil,
         officialExpectedPointsNextGameweek: Double? = nil
     ) -> FantasyDisplayPlayer {
         FantasyDisplayPlayer(
@@ -4205,10 +4767,10 @@ struct Top_ScoresTests {
             displayPoints: displayPoints,
             multiplier: multiplier,
             isCaptain: isCaptain,
-            isViceCaptain: false,
+            isViceCaptain: isViceCaptain,
             isPlayingNow: false,
             isUnavailable: false,
-            isDefinitelyUnavailable: false,
+            isDefinitelyUnavailable: isDefinitelyUnavailable,
             hasAnyFixtureThisGameweek: hasAnyFixtureThisGameweek,
             hasStartedFixtureThisGameweek: hasStartedFixtureThisGameweek,
             hasUpcomingFixtureThisGameweek: hasUpcomingFixtureThisGameweek,
@@ -4219,7 +4781,7 @@ struct Top_ScoresTests {
             upcomingOpponentDisplay: nil,
             fixtureDifficulty: nil,
             nextFiveFixtureDifficulties: [],
-            expectedPointsThisGameweek: nil,
+            expectedPointsThisGameweek: expectedPointsThisGameweek,
             officialExpectedPointsNextGameweek: officialExpectedPointsNextGameweek,
             goalsScored: 0,
             assists: 0,
@@ -4308,6 +4870,121 @@ struct Top_ScoresTests {
             difficulty: 3,
             expectedPointsNextGameweek: expectedPointsNextGameweek,
             isBlank: false
+        )
+    }
+
+    private func makeFantasyHistoryRecord(
+        managerEntryID: Int,
+        gameweekID: Int,
+        seasonStartYear: Int,
+        elementID: Int,
+        teamID: Int,
+        dataChecked: Bool,
+        points: Int?
+    ) -> FantasyMatchHistoryRecord {
+        let day = min(gameweekID + 1, 28)
+        let deadline = String(
+            format: "%04d-08-%02dT11:00:00Z",
+            seasonStartYear,
+            day
+        )
+        let kickoff = String(
+            format: "%04d-08-%02dT15:00:00Z",
+            seasonStartYear,
+            day
+        )
+        let gameweek = FantasyGameweek(
+            id: gameweekID,
+            name: "Gameweek \(gameweekID)",
+            isCurrent: !dataChecked,
+            isNext: false,
+            finished: dataChecked,
+            dataChecked: dataChecked,
+            averageEntryScore: nil,
+            deadlineTime: deadline
+        )
+        let fixtureID = 1_000 + gameweekID
+        let fixture = FantasyFixture(
+            id: fixtureID,
+            event: gameweekID,
+            teamH: teamID,
+            teamA: teamID == 1 ? 2 : 1,
+            kickoffTime: kickoff,
+            started: points != nil,
+            finished: dataChecked,
+            finishedProvisional: false
+        )
+        let liveElements: [FantasyLiveElement]
+        if let points {
+            liveElements = [
+                FantasyLiveElement(
+                    id: elementID,
+                    stats: FantasyLiveStats(
+                        totalPoints: points,
+                        minutes: 90,
+                        goalsScored: 0,
+                        assists: 0,
+                        yellowCards: 0,
+                        redCards: 0
+                    ),
+                    explain: [
+                        FantasyLiveFixtureExplanation(
+                            fixture: fixtureID,
+                            stats: [
+                                FantasyLiveFixtureStat(
+                                    points: points,
+                                    pointsModification: nil
+                                )
+                            ]
+                        )
+                    ]
+                )
+            ]
+        } else {
+            liveElements = []
+        }
+        let picksResponse = FantasyPicksResponse(
+            picks: [makeFantasyPick(element: elementID, position: 1, elementType: 3)],
+            entryHistory: FantasyEntryHistory(
+                event: gameweekID,
+                points: points ?? 0,
+                rank: nil,
+                overallRank: nil,
+                eventTransfersCost: nil,
+                pointsOnBench: nil
+            )
+        )
+        let bootstrap = FantasyBootstrapLookup(
+            updatedAt: deadline,
+            elements: [
+                makeFantasyBootstrapElement(
+                    id: elementID,
+                    team: teamID,
+                    elementType: 3,
+                    webName: "Player \(elementID)"
+                )
+            ],
+            teams: [
+                FantasyBootstrapTeam(id: 1, name: "Arsenal", shortName: "ARS"),
+                FantasyBootstrapTeam(id: 2, name: "Chelsea", shortName: "CHE")
+            ],
+            elementTypes: [
+                FantasyBootstrapElementType(
+                    id: 3,
+                    singularName: "Midfielder",
+                    singularNameShort: "MID"
+                )
+            ],
+            events: [gameweek]
+        )
+
+        return FantasyMatchHistoryRecord(
+            managerEntryID: managerEntryID,
+            gameweek: gameweek,
+            picksResponse: picksResponse,
+            liveResponse: FantasyEventLiveResponse(elements: liveElements),
+            fixtures: [fixture],
+            bootstrap: bootstrap
         )
     }
 

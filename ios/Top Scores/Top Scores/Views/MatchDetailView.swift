@@ -19,6 +19,7 @@ struct MatchDetailView: View {
     @State private var refreshedMatch: Match?
     @State private var detailedMatch: Match?
     @State private var detailsRefreshTask: Task<Void, Never>?
+    @State private var fantasyHistoryTask: Task<Void, Never>?
     @State private var detailsErrorMessage: String?
     @State private var socialItems: [MatchSocialItem] = []
     @State private var pendingEventsQuickRetry = false
@@ -121,29 +122,27 @@ struct MatchDetailView: View {
     }
 
     private var shouldLoadFantasySquad: Bool {
-        preferences.showsFantasyDataInFixtures &&
-        isEligibleFantasyFixture &&
+        activeMatch.league.trimmingCharacters(in: .whitespacesAndNewlines)
+            .localizedCaseInsensitiveCompare("Premier League") == .orderedSame &&
         !fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    private var fantasySquadSections: [FantasyMatchTeamSquadSection] {
-        guard preferences.showFantasyExpectedPoints,
-              isEligibleFantasyFixture,
-              let squad = fantasyViewModel.data
-        else {
-            return []
-        }
+    private var fantasyMatchContext: FantasyMatchFixtureContext? {
+        fantasyViewModel.matchFixtureContext(
+            for: activeMatch,
+            managerEntryID: fantasyManagerEntryID
+        )
+    }
 
+    private func fantasySquadSections(
+        in squad: FantasySquadDisplayData
+    ) -> [FantasyMatchTeamSquadSection] {
         return [
             squad.matchSquadSection(forTeamName: activeMatch.homeTeam),
             squad.matchSquadSection(forTeamName: activeMatch.awayTeam)
         ]
         .compactMap { $0 }
         .filter(\.hasPlayers)
-    }
-
-    private var shouldShowFantasySquadFallback: Bool {
-        !shouldShowLineupPitch && !fantasySquadSections.isEmpty
     }
 
     private var matchRowPreferences: MatchRowPreferences {
@@ -246,6 +245,22 @@ struct MatchDetailView: View {
                 )
                 .padding(.horizontal)
 
+                if let fantasyMatchContext {
+                    let sections = fantasySquadSections(in: fantasyMatchContext.squad)
+                    if !sections.isEmpty {
+                        FantasyMatchPlayersSection(
+                            context: fantasyMatchContext,
+                            sections: sections,
+                            pointsPhase: fantasyMatchPointsPhase(
+                                isMatchInProgress: activeMatch.isInProgress,
+                                isMatchFinished: activeMatch.isFinished,
+                                squadScorePhase: fantasyMatchContext.squad.scorePhase
+                            )
+                        )
+                        .padding(.horizontal)
+                    }
+                }
+
                 MatchEventsCard(match: activeMatch)
                     .padding(.horizontal)
 
@@ -262,11 +277,6 @@ struct MatchDetailView: View {
                     Text(detailsErrorMessage)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-                        .padding(.horizontal)
-                }
-
-                if shouldShowFantasySquadFallback {
-                    FantasyMatchSquadSectionsView(sections: fantasySquadSections)
                         .padding(.horizontal)
                 }
 
@@ -326,6 +336,8 @@ struct MatchDetailView: View {
         .onDisappear {
             detailsRefreshTask?.cancel()
             detailsRefreshTask = nil
+            fantasyHistoryTask?.cancel()
+            fantasyHistoryTask = nil
         }
         .onChange(of: preferences.apiBaseURL) { _, _ in
             startDetailsRefresh()
@@ -683,20 +695,37 @@ struct MatchDetailView: View {
     }
 
     private func ensureFantasySquadLoadedIfNeeded() {
-        guard shouldLoadFantasySquad,
-              fantasyViewModel.data == nil,
-              !fantasyViewModel.isLoading,
-              !fantasyViewModel.isRefreshing
-        else {
+        guard shouldLoadFantasySquad else {
             return
         }
 
-        Task {
-            await fantasyViewModel.refresh(
-                managerEntryID: fantasyManagerEntryID,
-                apiBaseURL: preferences.apiBaseURL,
-                rivalManagers: [],
-                trackedLeagues: []
+        fantasyHistoryTask?.cancel()
+        let matchToPrepare = activeMatch
+        fantasyHistoryTask = Task {
+            await fantasyViewModel.prepareMatchHistory(
+                for: matchToPrepare,
+                managerEntryID: fantasyManagerEntryID
+            )
+
+            let requestedEntryID = Int(
+                fantasyManagerEntryID.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+            if (fantasyViewModel.data == nil ||
+                fantasyViewModel.authenticatedEntryID != requestedEntryID),
+               !fantasyViewModel.isLoading,
+               !fantasyViewModel.isRefreshing {
+                await fantasyViewModel.refresh(
+                    managerEntryID: fantasyManagerEntryID,
+                    apiBaseURL: preferences.apiBaseURL,
+                    rivalManagers: [],
+                    trackedLeagues: []
+                )
+            }
+
+            guard !Task.isCancelled else { return }
+            await fantasyViewModel.prepareMatchHistory(
+                for: matchToPrepare,
+                managerEntryID: fantasyManagerEntryID
             )
         }
     }
@@ -2165,170 +2194,431 @@ private struct MatchEventEntry: Identifiable {
     }
 }
 
-private struct FantasyMatchSquadSectionsView: View {
-    let sections: [FantasyMatchTeamSquadSection]
+enum FantasyMatchPointsPhase: Equatable, Sendable {
+    case expected
+    case provisional
+    case final
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center) {
-                Text("FPL involvement")
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                Spacer()
-                FantasyMatchParticipationBadge()
-            }
+    var columnTitle: String {
+        "Points"
+    }
 
-            ForEach(sections) { section in
-                FantasyMatchSquadTeamSectionView(section: section)
-            }
+    var statusTitle: String {
+        switch self {
+        case .expected:
+            return "Expected"
+        case .provisional:
+            return "Provisional"
+        case .final:
+            return "Final"
         }
     }
 }
 
-private struct FantasyMatchSquadTeamSectionView: View {
-    let section: FantasyMatchTeamSquadSection
+func fantasyMatchPointsPhase(
+    isMatchInProgress: Bool,
+    isMatchFinished: Bool,
+    squadScorePhase: FantasySquadDisplayData.ScorePhase
+) -> FantasyMatchPointsPhase {
+    if isMatchFinished, squadScorePhase == .final {
+        return .final
+    }
+    if isMatchInProgress || isMatchFinished {
+        return .provisional
+    }
+    return .expected
+}
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(section.teamName)
-                .font(.subheadline)
-                .fontWeight(.semibold)
-                .foregroundStyle(.primary)
+func fantasyMatchPointsValue(
+    phase: FantasyMatchPointsPhase,
+    expectedPoints: Double?,
+    points: Int
+) -> Double? {
+    switch phase {
+    case .expected:
+        return expectedPoints
+    case .provisional, .final:
+        return Double(points)
+    }
+}
 
-            if !section.starters.isEmpty {
-                FantasyMatchSquadBucketView(
-                    title: "Starting XI",
-                    tint: Color(red: 0.95, green: 0.20, blue: 0.66),
-                    players: section.starters
-                )
-            }
+func fantasyMatchPointsTotal(_ values: [Double?]) -> Double? {
+    guard !values.isEmpty else { return nil }
+    let availableValues = values.compactMap { $0 }
+    guard availableValues.count == values.count else { return nil }
+    return availableValues.reduce(0, +)
+}
 
-            if !section.bench.isEmpty {
-                FantasyMatchSquadBucketView(
-                    title: "Bench",
-                    tint: .secondary,
-                    players: section.bench
-                )
+func fantasyMatchShortPlayerName(
+    displayName: String,
+    fullName: String
+) -> String {
+    let trimmedDisplayName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmedFullName = fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+    let baseName = trimmedDisplayName.isEmpty ? trimmedFullName : trimmedDisplayName
+    let parts = baseName.split(whereSeparator: \.isWhitespace).map(String.init)
+    guard let firstCharacter = parts.first?.first else {
+        return baseName
+    }
+    if parts.count == 1 {
+        let fullNameParts = trimmedFullName.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard fullNameParts.count > 1,
+              fullNameParts[0].localizedCaseInsensitiveCompare(baseName) != .orderedSame,
+              let givenNameInitial = fullNameParts[0].first else {
+            return baseName
+        }
+        return "\(givenNameInitial). \(baseName)"
+    }
+
+    let surnameParticles: Set<String> = [
+        "da", "de", "del", "den", "der", "di", "dos", "du", "la", "le", "van", "von"
+    ]
+    if surnameParticles.contains(parts[0].lowercased()) {
+        let fullNameParts = trimmedFullName.split(whereSeparator: \.isWhitespace)
+        if let givenNameInitial = fullNameParts.first?.first {
+            return "\(givenNameInitial). \(baseName)"
+        }
+    }
+
+    return "\(firstCharacter). \(parts.dropFirst().joined(separator: " "))"
+}
+
+func fantasyMatchPlayerPrecedes(
+    _ lhs: FantasyDisplayPlayer,
+    points lhsPoints: Double?,
+    _ rhs: FantasyDisplayPlayer,
+    points rhsPoints: Double?
+) -> Bool {
+    switch (lhsPoints, rhsPoints) {
+    case let (lhsPoints?, rhsPoints?) where lhsPoints != rhsPoints:
+        return lhsPoints > rhsPoints
+    case (_?, nil):
+        return true
+    case (nil, _?):
+        return false
+    default:
+        if lhs.pickPosition != rhs.pickPosition {
+            return lhs.pickPosition < rhs.pickPosition
+        }
+        return lhs.elementID < rhs.elementID
+    }
+}
+
+private extension FantasyMatchPointsPhase {
+    var tint: Color {
+        switch self {
+        case .expected:
+            return Color(red: 0.67, green: 0.23, blue: 0.91)
+        case .provisional:
+            return Color(red: 0.91, green: 0.48, blue: 0.12)
+        case .final:
+            return Color(red: 0.16, green: 0.56, blue: 0.98)
+        }
+    }
+
+    var accessibilityPointsDescription: String {
+        switch self {
+        case .expected:
+            return "expected points"
+        case .provisional:
+            return "provisional points"
+        case .final:
+            return "final points"
+        }
+    }
+}
+
+private struct FantasyMatchPlayersSection: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @EnvironmentObject private var preferences: PreferencesStore
+    @EnvironmentObject private var fantasyViewModel: FantasyViewModel
+    @State private var selectedPlayer: FantasySelectedPlayerSelection?
+
+    let context: FantasyMatchFixtureContext
+    let sections: [FantasyMatchTeamSquadSection]
+    let pointsPhase: FantasyMatchPointsPhase
+
+    private var entries: [FantasyMatchPlayerTableEntry] {
+        let entries = sections.flatMap { section in
+            (section.starters + section.bench).map {
+                FantasyMatchPlayerTableEntry(teamName: section.teamName, player: $0)
             }
         }
+        return entries.sorted {
+            fantasyMatchPlayerPrecedes(
+                $0.player,
+                points: points(for: $0.player),
+                $1.player,
+                points: points(for: $1.player)
+            )
+        }
+    }
+
+    private var total: Double? {
+        fantasyMatchPointsTotal(entries.map { points(for: $0.player) })
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                FantasyMatchParticipationBadge(
+                    diameter: 26,
+                    iconSize: 13,
+                    iconScale: 1.08,
+                    shadowOpacity: 0.14
+                )
+
+                Text("FPL")
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+
+                Text(context.squad.gameweekTitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                Text(pointsPhase.statusTitle)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(pointsPhase.tint.opacity(0.13), in: Capsule(style: .continuous))
+            }
+
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    Color.clear
+                        .frame(width: dynamicTypeSize.isAccessibilitySize ? 28 : 34)
+                        .accessibilityHidden(true)
+                    Text("Player")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Text(pointsPhase.columnTitle)
+                        .frame(minWidth: 58, alignment: .trailing)
+                }
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+                .padding(.bottom, 6)
+
+                Divider()
+
+                ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                    FantasyMatchPlayerTableRow(
+                        context: context,
+                        entry: entry,
+                        pointsPhase: pointsPhase,
+                        onSelect: {
+                            selectedPlayer = FantasySelectedPlayerSelection(
+                                player: entry.player,
+                                gameweekID: context.squad.gameweekID,
+                                seasonKey: context.seasonKey
+                            )
+                        }
+                    )
+
+                    if index < entries.count - 1 {
+                        Divider()
+                    }
+                }
+            }
+
+            Divider()
+
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Your total for this game")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                    Text(pointsPhase.accessibilityPointsDescription.capitalized)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 8)
+
+                Text(totalText)
+                    .font(.title3.monospacedDigit().weight(.bold))
+                    .foregroundStyle(total == nil ? Color.secondary : Color.primary)
+            }
+            .accessibilityElement(children: .combine)
+        }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
+        .padding(16)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .fill(Color(.secondarySystemBackground))
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.primary.opacity(0.07), lineWidth: 1)
+        }
+        .sheet(item: $selectedPlayer) { selection in
+            FantasyPlayerDetailsSheet(
+                selection: selection,
+                apiBaseURL: preferences.apiBaseURL,
+                fantasyViewModel: fantasyViewModel
+            )
+            .presentationDragIndicator(.visible)
+        }
+    }
+
+    private var totalText: String {
+        guard let total else { return "–" }
+        switch pointsPhase {
+        case .expected:
+            return String(format: "%.1f xP", total)
+        case .provisional, .final:
+            let points = Int(total)
+            return "\(points) pt\(points == 1 ? "" : "s")"
+        }
+    }
+
+    private func points(for player: FantasyDisplayPlayer) -> Double? {
+        fantasyMatchPointsValue(
+            phase: pointsPhase,
+            expectedPoints: context.expectedPoints(for: player),
+            points: context.points(for: player)
         )
     }
 }
 
-private struct FantasyMatchSquadBucketView: View {
-    let title: String
-    let tint: Color
-    let players: [FantasyDisplayPlayer]
+private struct FantasyMatchPlayerTableEntry: Identifiable {
+    let teamName: String
+    let player: FantasyDisplayPlayer
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(title)
-                .font(.caption)
-                .fontWeight(.semibold)
-                .foregroundStyle(tint)
-
-            VStack(alignment: .leading, spacing: 6) {
-                ForEach(players) { player in
-                    FantasyMatchSquadPlayerRow(
-                        player: player
-                    )
-                }
-            }
-        }
-    }
-
-    private func playerDisplayName(_ player: FantasyDisplayPlayer) -> String {
-        let preferred = player.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !preferred.isEmpty {
-            return preferred
-        }
-        return player.displayName
+    var id: Int {
+        player.elementID
     }
 }
 
-private struct FantasyMatchSquadPlayerRow: View {
-    let player: FantasyDisplayPlayer
+private struct FantasyMatchPlayerTableRow: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    let context: FantasyMatchFixtureContext
+    let entry: FantasyMatchPlayerTableEntry
+    let pointsPhase: FantasyMatchPointsPhase
+    let onSelect: () -> Void
 
     private var name: String {
-        let preferred = player.fullName.trimmingCharacters(in: .whitespacesAndNewlines)
-        return preferred.isEmpty ? player.displayName : preferred
+        fantasyMatchShortPlayerName(
+            displayName: entry.player.displayName,
+            fullName: entry.player.fullName
+        )
     }
 
-    private var expectedPoints: Double? {
-        player.expectedPointsThisGameweek
+    private var points: Double? {
+        fantasyMatchPointsValue(
+            phase: pointsPhase,
+            expectedPoints: context.expectedPoints(for: entry.player),
+            points: context.points(for: entry.player)
+        )
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 8) {
-            FantasyPlayerProfileImage(url: player.profileImageURL, size: 28)
-            Text(name)
-                .font(.subheadline)
-                .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            Spacer(minLength: 8)
-
-            Text(expectedPointsLabel)
-                .font(.caption.monospacedDigit().weight(.semibold))
-                .foregroundStyle(expectedPointsForegroundColor)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(
-                    Capsule(style: .continuous)
-                        .fill(expectedPointsBackgroundColor)
+        Button(action: onSelect) {
+            HStack(spacing: 10) {
+                FantasyMatchTeamLogo(
+                    teamName: entry.teamName,
+                    size: dynamicTypeSize.isAccessibilitySize ? 28 : 34
                 )
-                .overlay(
-                    Capsule(style: .continuous)
-                        .stroke(expectedPoints == nil ? Color.black.opacity(0.08) : .clear, lineWidth: 1)
-                )
+                .frame(width: dynamicTypeSize.isAccessibilitySize ? 28 : 34)
+
+                playerImage
+                playerName
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                pointsPill
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(name), \(expectedPointsAccessibilityLabel)")
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint("View player details")
     }
 
-    private var expectedPointsLabel: String {
-        if let expectedPoints {
-            return String(format: "xP %.1f", expectedPoints)
-        }
-        return "xP -"
+    private var playerImage: some View {
+        FantasyPlayerProfileImage(
+            url: entry.player.profileImageURL,
+            size: 34,
+            height: 34
+        )
     }
 
-    private var expectedPointsAccessibilityLabel: String {
-        if let expectedPoints {
-            return String(format: "expected %.1f points", expectedPoints)
-        }
-        return "expected points unavailable"
+    private var playerName: some View {
+        Text(name)
+            .font(.subheadline)
+            .foregroundStyle(.primary)
+            .lineLimit(2)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
-    private var expectedPointsForegroundColor: Color {
-        guard let expectedPoints else {
-            return Color(red: 0.36, green: 0.36, blue: 0.39)
-        }
-        return expectedPoints >= 3 ? Color.black.opacity(0.82) : .white
+    private var pointsPill: some View {
+        Text(pointsText)
+            .font(.subheadline.monospacedDigit().weight(.semibold))
+            .foregroundStyle(points == nil ? Color.secondary : Color.primary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .frame(minWidth: 58)
+            .background(
+                pointsPhase.tint.opacity(points == nil ? 0.06 : 0.13),
+                in: Capsule(style: .continuous)
+            )
     }
 
-    private var expectedPointsBackgroundColor: Color {
-        guard let expectedPoints else {
-            return Color(red: 0.90, green: 0.90, blue: 0.92)
+    private var pointsText: String {
+        guard let points else { return "–" }
+        switch pointsPhase {
+        case .expected:
+            return String(format: "%.1f", points)
+        case .provisional, .final:
+            return "\(Int(points))"
         }
+    }
 
-        switch expectedPoints {
-        case ..<1:
-            return Color(red: 0.78, green: 0.16, blue: 0.14)
-        case 1...2:
-            return Color(red: 0.91, green: 0.37, blue: 0.15)
-        case 3...4:
-            return Color(red: 0.95, green: 0.68, blue: 0.16)
-        case 5...7:
-            return Color(red: 0.29, green: 0.71, blue: 0.27)
-        default:
-            return Color.green
+    private var accessibilityLabel: String {
+        guard let points else {
+            return "\(entry.teamName), \(name), \(pointsPhase.accessibilityPointsDescription) unavailable"
         }
+        switch pointsPhase {
+        case .expected:
+            return String(
+                format: "%@, %@, %.1f expected points",
+                entry.teamName,
+                name,
+                points
+            )
+        case .provisional, .final:
+            return "\(entry.teamName), \(name), \(Int(points)) \(pointsPhase.accessibilityPointsDescription)"
+        }
+    }
+}
+
+private struct FantasyMatchTeamLogo: View {
+    let teamName: String
+    let size: CGFloat
+
+    var body: some View {
+        let resolvedTeamName = FantasyTeamShortNameMappingsStore.shared.resolveTeamName(for: teamName)
+        Group {
+            if let logo = LogoResolver.shared.image(for: resolvedTeamName)
+                ?? LogoResolver.shared.image(for: teamName) {
+                Image(uiImage: logo)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Image(systemName: "shield")
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(.secondary)
+                    .padding(size * 0.16)
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
     }
 }
 
@@ -2580,6 +2870,7 @@ private struct MatchLineupPitchSection: View {
 
 private struct MatchLineupTeamPanelsView: View {
     @EnvironmentObject private var preferences: PreferencesStore
+    @ObservedObject private var teamColorCatalog = TeamColorCatalog.shared
     @State private var selectedPlayer: MatchLineupPlayer?
 
     let homeLineup: MatchTeamLineup
@@ -2599,6 +2890,32 @@ private struct MatchLineupTeamPanelsView: View {
 
     private var homeTeamName: String { homeLineup.team ?? fallbackHomeTeamName }
     private var awayTeamName: String { awayLineup.team ?? fallbackAwayTeamName }
+
+    private var homeTeamColors: TeamLineupNumberColors {
+        teamColorCatalog.lineupColors(
+            for: homeTeamName,
+            opponentTeamName: awayTeamName,
+            isAway: false,
+            fallbackColors: TeamLineupNumberColors(
+                background: .yellow,
+                foreground: .black,
+                outline: nil
+            )
+        )
+    }
+
+    private var awayTeamColors: TeamLineupNumberColors {
+        teamColorCatalog.lineupColors(
+            for: awayTeamName,
+            opponentTeamName: homeTeamName,
+            isAway: true,
+            fallbackColors: TeamLineupNumberColors(
+                background: .red,
+                foreground: .black,
+                outline: nil
+            )
+        )
+    }
 
     private var homeLookup: MatchLineupMarkerLookup {
         MatchLineupMarkerLookup(
@@ -2651,7 +2968,7 @@ private struct MatchLineupTeamPanelsView: View {
                                 lineup: homeLineup,
                                 side: .home,
                                 lookup: homeLookup,
-                                accentColor: teamAccentColor(teamID: homeTeamID, side: .home),
+                                teamColors: homeTeamColors,
                                 onSelectPlayer: { selectedPlayer = $0 }
                             )
 
@@ -2659,7 +2976,7 @@ private struct MatchLineupTeamPanelsView: View {
                                 lineup: awayLineup,
                                 side: .away,
                                 lookup: awayLookup,
-                                accentColor: teamAccentColor(teamID: awayTeamID, side: .away),
+                                teamColors: awayTeamColors,
                                 onSelectPlayer: { selectedPlayer = $0 }
                             )
                         }
@@ -2686,7 +3003,7 @@ private struct MatchLineupTeamPanelsView: View {
                         lineup: homeLineup,
                         teamName: homeTeamName,
                         lookup: homeLookup,
-                        accentColor: teamAccentColor(teamID: homeTeamID, side: .home)
+                        teamColors: homeTeamColors
                     )
                 }
 
@@ -2695,7 +3012,7 @@ private struct MatchLineupTeamPanelsView: View {
                         lineup: awayLineup,
                         teamName: awayTeamName,
                         lookup: awayLookup,
-                        accentColor: teamAccentColor(teamID: awayTeamID, side: .away)
+                        teamColors: awayTeamColors
                     )
                 }
             }
@@ -2714,23 +3031,24 @@ private struct MatchLineupTeamPanelsView: View {
         }
     }
 
-    private func teamAccentColor(teamID: String?, side: MatchLineupDisplaySide) -> Color {
-        return side == .home ? Color.yellow : Color.red
-    }
-
     private func teamHeader(
         lineup: MatchTeamLineup,
         teamName: String,
         teamID: String?,
         side: MatchLineupDisplaySide
     ) -> some View {
-        let accentColor = teamAccentColor(teamID: teamID, side: side)
+        let accentColor = side == .home ? homeTeamColors.background : awayTeamColors.background
         return HStack(spacing: 10) {
             Group {
                 if let logo = LogoResolver.shared.image(for: teamName, teamId: teamID) {
                     Image(uiImage: logo).resizable().scaledToFit()
                 } else {
-                    Image(systemName: "shield.fill").foregroundStyle(accentColor)
+                    Image(systemName: "shield.fill")
+                        .foregroundStyle(accentColor)
+                        .overlay {
+                            Image(systemName: "shield")
+                                .foregroundStyle(Color.primary.opacity(0.72))
+                        }
                 }
             }
             .frame(width: 28, height: 28)
@@ -2758,7 +3076,7 @@ private struct MatchLineupTeamPanelsView: View {
         lineup: MatchTeamLineup,
         teamName: String,
         lookup: MatchLineupMarkerLookup,
-        accentColor: Color
+        teamColors: TeamLineupNumberColors
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("\(teamName.uppercased()) SUBSTITUTES USED")
@@ -2785,7 +3103,8 @@ private struct MatchLineupTeamPanelsView: View {
                             MatchLineupPlayerPortraitView(
                                 player: playerOn,
                                 diameter: 40,
-                                borderColor: accentColor
+                                borderColor: teamColors.background,
+                                borderOutlineColor: teamColors.foreground
                             )
 
                             Text(condensedLineupPlayerName(playerOn.name))
@@ -2819,7 +3138,7 @@ private struct MatchLineupCombinedFormationHalf: View {
     let lineup: MatchTeamLineup
     let side: MatchLineupDisplaySide
     let lookup: MatchLineupMarkerLookup
-    let accentColor: Color
+    let teamColors: TeamLineupNumberColors
     let onSelectPlayer: (MatchLineupPlayer) -> Void
 
     private var rows: [[MatchLineupPlayer]] {
@@ -2859,7 +3178,7 @@ private struct MatchLineupCombinedFormationHalf: View {
     }
 
     private var portraitDiameter: CGFloat {
-        rows.count >= 5 ? 50 : 52
+        rows.count >= 5 ? 48 : 52
     }
 
     var body: some View {
@@ -2876,7 +3195,7 @@ private struct MatchLineupCombinedFormationHalf: View {
                             MatchLineupPlayerTacticalMarker(
                                 player: player,
                                 markers: lookup.markers(for: player),
-                                accentColor: accentColor,
+                                teamColors: teamColors,
                                 portraitDiameter: portraitDiameter,
                                 nameMaxWidth: nameMaxWidth,
                                 onSelectPlayer: onSelectPlayer
@@ -2885,11 +3204,13 @@ private struct MatchLineupCombinedFormationHalf: View {
                         }
                     }
                     .frame(width: proxy.size.width)
+                    // Names extend below their marker frame, so upper rows must
+                    // win the paint order if a very narrow layout still overlaps.
+                    .zIndex(Double(rows.count - index))
                     .position(
                         x: proxy.size.width / 2,
                         y: rowPosition(
                             index: index,
-                            count: rows.count,
                             height: proxy.size.height
                         )
                     )
@@ -2920,21 +3241,17 @@ private struct MatchLineupCombinedFormationHalf: View {
         )
     }
 
-    private func rowPosition(index: Int, count: Int, height: CGFloat) -> CGFloat {
+    private func rowPosition(index: Int, height: CGFloat) -> CGFloat {
         let topInset = min(40, height * 0.11)
         let bottomInset = side == .away ? min(72, height * 0.22) : topInset
-        guard count > 1 else { return height / 2 }
+        guard rows.count > 1 else { return height / 2 }
         let availableHeight = max(0, height - topInset - bottomInset)
-        let progress: CGFloat
-        if count == 5 {
-            // Five-line formations need more space between rows that commonly
-            // share lanes, while staggered rows can sit closer together.
-            let homeProgress: [CGFloat] = [0, 0.18, 0.48, 0.72, 1]
-            let awayProgress: [CGFloat] = [0, 0.28, 0.52, 0.82, 1]
-            progress = (side == .home ? homeProgress : awayProgress)[index]
-        } else {
-            progress = CGFloat(index) / CGFloat(count - 1)
-        }
+        let progress = lineupRowProgress(
+            rowCounts: rows.map(\.count),
+            index: index,
+            availableHeight: availableHeight,
+            portraitDiameter: portraitDiameter
+        )
         return topInset + (availableHeight * progress)
     }
 }
@@ -2942,7 +3259,7 @@ private struct MatchLineupCombinedFormationHalf: View {
 private struct MatchLineupPlayerTacticalMarker: View {
     let player: MatchLineupPlayer
     let markers: [MatchLineupMarker]
-    let accentColor: Color
+    let teamColors: TeamLineupNumberColors
     let portraitDiameter: CGFloat
     let nameMaxWidth: CGFloat
     let onSelectPlayer: (MatchLineupPlayer) -> Void
@@ -2956,17 +3273,23 @@ private struct MatchLineupPlayerTacticalMarker: View {
                     MatchLineupPlayerPortraitView(
                         player: player,
                         diameter: portraitDiameter,
-                        borderColor: accentColor,
+                        borderColor: teamColors.background,
+                        borderOutlineColor: teamColors.foreground,
                         borderLineWidth: 2
                     )
 
                     if let number = player.number {
                         Text("\(number)")
                             .font(.system(size: 9.5, weight: .black, design: .rounded))
-                            .foregroundStyle(.black)
+                            .foregroundStyle(teamColors.foreground)
                             .frame(width: 20, height: 20)
-                            .background(accentColor, in: Circle())
-                            .overlay(Circle().stroke(Color.black.opacity(0.30), lineWidth: 1))
+                            .background(teamColors.background, in: Circle())
+                            .overlay {
+                                Circle().stroke(
+                                    teamColors.outline ?? teamColors.foreground.opacity(0.55),
+                                    lineWidth: 1
+                                )
+                            }
                             .offset(x: -4, y: -2)
                     }
                 }
@@ -2976,7 +3299,7 @@ private struct MatchLineupPlayerTacticalMarker: View {
                     markers: markers,
                     maxWidth: nameMaxWidth
                 )
-                .offset(y: portraitDiameter + 4)
+                .offset(y: portraitDiameter)
             }
             .frame(height: portraitDiameter, alignment: .top)
             .frame(maxWidth: .infinity)
@@ -3319,6 +3642,53 @@ private enum MatchLineupRole {
     case forward
 }
 
+func lineupRowProgress(
+    rowCounts: [Int],
+    index: Int,
+    availableHeight: CGFloat,
+    portraitDiameter: CGFloat
+) -> CGFloat {
+    guard rowCounts.count > 1 else { return 0.5 }
+    guard index > 0 else { return 0 }
+    guard index < rowCounts.count - 1 else { return 1 }
+    guard availableHeight > 0 else {
+        return CGFloat(index) / CGFloat(rowCounts.count - 1)
+    }
+
+    let minimumGaps = zip(rowCounts, rowCounts.dropFirst()).map { upperCount, lowerCount in
+        let collisionRisk = lineupRowCollisionRisk(
+            upperCount: upperCount,
+            lowerCount: lowerCount
+        )
+        // The label sits immediately below the portrait and is about 14 points
+        // tall. Staggered rows can safely sit closer than aligned player lanes.
+        let staggeredGap = portraitDiameter * 0.6
+        let alignedGap = portraitDiameter + 14
+        return staggeredGap + ((alignedGap - staggeredGap) * collisionRisk)
+    }
+    let minimumTotal = minimumGaps.reduce(0, +)
+    let gaps: [CGFloat]
+    if minimumTotal <= availableHeight {
+        let extraPerGap = (availableHeight - minimumTotal) / CGFloat(minimumGaps.count)
+        gaps = minimumGaps.map { $0 + extraPerGap }
+    } else {
+        let scale = availableHeight / minimumTotal
+        gaps = minimumGaps.map { $0 * scale }
+    }
+    return gaps.prefix(index).reduce(0, +) / availableHeight
+}
+
+private func lineupRowCollisionRisk(upperCount: Int, lowerCount: Int) -> CGFloat {
+    guard upperCount > 0, lowerCount > 0 else { return 0 }
+
+    let upperCenters = (0..<upperCount).map { (CGFloat($0) + 0.5) / CGFloat(upperCount) }
+    let lowerCenters = (0..<lowerCount).map { (CGFloat($0) + 0.5) / CGFloat(lowerCount) }
+    let closestLaneDistance = upperCenters.flatMap { upperCenter in
+        lowerCenters.map { abs(upperCenter - $0) }
+    }.min() ?? 0.25
+    return max(0, 1 - (closestLaneDistance / 0.25))
+}
+
 private func lineupRole(for player: MatchLineupPlayer) -> MatchLineupRole? {
     switch player.positionShort?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() {
     case "G":
@@ -3367,6 +3737,7 @@ private struct MatchLineupPlayerPortraitView: View {
     let player: MatchLineupPlayer
     var diameter: CGFloat = MatchLineupPlayerPortraitView.size
     var borderColor: Color = Color.white.opacity(0.82)
+    var borderOutlineColor: Color?
     var borderLineWidth: CGFloat = 1.4
     var glowColor: Color = .clear
     var glowRadius: CGFloat = 0
@@ -3413,8 +3784,15 @@ private struct MatchLineupPlayerPortraitView: View {
         .frame(width: diameter, height: diameter)
         .clipShape(Circle())
         .overlay {
-            Circle()
-                .stroke(borderColor, lineWidth: borderLineWidth)
+            ZStack {
+                if let borderOutlineColor {
+                    Circle()
+                        .stroke(borderOutlineColor.opacity(0.72), lineWidth: borderLineWidth + 1.5)
+                }
+
+                Circle()
+                    .stroke(borderColor, lineWidth: borderLineWidth)
+            }
         }
         .shadow(color: glowColor, radius: glowRadius, x: 0, y: 0)
         .shadow(color: .black.opacity(0.20), radius: 4, x: 0, y: 2)

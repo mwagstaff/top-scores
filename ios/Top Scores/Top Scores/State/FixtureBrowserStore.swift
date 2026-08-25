@@ -18,6 +18,13 @@ struct FixtureBrowseCachePayload: Codable, Sendable {
     var buckets: [String: FixtureBrowseBucket]
 }
 
+struct FixtureCalendarCompetitionSummary: Equatable, Identifiable, Sendable {
+    let id: String
+    let name: String
+    let matchCount: Int
+    let weight: Double
+}
+
 private actor FixtureBrowseCacheWriter {
     static let shared = FixtureBrowseCacheWriter()
 
@@ -159,6 +166,33 @@ nonisolated enum FixtureBrowseSelectionResolver {
             return nil
         }
         return targetDateKey < selectedDateKey ? .earlier : .later
+    }
+
+    static func competitionSummaries(
+        for day: FixtureCalendarDay,
+        catalog: [CompetitionCatalogEntry],
+        selectedCompetitionIDs: Set<String>?
+    ) -> [FixtureCalendarCompetitionSummary] {
+        let catalogByID = Dictionary(
+            uniqueKeysWithValues: catalog.map { ($0.stableID, $0) }
+        )
+        return day.competitions.compactMap { competition in
+            if let selectedCompetitionIDs,
+               !selectedCompetitionIDs.contains(competition.id) {
+                return nil
+            }
+            guard let catalogEntry = catalogByID[competition.id] else { return nil }
+            return FixtureCalendarCompetitionSummary(
+                id: competition.id,
+                name: catalogEntry.name,
+                matchCount: competition.matchCount,
+                weight: catalogEntry.weight
+            )
+        }
+        .sorted { lhs, rhs in
+            if lhs.weight != rhs.weight { return lhs.weight > rhs.weight }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
     }
 
     static func adjacentDateKey(
@@ -454,6 +488,30 @@ final class FixtureBrowserStore: ObservableObject {
 
     var cachedMatchesByDate: [String: [Match]] {
         pageCache.matchesByDate
+    }
+
+    var calendarCompetitionSummariesByDate: [String: [FixtureCalendarCompetitionSummary]] {
+        guard let snapshot else { return [:] }
+
+        let shouldApplyLegacyCompetitionFilter =
+            cachePayload?.calendarSelectionApplied != true &&
+            !snapshot.fixtureViewShowsAll &&
+            !snapshot.fixtureAllMajorMatchesEnabled
+        let selectedCompetitionIDs: Set<String>? = shouldApplyLegacyCompetitionFilter
+            ? FixtureBrowseSelectionResolver.selectedCompetitionIDs(
+                selectedLeagues: snapshot.selectedLeagues,
+                competitions: competitions
+            )
+            : nil
+
+        return Dictionary(uniqueKeysWithValues: availableDays.map { day in
+            let summaries = FixtureBrowseSelectionResolver.competitionSummaries(
+                for: day,
+                catalog: competitions,
+                selectedCompetitionIDs: selectedCompetitionIDs
+            )
+            return (day.date, summaries)
+        })
     }
 
     private static let cacheFormatVersion = 1

@@ -25958,7 +25958,15 @@ function liveActivityReconcileTriggerForPreferencesSave(body = {}) {
 app.post(`${API_PREFIX}/preferences`, async (req, res) => {
   setCacheOnlyHeaders(res);
 
-  const { deviceToken, preferences, apnsToken, isDevelopmentBuild, liveActivity, fantasy } = req.body;
+  const {
+    deviceToken,
+    preferences,
+    preferencesRevision,
+    apnsToken,
+    isDevelopmentBuild,
+    liveActivity,
+    fantasy,
+  } = req.body;
   const resolvedDeviceToken = req.deviceToken || normalizeDeviceToken(deviceToken);
 
   if (!resolvedDeviceToken) {
@@ -25978,6 +25986,7 @@ app.post(`${API_PREFIX}/preferences`, async (req, res) => {
       typeof isDevelopmentBuild === "boolean" ? isDevelopmentBuild : false,
       {
         fantasy,
+        preferencesRevision,
         liveActivity:
           {
             ...(liveActivity && typeof liveActivity === "object" ? liveActivity : {}),

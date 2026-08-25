@@ -48,6 +48,13 @@ struct FantasyPlayerDetailsSheet: View {
     @State private var comparisonElementIDs: [Int] = []
     @State private var recommendationNavigationStartedAt: Date?
 
+    private var canLoadLiveDetails: Bool {
+        fantasyPlayerDetailsAreAvailable(
+            selectionSeasonKey: selection.seasonKey,
+            activeSeasonKey: fantasyViewModel.activeFantasySeasonKey
+        )
+    }
+
     var body: some View {
         NavigationStack {
             Group {
@@ -975,10 +982,17 @@ struct FantasyPlayerDetailsSheet: View {
             Text(errorMessage ?? "Unable to load player details right now.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)
-            Button("Retry") {
-                Task { await loadDetails() }
+            if canLoadLiveDetails {
+                Button("Retry") {
+                    Task { await loadDetails() }
+                }
+                .buttonStyle(.bordered)
+            } else {
+                Button("Close") {
+                    dismiss()
+                }
+                .buttonStyle(.bordered)
             }
-            .buttonStyle(.bordered)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(16)
@@ -2306,6 +2320,13 @@ struct FantasyPlayerDetailsSheet: View {
         recommendationDetailErrorsByElementID = [:]
         comparisonElementIDs = []
         recommendationRoute = nil
+
+        guard canLoadLiveDetails else {
+            details = nil
+            errorMessage = "Detailed FPL player data is unavailable for previous seasons."
+            isLoading = false
+            return
+        }
 
         do {
             let loaded = try await fantasyViewModel.loadPlayerDetails(

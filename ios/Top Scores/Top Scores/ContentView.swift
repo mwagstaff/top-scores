@@ -184,6 +184,7 @@ private struct ContentLifecycleCoordinator: View {
                 }
             }
             .onReceive(fantasyScoreRefreshTimer) { date in
+                updateFantasyTabPresentation(now: date)
                 guard scenePhase == .active,
                       selectedTab != 2,
                       fantasyViewModel.data != nil,
@@ -247,18 +248,26 @@ private struct ContentLifecycleCoordinator: View {
         return decoded
     }
 
-    private func updateFantasyTabPresentation() {
+    private func updateFantasyTabPresentation(now: Date = Date()) {
         let nextBadge: String?
         let nextShouldPulse: Bool
 
         if fantasyViewModel.isSeasonActive,
            !trimmedFantasyManagerEntryID.isEmpty,
            let squad = fantasyViewModel.data {
-            nextBadge = "\(squad.resolvedCurrentScore)"
-            nextShouldPulse = matchesStore.matches.contains { match in
-                guard isPremierLeagueMatch(match), match.isInProgress else { return false }
+            let relevantMatches = matchesStore.matches.filter { match in
+                guard isPremierLeagueMatch(match) else { return false }
                 return squad.matchSquadSection(forTeamName: match.homeTeam)?.hasPlayers == true ||
                     squad.matchSquadSection(forTeamName: match.awayTeam)?.hasPlayers == true
+            }
+            let shouldShowScore = relevantMatches.contains {
+                fantasyTabMatchIsLiveOrRecentlyFinished($0, now: now)
+            }
+
+            nextBadge = shouldShowScore ? "\(squad.resolvedCurrentScore)" : nil
+            nextShouldPulse = relevantMatches.contains { match in
+                guard let status = match.stabilizedScoreStatus(now: now) else { return false }
+                return MatchStatusFormatter.isInProgress(status)
             }
         } else {
             nextBadge = nil
@@ -285,6 +294,35 @@ private struct ContentLifecycleCoordinator: View {
         FantasySyncStore.persist(managerEntryID: managerEntryID, squad: squad)
         await PreferencesSyncService.shared.syncPreferences(preferences.snapshot)
     }
+}
+
+func fantasyTabMatchIsLiveOrRecentlyFinished(
+    _ match: Match,
+    now: Date = Date(),
+    recentlyFinishedWindow: TimeInterval = 30 * 60
+) -> Bool {
+    guard let status = match.stabilizedScoreStatus(now: now) else {
+        return false
+    }
+
+    if MatchStatusFormatter.isInProgress(status) {
+        return true
+    }
+
+    guard MatchStatusFormatter.isFinished(status),
+          let updatedAt = match.updatedAt,
+          let finishedAt = fantasyTabISO8601Date(from: updatedAt) else {
+        return false
+    }
+
+    let elapsed = now.timeIntervalSince(finishedAt)
+    return elapsed >= 0 && elapsed < recentlyFinishedWindow
+}
+
+private func fantasyTabISO8601Date(from value: String) -> Date? {
+    let fractionalFormatter = ISO8601DateFormatter()
+    fractionalFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+    return fractionalFormatter.date(from: value) ?? ISO8601DateFormatter().date(from: value)
 }
 
 #Preview {

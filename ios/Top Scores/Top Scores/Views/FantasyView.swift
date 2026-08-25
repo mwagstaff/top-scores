@@ -104,7 +104,6 @@ struct FantasyView: View {
     @State private var hasLoadedFantasyStorageState = false
     @State private var screenOpenedAt: Date?
     @State private var screenViewSentForActivation = false
-    private let rivalsSectionScrollID = "fantasy-rivals-section"
     private let fantasyRefreshTimer = Timer.publish(every: 30.0, on: .main, in: .common).autoconnect()
     var body: some View {
         lifecycleBoundView
@@ -521,135 +520,132 @@ struct FantasyView: View {
     }
 
     private var linkedFantasyView: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(spacing: 12) {
-                    if fantasyViewModel.isRefreshing {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("Refreshing Fantasy score...")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                            Spacer(minLength: 0)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.horizontal, 2)
+        ScrollView {
+            VStack(spacing: 12) {
+                if fantasyViewModel.isRefreshing {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Refreshing Fantasy score...")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 0)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 2)
+                }
+
+                if fantasyViewModel.data != nil || fantasyViewModel.previousTeamData != nil {
+                    teamModePicker
+
+                    if let shareImportStatusMessage {
+                        shareImportStatusCard(
+                            message: shareImportStatusMessage,
+                            isError: shareImportStatusIsError
+                        )
                     }
 
-                    if fantasyViewModel.data != nil || fantasyViewModel.previousTeamData != nil {
-                        teamModePicker
-
-                        if let shareImportStatusMessage {
-                            shareImportStatusCard(
-                                message: shareImportStatusMessage,
-                                isError: shareImportStatusIsError
+                    switch teamViewMode {
+                    case .current:
+                        if let data = fantasyViewModel.data {
+                            let displayData = data
+                            FantasyTransferDeadlineLabel(
+                                gameweekID: data.deadlineGameweekID,
+                                deadlineTime: data.deadlineTime
+                            )
+                            pitchSection(
+                                displayData,
+                                playerSelectionEnabled: true,
+                                detailMode: $fantasyPitchDetailMode,
+                                expectedPoints: fantasyViewModel.currentSquadProjectedGameweekPoints,
+                                teamValue: data.currentTeamValueMillions,
+                                isExpectedPointsLoading: fantasyViewModel.currentSquadProjectedGameweekPoints == nil,
+                                showsPoints: false
+                            )
+                            benchSection(
+                                displayData,
+                                playerSelectionEnabled: true,
+                                detailMode: fantasyPitchDetailMode,
+                                showsPoints: false
                             )
                         }
-
-                        switch teamViewMode {
-                        case .current:
-                            if let data = fantasyViewModel.data {
-                                let displayData = data
-                                FantasyTransferDeadlineLabel(
-                                    gameweekID: data.deadlineGameweekID,
-                                    deadlineTime: data.deadlineTime
-                                )
-                                pitchSection(
-                                    displayData,
-                                    playerSelectionEnabled: true,
-                                    detailMode: $fantasyPitchDetailMode,
-                                    expectedPoints: fantasyViewModel.currentSquadProjectedGameweekPoints,
-                                    teamValue: data.currentTeamValueMillions,
-                                    isExpectedPointsLoading: fantasyViewModel.currentSquadProjectedGameweekPoints == nil,
-                                    showsPoints: false
-                                )
-                                benchSection(
-                                    displayData,
-                                    playerSelectionEnabled: true,
-                                    detailMode: fantasyPitchDetailMode,
-                                    showsPoints: false
-                                )
+                    case .previous:
+                        if let data = fantasyViewModel.previousTeamData {
+                            pitchSection(
+                                data,
+                                playerSelectionEnabled: true,
+                                detailMode: $fantasyPitchDetailMode,
+                                teamValue: data.currentTeamValueMillions,
+                                finalPointsMetricTitle: "Final score"
+                            )
+                            benchSection(
+                                data,
+                                playerSelectionEnabled: true,
+                                detailMode: fantasyPitchDetailMode
+                            )
+                            eventLegendSection(data)
+                            if data.isEstimatedScore {
+                                scoreCalculationSection(data)
                             }
-                        case .previous:
-                            if let data = fantasyViewModel.previousTeamData {
-                                scoreSummaryCard(
-                                    data,
-                                    showsActiveChipMessage: data.hasActiveChip,
-                                    moreRivalsTapAction: {
-                                        withAnimation(.easeInOut(duration: 0.25)) {
-                                            proxy.scrollTo(rivalsSectionScrollID, anchor: .top)
-                                        }
-                                    }
-                                )
-                                pitchSection(
-                                    data,
-                                    playerSelectionEnabled: true,
-                                    detailMode: $fantasyPitchDetailMode
-                                )
-                                benchSection(
-                                    data,
-                                    playerSelectionEnabled: true,
-                                    detailMode: fantasyPitchDetailMode
-                                )
-                                eventLegendSection(data)
-                                if data.isEstimatedScore {
-                                    scoreCalculationSection(data)
-                                }
-                                rivalsSection
-                                    .id(rivalsSectionScrollID)
-                                summaryStatsSection(data)
-                            } else {
-                                noPreviousTeamCard
-                            }
+                            rivalsSection
+                            summaryStatsSection(data)
+                        } else {
+                            noPreviousTeamCard
                         }
-
-                        if !playerCreatedLeagues.isEmpty {
-                            yourLeaguesSection
-                        }
-
-                        if isShowingProvisionalPointsMetric {
-                            provisionalPointsInfoCard
-                        }
-                    } else if fantasyViewModel.isLoading {
-                        VStack(spacing: 10) {
-                            ProgressView()
-                            Text("Loading Fantasy score...")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 26)
-                        .hidden()
                     }
 
-                    if let errorMessage = fantasyViewModel.errorMessage {
-                        errorCard(errorMessage)
+                    if !playerCreatedLeagues.isEmpty {
+                        yourLeaguesSection
                     }
 
+                    if isShowingProvisionalPointsMetric {
+                        provisionalPointsInfoCard
+                    }
+                } else if fantasyViewModel.isLoading {
+                    VStack(spacing: 10) {
+                        ProgressView()
+                        Text("Loading Fantasy score...")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 26)
+                    .hidden()
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 12)
+
+                if let errorMessage = fantasyViewModel.errorMessage {
+                    errorCard(errorMessage)
+                }
             }
-            .background(Color.clear)
-            .refreshable {
-                await fantasyViewModel.refresh(
-                    managerEntryID: managerEntryID,
-                    apiBaseURL: preferences.apiBaseURL,
-                    rivalManagers: rivalManagers,
-                    trackedLeagues: trackedLeagues
-                )
-            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+        }
+        .background(Color.clear)
+        .refreshable {
+            await fantasyViewModel.refresh(
+                managerEntryID: managerEntryID,
+                apiBaseURL: preferences.apiBaseURL,
+                rivalManagers: rivalManagers,
+                trackedLeagues: trackedLeagues
+            )
         }
     }
 
     private var teamModePicker: some View {
         Picker("Team view", selection: $teamViewMode) {
             Text("Current team").tag(FantasyTeamViewMode.current)
-            Text("Previous team").tag(FantasyTeamViewMode.previous)
+            Text(previousTeamPickerTitle).tag(FantasyTeamViewMode.previous)
         }
         .pickerStyle(.segmented)
         .accessibilityHint("Switch between your latest squad and your most recently completed gameweek.")
+    }
+
+    private var previousTeamPickerTitle: String {
+        guard let data = fantasyViewModel.previousTeamData,
+              data.scorePhase == .final else {
+            return fantasyPreviousTeamPickerTitle(finalScore: nil)
+        }
+        return fantasyPreviousTeamPickerTitle(finalScore: data.resolvedCurrentScore)
     }
 
     private var noPreviousTeamCard: some View {
@@ -2658,7 +2654,8 @@ struct FantasyView: View {
         expectedPoints: Double? = nil,
         teamValue: Double? = nil,
         isExpectedPointsLoading: Bool = false,
-        showsPoints: Bool = true
+        showsPoints: Bool = true,
+        finalPointsMetricTitle: String = "Final Points"
     ) -> some View {
         let pointsMetricTitle: String
         let pointsMetricValue: Double?
@@ -2688,7 +2685,7 @@ struct FantasyView: View {
             )
             pointsMetricIsLoading = false
         } else {
-            pointsMetricTitle = "Final Points"
+            pointsMetricTitle = finalPointsMetricTitle
             pointsMetricValue = Double(data.resolvedCurrentScore)
             pointsMetricDisplayValue = "\(data.resolvedCurrentScore)"
             pointsMetricTint = Color(red: 0.20, green: 0.55, blue: 1.0)
@@ -5226,6 +5223,11 @@ private struct FantasyPlayerCard: View {
     }
 }
 
+func fantasyPreviousTeamPickerTitle(finalScore: Int?) -> String {
+    guard let finalScore else { return "Previous team" }
+    return "Previous team (\(finalScore))"
+}
+
 private enum FantasyTeamViewMode: Hashable {
     case current
     case previous
@@ -5823,9 +5825,20 @@ private struct FantasyTransferDeadlineLabel: View {
 struct FantasySelectedPlayerSelection: Identifiable {
     let player: FantasyDisplayPlayer
     let gameweekID: Int
+    let seasonKey: String?
+
+    init(
+        player: FantasyDisplayPlayer,
+        gameweekID: Int,
+        seasonKey: String? = nil
+    ) {
+        self.player = player
+        self.gameweekID = gameweekID
+        self.seasonKey = seasonKey
+    }
 
     var id: String {
-        "\(player.elementID)-\(gameweekID)-\(player.pickPosition)"
+        "\(seasonKey ?? "current")-\(player.elementID)-\(gameweekID)-\(player.pickPosition)"
     }
 }
 
