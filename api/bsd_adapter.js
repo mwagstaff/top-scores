@@ -668,6 +668,93 @@ function toNumber(value) {
   return value !== null && value !== undefined && value !== "" ? Number(value) : null;
 }
 
+const BSD_TWO_LEG_MAX_GAP_MS = 30 * 24 * 60 * 60 * 1000;
+
+function bsdTwoLegTieKey(event) {
+  if (!event || typeof event !== "object") return null;
+  const leagueId = String(event.league_id || "").trim();
+  const roundName = String(event.round_name || "").trim().toLowerCase();
+  const homeTeamId = String(event.home_team_id || "").trim();
+  const awayTeamId = String(event.away_team_id || "").trim();
+  if (!leagueId || !roundName || !homeTeamId || !awayTeamId || homeTeamId === awayTeamId) {
+    return null;
+  }
+  return `${leagueId}|${roundName}|${[homeTeamId, awayTeamId].sort().join("|")}`;
+}
+
+function applyBsdTwoLegAggregates(events, matches) {
+  const groups = new Map();
+  (Array.isArray(events) ? events : []).forEach((event) => {
+    const key = bsdTwoLegTieKey(event);
+    const kickoffMs = Date.parse(String(event && event.event_date || ""));
+    if (!key || !Number.isFinite(kickoffMs)) return;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ event, kickoffMs });
+  });
+
+  const matchesById = new Map(
+    (Array.isArray(matches) ? matches : [])
+      .filter((match) => match && match.id != null)
+      .map((match) => [String(match.id), match])
+  );
+
+  groups.forEach((entries) => {
+    entries.sort((lhs, rhs) => lhs.kickoffMs - rhs.kickoffMs);
+    entries.forEach((current, index) => {
+      const currentEvent = current.event;
+      const previous = entries
+        .slice(0, index)
+        .reverse()
+        .find((candidate) => {
+          const previousEvent = candidate.event;
+          if (current.kickoffMs - candidate.kickoffMs > BSD_TWO_LEG_MAX_GAP_MS) return false;
+          if (String(previousEvent.status || "").trim().toLowerCase() !== "finished") return false;
+          if (
+            currentEvent.season_id != null &&
+            previousEvent.season_id != null &&
+            String(currentEvent.season_id) !== String(previousEvent.season_id)
+          ) {
+            return false;
+          }
+          if (
+            currentEvent.round_number != null &&
+            previousEvent.round_number != null &&
+            String(currentEvent.round_number) !== String(previousEvent.round_number)
+          ) {
+            return false;
+          }
+          return (
+            String(currentEvent.home_team_id) === String(previousEvent.away_team_id) &&
+            String(currentEvent.away_team_id) === String(previousEvent.home_team_id)
+          );
+        });
+      if (!previous) return;
+
+      const previousHomeScore = toNumber(previous.event.home_score);
+      const previousAwayScore = toNumber(previous.event.away_score);
+      if (!Number.isFinite(previousHomeScore) || !Number.isFinite(previousAwayScore)) return;
+
+      const match = matchesById.get(String(currentEvent.id));
+      if (!match) return;
+      const firstLegHomeScore = previousAwayScore;
+      const firstLegAwayScore = previousHomeScore;
+      const currentHomeScore = toNumber(match.home_score);
+      const currentAwayScore = toNumber(match.away_score);
+
+      match.first_leg_home_score = firstLegHomeScore;
+      match.first_leg_away_score = firstLegAwayScore;
+      match.aggregate_home_score = firstLegHomeScore + (
+        Number.isFinite(currentHomeScore) ? currentHomeScore : 0
+      );
+      match.aggregate_away_score = firstLegAwayScore + (
+        Number.isFinite(currentAwayScore) ? currentAwayScore : 0
+      );
+    });
+  });
+
+  return matches;
+}
+
 // BSD broadcasts are fetched filtered to GB, so every channel is a UK listing.
 // Project a bsd_broadcasts payload's channels into the structured TvChannel
 // shape the clients expect ({ name, country, countryCode, logo }), matching
@@ -1386,7 +1473,10 @@ async function projectBsdMatches() {
     });
     if (match) out.push(match);
   });
-  return out;
+  return applyBsdTwoLegAggregates(
+    events.map((doc) => doc && doc.payload).filter(Boolean),
+    out
+  );
 }
 
 // Projects a single bsd_event (with incidents + lineups) into a canonical
@@ -1459,6 +1549,7 @@ module.exports = {
     bsdKickoffLightContext,
     bsdVenueDetails,
     fallbackKickoffLightContext,
+    applyBsdTwoLegAggregates,
     isCurrentSeasonEvent,
     buildCurrentBsdEventsFilter,
     currentSeasonByLeagueFromDocs,

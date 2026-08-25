@@ -9995,6 +9995,14 @@ function buildResolvedListMatchState(listMatch, detailsPayload, nowMs = Date.now
 
   const listAggregate = resolveKnownAggregateScores(listMatch);
   const detailsAggregate = resolveKnownAggregateScores(compatibleDetailsPayload);
+  const listFirstLegHomeScore = parseNumericScore(listMatch && listMatch.first_leg_home_score);
+  const listFirstLegAwayScore = parseNumericScore(listMatch && listMatch.first_leg_away_score);
+  const detailsFirstLegHomeScore = parseNumericScore(
+    compatibleDetailsPayload && compatibleDetailsPayload.first_leg_home_score
+  );
+  const detailsFirstLegAwayScore = parseNumericScore(
+    compatibleDetailsPayload && compatibleDetailsPayload.first_leg_away_score
+  );
 
   const listStatus = resolveMatchScoreStatus(listMatch) || (listMatch && listMatch.score_status) || null;
   const detailsStatus =
@@ -10049,6 +10057,10 @@ function buildResolvedListMatchState(listMatch, detailsPayload, nowMs = Date.now
       detailsAggregate.home !== null ? detailsAggregate.home : listAggregate.home,
     aggregate_away_score:
       detailsAggregate.away !== null ? detailsAggregate.away : listAggregate.away,
+    first_leg_home_score:
+      detailsFirstLegHomeScore !== null ? detailsFirstLegHomeScore : listFirstLegHomeScore,
+    first_leg_away_score:
+      detailsFirstLegAwayScore !== null ? detailsFirstLegAwayScore : listFirstLegAwayScore,
     score_status: scoreStatus,
     penalty_result:
       String((compatibleDetailsPayload && compatibleDetailsPayload.penalty_result) || "").trim() ||
@@ -10093,6 +10105,8 @@ function normalizeMatchDetailsPayload(match, options = {}) {
   const awayScore = parseNumericScore(match.away_score);
   const aggregateHomeScore = parseNumericScore(match.aggregate_home_score);
   const aggregateAwayScore = parseNumericScore(match.aggregate_away_score);
+  const firstLegHomeScore = parseNumericScore(match.first_leg_home_score);
+  const firstLegAwayScore = parseNumericScore(match.first_leg_away_score);
   const scoreStatus = resolveStableMatchScoreStatus(match, {
     nowMs: options.nowMs,
   });
@@ -10112,6 +10126,8 @@ function normalizeMatchDetailsPayload(match, options = {}) {
     away_score: awayScore,
     aggregate_home_score: aggregateHomeScore,
     aggregate_away_score: aggregateAwayScore,
+    first_leg_home_score: firstLegHomeScore,
+    first_leg_away_score: firstLegAwayScore,
     score_status: scoreStatus,
     in_progress: isInProgressMatchStatus(scoreStatus),
     tv_channels: uniqueChannels(match.tv_channels),
@@ -11457,6 +11473,13 @@ function normalizeMatchRecord(match) {
     record.aggregate_away_score = aggregateAwayScore;
   }
 
+  const firstLegHomeScore = parseNumericScore(match.first_leg_home_score);
+  const firstLegAwayScore = parseNumericScore(match.first_leg_away_score);
+  if (firstLegHomeScore !== null && firstLegAwayScore !== null) {
+    record.first_leg_home_score = firstLegHomeScore;
+    record.first_leg_away_score = firstLegAwayScore;
+  }
+
   const scoreStatus = String(match.score_status || match.match_time || "").trim();
   if (scoreStatus) {
     record.score_status = scoreStatus;
@@ -11841,6 +11864,13 @@ function toMatchListPayload(match, options = {}) {
   ) {
     payload.aggregate_home_score = resolvedState.aggregate_home_score;
     payload.aggregate_away_score = resolvedState.aggregate_away_score;
+  }
+  if (
+    resolvedState.first_leg_home_score !== null &&
+    resolvedState.first_leg_away_score !== null
+  ) {
+    payload.first_leg_home_score = resolvedState.first_leg_home_score;
+    payload.first_leg_away_score = resolvedState.first_leg_away_score;
   }
   if (resolvedState.score_status) {
     payload.score_status = resolvedState.score_status;

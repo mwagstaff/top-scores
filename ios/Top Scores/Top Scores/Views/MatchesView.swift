@@ -700,7 +700,7 @@ struct MatchesView: View {
 
             Button(action: togglePredictedScores) {
                 Image(systemName: "sparkles")
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(
                         preferences.showPredictedScores
                             ? Color.primary

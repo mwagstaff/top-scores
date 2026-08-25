@@ -2708,6 +2708,32 @@ test("getMatchDetailsStatePayload preserves known first-leg zero aggregate", () 
   assert.equal(payload.first_leg_away_score, 0);
 });
 
+test("toMatchListPayload preserves first-leg scores for running aggregates", () => {
+  const payload = toMatchListPayload({
+    id: "224835",
+    date: "2026-08-25",
+    time: "20:00",
+    league: "UEFA Champions League",
+    league_subcategory: "Playoff round",
+    home_team: "LASK",
+    away_team: "Celtic",
+    home_score: 5,
+    away_score: 1,
+    aggregate_home_score: 5,
+    aggregate_away_score: 4,
+    first_leg_home_score: 0,
+    first_leg_away_score: 3,
+    score_status: "120",
+    has_bsd_source: true,
+    tv_channels: [],
+  });
+
+  assert.equal(payload.aggregate_home_score, 5);
+  assert.equal(payload.aggregate_away_score, 4);
+  assert.equal(payload.first_leg_home_score, 0);
+  assert.equal(payload.first_leg_away_score, 3);
+});
+
 test("getMatchDetailsStatePayload does not synthesize aggregate from first-leg score when aggregate is missing", () => {
   const payload = getMatchDetailsStatePayload({
     id: "c5yqnegjv2xt",

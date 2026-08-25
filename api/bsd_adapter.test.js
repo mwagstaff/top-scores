@@ -29,6 +29,7 @@ const {
   currentSeasonByLeagueFromDocs,
   currentSeasonContextByLeagueFromDocs,
   bsdKickoffLightContext,
+  applyBsdTwoLegAggregates,
 } = __private;
 
 test("bsdKickoffLightContext classifies the exact venue solar state", () => {
@@ -277,6 +278,79 @@ test("bsdEventToCanonicalMatch: canonicalises names, league, zoned date, status"
   assert.equal(m.time, "20:00");
   const compositeId = `${m.date}|${m.time}|${m.league}|${m.home_team}|${m.away_team}`;
   assert.equal(compositeId, "2026-06-21|20:00|FIFA World Cup 2026|Cape Verde|Uruguay");
+});
+
+test("applyBsdTwoLegAggregates adds the first leg to a live reverse fixture", () => {
+  const firstLeg = {
+    id: 224834,
+    league_id: 7,
+    season_id: 1112,
+    round_number: 636,
+    round_name: "Playoff round",
+    home_team_id: 132,
+    away_team_id: 1404,
+    event_date: "2026-08-19T19:00:00Z",
+    status: "finished",
+    home_score: 3,
+    away_score: 0,
+  };
+  // BSD's live endpoint returns a reduced event without season_id or round_number.
+  const secondLeg = {
+    id: 224835,
+    league_id: 7,
+    round_name: "Playoff round",
+    home_team_id: 1404,
+    away_team_id: 132,
+    event_date: "2026-08-25T19:00:00Z",
+    status: "inprogress",
+    home_score: 5,
+    away_score: 1,
+  };
+  const matches = [
+    { id: "224834", home_score: 3, away_score: 0 },
+    { id: "224835", home_score: 5, away_score: 1 },
+  ];
+
+  applyBsdTwoLegAggregates([firstLeg, secondLeg], matches);
+
+  assert.equal(matches[0].aggregate_home_score, undefined);
+  assert.equal(matches[1].first_leg_home_score, 0);
+  assert.equal(matches[1].first_leg_away_score, 3);
+  assert.equal(matches[1].aggregate_home_score, 5);
+  assert.equal(matches[1].aggregate_away_score, 4);
+});
+
+test("applyBsdTwoLegAggregates ignores reverse fixtures from different rounds", () => {
+  const firstMatch = {
+    id: 1,
+    league_id: 7,
+    season_id: 1112,
+    round_number: 635,
+    round_name: "Playoff round",
+    home_team_id: 132,
+    away_team_id: 1404,
+    event_date: "2026-08-19T19:00:00Z",
+    status: "finished",
+    home_score: 3,
+    away_score: 0,
+  };
+  const laterMatch = {
+    ...firstMatch,
+    id: 2,
+    round_number: 636,
+    home_team_id: 1404,
+    away_team_id: 132,
+    event_date: "2026-08-25T19:00:00Z",
+  };
+  const matches = [
+    { id: "1", home_score: 3, away_score: 0 },
+    { id: "2", home_score: 1, away_score: 1 },
+  ];
+
+  applyBsdTwoLegAggregates([firstMatch, laterMatch], matches);
+
+  assert.equal(matches[1].aggregate_home_score, undefined);
+  assert.equal(matches[1].first_leg_home_score, undefined);
 });
 
 test("bsdEventToCanonicalMatch: includes cached venue details only in the detail projection", () => {
