@@ -402,7 +402,6 @@ struct APIClient {
     func fetchFixtureBrowseMatches(
         on date: String,
         preferences: PreferencesSnapshot,
-        topMatchesOnly: Bool,
         pageSize: Int = 2000,
         hydrateStates: Bool = true
     ) async throws -> MatchResponse {
@@ -415,7 +414,6 @@ struct APIClient {
             from: trimmedDate,
             through: trimmedDate,
             preferences: preferences,
-            topMatchesOnly: topMatchesOnly,
             pageSize: pageSize,
             hydrateStates: hydrateStates
         )
@@ -425,7 +423,6 @@ struct APIClient {
         from startDate: String,
         through endDate: String,
         preferences: PreferencesSnapshot,
-        topMatchesOnly: Bool,
         pageSize: Int = 2000,
         hydrateStates: Bool = false
     ) async throws -> MatchResponse {
@@ -443,9 +440,9 @@ struct APIClient {
             URLQueryItem(name: "page_size", value: String(max(1, pageSize))),
             URLQueryItem(name: "time_zone", value: TimeZone.current.identifier),
         ]
-        preferences.effectiveFixtureViewOptionIDs.forEach {
-            queryItems.append(URLQueryItem(name: "view_option", value: $0))
-        }
+        // Fixture-browser responses intentionally contain every competition.
+        // The device cache applies the current view options locally so changing
+        // the competition carousel never depends on another network request.
         if preferences.channelFilterEnabled {
             ChannelSelection.apiQueryValues(from: preferences.selectedChannels).forEach {
                 queryItems.append(URLQueryItem(name: "channel", value: $0))
@@ -470,18 +467,15 @@ struct APIClient {
             URLQueryItem(name: "start", value: Self.dateFormatter.string(from: start)),
             URLQueryItem(name: "end", value: Self.openEndedFixtureEndDate),
             URLQueryItem(name: "time_zone", value: TimeZone.current.identifier),
+            URLQueryItem(name: "include_postponed", value: "true"),
         ]
         if preferences.channelFilterEnabled {
             ChannelSelection.apiQueryValues(from: preferences.selectedChannels).forEach {
                 queryItems.append(URLQueryItem(name: "channel", value: $0))
             }
         }
-        if preferences.showPostponedGames {
-            queryItems.append(URLQueryItem(name: "include_postponed", value: "true"))
-        }
-        preferences.effectiveFixtureViewOptionIDs.forEach {
-            queryItems.append(URLQueryItem(name: "view_option", value: $0))
-        }
+        // Keep the calendar selection-independent for the same reason as the
+        // match payload. Postponed visibility is also filtered on device.
 
         let request = try buildRequest(path: "matches/calendar", queryItems: queryItems)
         let (data, http) = try await performRequest(request, operation: "fixture_calendar")

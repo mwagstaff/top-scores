@@ -570,9 +570,20 @@ struct MatchesView: View {
             diagnosticLog("[MatchesView] snapshot_change mode=%@ showAllMatches=%d epl_pref=%d effective_snapshot=%@",
                   mode.rawValue, showAllMatches, preferences.englishPremierLeagueTeamsOnly, debugSnapshotSummary(snapshot))
             #endif
-            matchesStore.configure(with: snapshot, mode: mode)
-            if mode == .fixtures {
+            if mode == .fixtures, fixtureBrowser.hasLoadedCalendar {
+                // The fixture browser owns a selection-independent cache once
+                // its calendar is ready. Keep MatchesStore's preferences in
+                // sync without turning a carousel change into another fetch.
+                matchesStore.prepareForPreferencesChange(
+                    snapshot,
+                    publishVisibleState: false
+                )
                 fixtureBrowser.configure(preferences: preferences.snapshot)
+            } else {
+                matchesStore.configure(with: snapshot, mode: mode)
+                if mode == .fixtures {
+                    fixtureBrowser.configure(preferences: preferences.snapshot)
+                }
             }
             scheduleGroupedSideEffects(for: sourceGroupedDays, immediate: false)
         }
@@ -582,7 +593,15 @@ struct MatchesView: View {
             #if DEBUG
             diagnosticLog("[MatchesView] showAllMatches_change mode=%@ value=%d snapshot=%@", mode.rawValue, newValue, debugSnapshotSummary(snapshot))
             #endif
-            matchesStore.configure(with: snapshot, mode: mode)
+            if mode == .fixtures, fixtureBrowser.hasLoadedCalendar {
+                matchesStore.prepareForPreferencesChange(
+                    snapshot,
+                    publishVisibleState: false
+                )
+                fixtureBrowser.configure(preferences: preferences.snapshot)
+            } else {
+                matchesStore.configure(with: snapshot, mode: mode)
+            }
             fixturesCoordinator.showToast(
                 newValue ? "Viewing all matches (unfiltered)" : "Viewing preferred matches only"
             )
@@ -694,7 +713,7 @@ struct MatchesView: View {
             .popover(isPresented: $isFixtureDatePickerPresented) {
                 fixtureDatePickerPopover
                     .presentationCompactAdaptation(.sheet)
-                    .presentationDetents([.height(fixtureDatePickerSheetHeight)])
+                    .presentationDetents([.medium])
                     .presentationDragIndicator(.visible)
             }
 
@@ -751,37 +770,17 @@ struct MatchesView: View {
             .reduce(0) { $0 + $1.matchCount }
 
         return VStack(spacing: 10) {
-            HStack {
-                Text("Jump to date")
-                    .font(.headline)
 
-                Spacer()
-
-                Button("Done") {
-                    isFixtureDatePickerPresented = false
-                }
-                .fontWeight(.semibold)
-            }
-            .padding(.horizontal, 16)
-
-            DatePicker(
-                "Fixture date",
+            FixtureAvailableDatePicker(
                 selection: $fixtureDatePickerSelection,
-                in: fixtureDatePickerRange,
-                displayedComponents: .date
+                availableDateKeys: Set(fixtureBrowser.availableDays.map(\.date)),
+                dateRange: fixtureDatePickerRange
             )
-            .datePickerStyle(.graphical)
-            .labelsHidden()
-            .tint(Color.accentColor)
+            .frame(height: 320)
+            .accessibilityLabel("Fixture date")
+            .padding(.top, 24)
 
-            if selectedDateCompetitions.isEmpty {
-                Text("No fixtures in your current Match View on this date")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .padding(.horizontal, 16)
-            } else {
+            if !selectedDateCompetitions.isEmpty {
                 LazyVGrid(
                     columns: [
                         GridItem(.flexible(), spacing: 12, alignment: .leading),
@@ -816,21 +815,28 @@ struct MatchesView: View {
             HStack(spacing: 12) {
                 Spacer(minLength: 0)
 
-                Button("Jump") {
+                Button {
+                    returnToFixtureToday()
+                } label: {
+                    Text("Back to today")
+                        .foregroundStyle(Color.primary)
+                }
+                .buttonStyle(.bordered)
+                .tint(Color.primary)
+                .disabled(!isFixtureTodayAvailable)
+
+                Button("Jump to date") {
                     jumpToFixtureDatePickerSelection()
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!isFixtureDatePickerSelectionAvailable)
             }
+            .padding(.top, 12)
             .padding(.horizontal, 16)
         }
         .padding(.vertical, 12)
         .frame(width: 340)
         .frame(maxHeight: .infinity, alignment: .top)
-    }
-
-    private var fixtureDatePickerSheetHeight: CGFloat {
-        dynamicTypeSize.isAccessibilitySize ? 590 : 500
     }
 
     private func fixtureDateCompetitionSummary(
@@ -875,6 +881,11 @@ struct MatchesView: View {
         fixtureBrowser.availableDays.contains { $0.date == fixtureDatePickerSelectionKey }
     }
 
+    private var isFixtureTodayAvailable: Bool {
+        let todayKey = Self.fixtureDateKey(from: Date())
+        return fixtureBrowser.availableDays.contains { $0.date == todayKey }
+    }
+
     private func presentFixtureDatePicker() {
         if let selectedDateKey = fixtureBrowser.selectedDateKey,
            let selectedDate = Self.fixtureDate(from: selectedDateKey) {
@@ -888,6 +899,12 @@ struct MatchesView: View {
     private func jumpToFixtureDatePickerSelection() {
         guard isFixtureDatePickerSelectionAvailable else { return }
         fixtureBrowser.selectDate(fixtureDatePickerSelectionKey)
+        isFixtureDatePickerPresented = false
+    }
+
+    private func returnToFixtureToday() {
+        guard isFixtureTodayAvailable else { return }
+        fixtureBrowser.selectDate(Self.fixtureDateKey(from: Date()))
         isFixtureDatePickerPresented = false
     }
 

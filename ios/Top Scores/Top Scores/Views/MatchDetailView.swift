@@ -26,6 +26,7 @@ struct MatchDetailView: View {
     @State private var screenOpenedAt: Date?
     @State private var screenViewSent = false
     @State private var showOtherCountries = false
+    @State private var teamCompetitionEntries: [MatchTeamCompetitionEntry] = []
 
     private static let detailsRefreshIntervalNanos: UInt64 = 10_000_000_000
     private static let idleDetailsRefreshIntervalNanos: UInt64 = 30_000_000_000
@@ -38,6 +39,10 @@ struct MatchDetailView: View {
 
     private var activeMatch: Match {
         detailedMatch ?? baseMatch
+    }
+
+    private var teamCompetitionTaskKey: String {
+        "\(preferences.apiBaseURL)|\(activeMatch.league)|\(activeMatch.homeTeam)|\(activeMatch.awayTeam)"
     }
 
     private var kickoffText: String {
@@ -226,7 +231,13 @@ struct MatchDetailView: View {
                 MatchDetailScoreboardHero(
                     match: activeMatch,
                     kickoffText: kickoffText,
-                    predictionDisplay: predictionDisplay
+                    predictionDisplay: predictionDisplay,
+                    teamCompetitionEntries: teamCompetitionEntries
+                )
+                .padding(.horizontal)
+
+                MatchTeamLeaguePositionsLink(
+                    entries: teamCompetitionEntries
                 )
                 .padding(.horizontal)
 
@@ -234,16 +245,6 @@ struct MatchDetailView: View {
                     MatchPenaltyShootoutSummary(text: penaltyDetailSummary)
                         .padding(.horizontal)
                 }
-
-                // Unconditional: shown for any match status (upcoming/live/finished)
-                // whenever a tracked competition table has the team(s) — the link
-                // itself renders nothing when no table/team match is found, so it
-                // should never be gated on shouldShowMatchActions/isMatchFinished etc.
-                MatchTeamLeaguePositionsLink(
-                    match: activeMatch,
-                    apiBaseURL: preferences.apiBaseURL
-                )
-                .padding(.horizontal)
 
                 if let fantasyMatchContext {
                     let sections = fantasySquadSections(in: fantasyMatchContext.squad)
@@ -311,6 +312,15 @@ struct MatchDetailView: View {
         }
         .task(id: "\(preferences.apiBaseURL)|\(match.matchDetailsID ?? "")") {
             await loadMatchSocial()
+        }
+        .task(id: teamCompetitionTaskKey) {
+            teamCompetitionEntries = []
+            let entries = await MatchTeamCompetitionLoader.shared.load(
+                match: activeMatch,
+                apiBaseURL: preferences.apiBaseURL
+            )
+            guard !Task.isCancelled else { return }
+            teamCompetitionEntries = entries
         }
         .refreshable {
             await refreshDetailsManually()
@@ -1011,17 +1021,29 @@ private struct MatchDetailScoreboardHero: View {
     let match: Match
     let kickoffText: String
     let predictionDisplay: FixturePredictionDisplayState
+    let teamCompetitionEntries: [MatchTeamCompetitionEntry]
     @State private var artworkSelectionSeed: UInt32
+    @ScaledMetric(relativeTo: .headline) private var teamNameRowHeight: CGFloat = 46
 
     init(
         match: Match,
         kickoffText: String,
-        predictionDisplay: FixturePredictionDisplayState
+        predictionDisplay: FixturePredictionDisplayState,
+        teamCompetitionEntries: [MatchTeamCompetitionEntry]
     ) {
         self.match = match
         self.kickoffText = kickoffText
         self.predictionDisplay = predictionDisplay
+        self.teamCompetitionEntries = teamCompetitionEntries
         _artworkSelectionSeed = State(initialValue: UInt32.random(in: .min ... .max))
+    }
+
+    private var showsTeamCompetitions: Bool {
+        guard let home = competitionEntry(for: .home),
+              let away = competitionEntry(for: .away) else {
+            return false
+        }
+        return home.leagueID != away.leagueID
     }
 
     private var centerText: String {
@@ -1082,7 +1104,8 @@ private struct MatchDetailScoreboardHero: View {
                     fullName: match.homeTeam,
                     teamId: match.homeTeamId,
                     alternateNames: [match.homeShortName].compactMap { $0 },
-                    goalSummaries: homeGoalSummaries
+                    goalSummaries: homeGoalSummaries,
+                    competition: competitionEntry(for: .home)
                 )
 
                 VStack(spacing: 8) {
@@ -1107,7 +1130,8 @@ private struct MatchDetailScoreboardHero: View {
                     fullName: match.awayTeam,
                     teamId: match.awayTeamId,
                     alternateNames: [match.awayShortName].compactMap { $0 },
-                    goalSummaries: awayGoalSummaries
+                    goalSummaries: awayGoalSummaries,
+                    competition: competitionEntry(for: .away)
                 )
             }
 
@@ -1167,7 +1191,8 @@ private struct MatchDetailScoreboardHero: View {
         fullName: String,
         teamId: String? = nil,
         alternateNames: [String],
-        goalSummaries: [MatchScoreboardGoalSummary]
+        goalSummaries: [MatchScoreboardGoalSummary],
+        competition: MatchTeamCompetitionEntry?
     ) -> some View {
         NavigationLink {
             TeamDetailsView(
@@ -1186,12 +1211,19 @@ private struct MatchDetailScoreboardHero: View {
                 name: name,
                 fullName: fullName,
                 teamId: teamId,
-                alternateNames: alternateNames
+                alternateNames: alternateNames,
+                competition: competition
             )
         }
         .buttonStyle(.plain)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(teamAccessibilityLabel(fullName: fullName, goalSummaries: goalSummaries))
+        .accessibilityLabel(
+            teamAccessibilityLabel(
+                fullName: fullName,
+                goalSummaries: goalSummaries,
+                competition: showsTeamCompetitions ? competition : nil
+            )
+        )
         .accessibilityHint("View team details")
     }
 
@@ -1199,7 +1231,8 @@ private struct MatchDetailScoreboardHero: View {
         name: String,
         fullName: String,
         teamId: String? = nil,
-        alternateNames: [String]
+        alternateNames: [String],
+        competition: MatchTeamCompetitionEntry?
     ) -> some View {
         VStack(spacing: 10) {
             Group {
@@ -1229,9 +1262,30 @@ private struct MatchDetailScoreboardHero: View {
                     .foregroundStyle(.white.opacity(0.62))
                     .accessibilityHidden(true)
             }
+            .frame(height: showsTeamCompetitions ? teamNameRowHeight : nil, alignment: .top)
+
+            if showsTeamCompetitions, let competition {
+                HStack(spacing: 5) {
+                    MatchTeamCompetitionBadge(
+                        competitionID: competition.competitionID,
+                        competitionName: competition.competitionName
+                    )
+
+                    Text(competition.competitionName)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.78))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                }
+                .frame(maxWidth: .infinity, minHeight: 18, alignment: .center)
+            }
 
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private func competitionEntry(for side: MatchCompetitionTeamSide) -> MatchTeamCompetitionEntry? {
+        teamCompetitionEntries.first { $0.side == side }
     }
 
     private func goalSummaryColumn(
@@ -1300,10 +1354,47 @@ private struct MatchDetailScoreboardHero: View {
 
     private func teamAccessibilityLabel(
         fullName: String,
-        goalSummaries: [MatchScoreboardGoalSummary]
+        goalSummaries: [MatchScoreboardGoalSummary],
+        competition: MatchTeamCompetitionEntry?
     ) -> String {
-        guard !goalSummaries.isEmpty else { return fullName }
-        return "\(fullName). Goals: \(goalSummaries.map(\.accessibilityText).joined(separator: ", "))"
+        var sections = [fullName]
+        if let competition {
+            sections.append(competition.competitionName)
+        }
+        if !goalSummaries.isEmpty {
+            sections.append("Goals: \(goalSummaries.map(\.accessibilityText).joined(separator: ", "))")
+        }
+        return sections.joined(separator: ". ")
+    }
+}
+
+private struct MatchTeamCompetitionBadge: View {
+    let competitionID: String?
+    let competitionName: String
+    @State private var cacheVersion = 0
+
+    var body: some View {
+        let _ = cacheVersion
+        Group {
+            if let image = CompetitionBadgeCache.shared.image(
+                competitionID: competitionID,
+                competitionName: competitionName
+            ) {
+                Image(uiImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+            } else {
+                Image(systemName: "trophy.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.78))
+            }
+        }
+        .frame(width: 14, height: 14)
+        .onReceive(NotificationCenter.default.publisher(for: CompetitionBadgeCache.badgesUpdatedNotification)) { _ in
+            cacheVersion &+= 1
+        }
+        .accessibilityHidden(true)
     }
 }
 

@@ -1,7 +1,26 @@
 import Testing
+import SwiftUI
 @testable import Top_Scores
 
 struct FixtureCalendarSummaryTests {
+    @MainActor
+    @Test func datePickerOnlyAllowsDatesWithFixtures() {
+        let coordinator = FixtureAvailableDatePicker.Coordinator(
+            selection: .constant(Date()),
+            availableDateKeys: ["2026-08-26"]
+        )
+        let selection = UICalendarSelectionSingleDate(delegate: coordinator)
+
+        #expect(coordinator.dateSelection(
+            selection,
+            canSelectDate: DateComponents(year: 2026, month: 8, day: 26)
+        ))
+        #expect(!coordinator.dateSelection(
+            selection,
+            canSelectDate: DateComponents(year: 2026, month: 8, day: 27)
+        ))
+    }
+
     @Test func competitionSummaries_filterToSelectionAndSortByImportance() {
         let day = FixtureCalendarDay(
             date: "2026-08-26",
