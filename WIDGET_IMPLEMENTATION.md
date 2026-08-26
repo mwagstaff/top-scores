@@ -28,7 +28,7 @@ All sizes dynamically adjust content to fit available space.
 
 #### Timeline Refresh Strategy
 - **Standard Interval**: 10 minutes when no live matches
-- **Live Match Interval**: 2 minutes when matches are in progress
+- **Live Match Interval**: 5 minutes when matches are in progress or have reached kick-off without a live status
 - Automatically switches between modes based on match status
 
 #### Background App Refresh
@@ -99,15 +99,15 @@ Enhanced `WidgetMatch` struct includes:
 1. **Main App** fetches matches from API
 2. **BackgroundRefreshManager** schedules background updates
 3. **SharedMatchesBridge** saves filtered + unfiltered matches to App Group
-4. **Widget** reads from shared container via `WidgetMatchDataLoader`
-5. **WidgetMatchPipeline** applies filters and groups by date
+4. **Widget** reads from the shared container and refreshes today’s started matches from the batch match-state API
+5. **WidgetMatchPipeline** applies filters and groups the refreshed matches by date
 6. **Widget Views** render matches with live scores
 7. **Timeline Provider** schedules next refresh based on match status
 
 ### Background Update Trigger
 - App entering background: Schedules BGAppRefreshTask
 - Task executes: Fetches data, updates cache, syncs to widgets
-- Widget timeline: Refreshes independently every 2-10 minutes
+- Widget timeline: Refreshes independently every 5-10 minutes, subject to WidgetKit’s system budget
 - Combined strategy ensures widgets stay current even when app is closed
 
 ### User Experience

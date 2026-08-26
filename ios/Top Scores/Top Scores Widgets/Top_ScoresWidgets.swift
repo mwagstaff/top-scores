@@ -93,6 +93,7 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
     let scoreStatus: String?
     let homeTeamId: String?
     let awayTeamId: String?
+    let matchDetailsID: String?
 
     init(
         date: String,
@@ -113,7 +114,8 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
         firstLegAwayScore: Int? = nil,
         scoreStatus: String?,
         homeTeamId: String? = nil,
-        awayTeamId: String? = nil
+        awayTeamId: String? = nil,
+        matchDetailsID: String? = nil
     ) {
         self.date = date
         self.time = time
@@ -134,6 +136,7 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
         self.scoreStatus = scoreStatus
         self.homeTeamId = homeTeamId
         self.awayTeamId = awayTeamId
+        self.matchDetailsID = matchDetailsID
     }
 
     var id: String {
@@ -255,7 +258,33 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
             firstLegAwayScore: firstLegAwayScore,
             scoreStatus: scoreStatus,
             homeTeamId: homeTeamId,
-            awayTeamId: awayTeamId
+            awayTeamId: awayTeamId,
+            matchDetailsID: matchDetailsID
+        )
+    }
+
+    func applying(_ state: WidgetMatchState) -> WidgetMatch {
+        WidgetMatch(
+            date: date,
+            time: time,
+            homeTeam: homeTeam,
+            awayTeam: awayTeam,
+            homeShortName: homeShortName,
+            awayShortName: awayShortName,
+            league: league,
+            leagueSubcategory: leagueSubcategory,
+            competitionWeight: competitionWeight,
+            tvChannels: tvChannels,
+            homeScore: state.homeScore ?? homeScore,
+            awayScore: state.awayScore ?? awayScore,
+            aggregateHomeScore: state.aggregateHomeScore ?? aggregateHomeScore,
+            aggregateAwayScore: state.aggregateAwayScore ?? aggregateAwayScore,
+            firstLegHomeScore: state.firstLegHomeScore ?? firstLegHomeScore,
+            firstLegAwayScore: state.firstLegAwayScore ?? firstLegAwayScore,
+            scoreStatus: state.scoreStatus ?? (state.inProgress == true ? "LIVE" : scoreStatus),
+            homeTeamId: homeTeamId,
+            awayTeamId: awayTeamId,
+            matchDetailsID: matchDetailsID
         )
     }
 
@@ -279,6 +308,31 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
         case scoreStatus = "score_status"
         case homeTeamId = "home_team_id"
         case awayTeamId = "away_team_id"
+        case matchDetailsID = "match_details_id"
+    }
+}
+
+private struct WidgetMatchState: Decodable {
+    let id: String
+    let homeScore: Int?
+    let awayScore: Int?
+    let aggregateHomeScore: Int?
+    let aggregateAwayScore: Int?
+    let firstLegHomeScore: Int?
+    let firstLegAwayScore: Int?
+    let scoreStatus: String?
+    let inProgress: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case homeScore = "home_score"
+        case awayScore = "away_score"
+        case aggregateHomeScore = "aggregate_home_score"
+        case aggregateAwayScore = "aggregate_away_score"
+        case firstLegHomeScore = "first_leg_home_score"
+        case firstLegAwayScore = "first_leg_away_score"
+        case scoreStatus = "score_status"
+        case inProgress = "in_progress"
     }
 }
 
@@ -293,6 +347,18 @@ private struct WidgetSharedMatchesPayload: Codable {
         case matches
         case lastUpdated
         case generatedAt
+    }
+
+    init(
+        snapshot: WidgetPreferencesSnapshot,
+        matches: [WidgetMatch],
+        lastUpdated: Date?,
+        generatedAt: Date
+    ) {
+        self.snapshot = snapshot
+        self.matches = matches
+        self.lastUpdated = lastUpdated
+        self.generatedAt = generatedAt
     }
 
     init(from decoder: Decoder) throws {
@@ -763,6 +829,102 @@ private enum WidgetMatchDataLoader {
             return nil
         }
     }
+
+    static func loadPayloadRefreshingToday() async -> WidgetSharedMatchesPayload? {
+        guard let payload = loadPayload() else { return nil }
+        return await WidgetMatchScoreRefresher.refreshToday(in: payload)
+    }
+}
+
+private enum WidgetMatchScoreRefresher {
+    private struct MatchStatesRequest: Encodable {
+        let ids: [String]
+    }
+
+    private static let session: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        configuration.timeoutIntervalForRequest = 8
+        configuration.timeoutIntervalForResource = 10
+        return URLSession(configuration: configuration)
+    }()
+
+    static func refreshToday(in payload: WidgetSharedMatchesPayload) async -> WidgetSharedMatchesPayload {
+        let calendar = Calendar.current
+        let now = Date()
+        let today = calendar.startOfDay(for: now)
+        let refreshWindowEnd = now.addingTimeInterval(5 * 60)
+        let matchIDs = Array(Set(payload.matches.compactMap { match -> String? in
+            guard !match.isFinished,
+                  let matchDate = WidgetMatchDateParser.shared.parse(date: match.date, time: "00:00"),
+                  calendar.isDate(calendar.startOfDay(for: matchDate), inSameDayAs: today),
+                  let kickoff = match.dateTime,
+                  kickoff <= refreshWindowEnd
+            else { return nil }
+
+            let trimmedID = match.matchDetailsID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            return trimmedID.isEmpty ? nil : trimmedID
+        })).sorted()
+
+        guard !matchIDs.isEmpty,
+              let baseURL = URL(string: payload.snapshot.apiBaseURL),
+              let url = statesURL(baseURL: baseURL)
+        else { return payload }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request.timeoutInterval = 8
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+
+        do {
+            request.httpBody = try JSONEncoder().encode(MatchStatesRequest(ids: matchIDs))
+            let (data, response) = try await session.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse,
+                  (200...299).contains(httpResponse.statusCode) else {
+                let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+                diagnosticLog("[Widget] score refresh failed status=\(status) ids=\(matchIDs.count)")
+                return payload
+            }
+
+            let states = try JSONDecoder().decode([WidgetMatchState].self, from: data)
+            let statesByID = Dictionary(uniqueKeysWithValues: states.map { ($0.id, $0) })
+            guard !statesByID.isEmpty else {
+                diagnosticLog("[Widget] score refresh returned no states ids=\(matchIDs.count)")
+                return payload
+            }
+
+            let refreshedMatches = payload.matches.map { match in
+                guard let matchID = match.matchDetailsID,
+                      let state = statesByID[matchID] else { return match }
+                return match.applying(state)
+            }
+            diagnosticLog("[Widget] score refresh succeeded requested=\(matchIDs.count) received=\(states.count)")
+            return WidgetSharedMatchesPayload(
+                snapshot: payload.snapshot,
+                matches: refreshedMatches,
+                lastUpdated: payload.lastUpdated,
+                generatedAt: payload.generatedAt
+            )
+        } catch {
+            diagnosticLog("[Widget] score refresh failed: %@", error.localizedDescription)
+            return payload
+        }
+    }
+
+    private static func statesURL(baseURL: URL) -> URL? {
+        let resolvedURL = ["matches", "states"].reduce(baseURL) { url, component in
+            url.appendingPathComponent(component)
+        }
+        var components = URLComponents(url: resolvedURL, resolvingAgainstBaseURL: false)
+        components?.queryItems = [
+            URLQueryItem(name: "summary_only", value: "true"),
+            URLQueryItem(name: "time_zone", value: TimeZone.current.identifier),
+        ]
+        return components?.url
+    }
 }
 
 private enum WidgetMatchPipeline {
@@ -950,6 +1112,9 @@ private struct TopScoresWidgetEntry: TimelineEntry {
 }
 
 private struct TopScoresWidgetProvider: TimelineProvider {
+    private static let liveRefreshInterval: TimeInterval = 5 * 60
+    private static let standardRefreshInterval: TimeInterval = 10 * 60
+
     func placeholder(in context: Context) -> TopScoresWidgetEntry {
         TopScoresWidgetEntry(date: Date(), days: sampleDays, lastUpdated: nil)
     }
@@ -959,23 +1124,22 @@ private struct TopScoresWidgetProvider: TimelineProvider {
     }
 
     func getTimeline(in context: Context, completion: @escaping (Timeline<TopScoresWidgetEntry>) -> Void) {
-        let entry = makeEntry(fallbackToSample: false)
-
-        // Determine refresh interval based on whether there are live matches
-        let hasLiveMatches = entry.days.contains { day in
-            day.matches.contains(where: \.isInProgress)
+        Task {
+            let payload = await WidgetMatchDataLoader.loadPayloadRefreshingToday()
+            let entry = makeEntry(payload: payload, fallbackToSample: false)
+            let nextRefresh = nextRefreshDate(for: entry)
+            completion(Timeline(entries: [entry], policy: .after(nextRefresh)))
         }
-
-        // Aggressive refresh for live matches: 30 seconds
-        // Standard refresh for non-live: 10 minutes
-        let refreshInterval: TimeInterval = hasLiveMatches ? 30 : 600
-        let nextRefresh = Date().addingTimeInterval(refreshInterval)
-
-        completion(Timeline(entries: [entry], policy: .after(nextRefresh)))
     }
 
     private func makeEntry(fallbackToSample: Bool) -> TopScoresWidgetEntry {
-        let payload = WidgetMatchDataLoader.loadPayload()
+        makeEntry(payload: WidgetMatchDataLoader.loadPayload(), fallbackToSample: fallbackToSample)
+    }
+
+    private func makeEntry(
+        payload: WidgetSharedMatchesPayload?,
+        fallbackToSample: Bool
+    ) -> TopScoresWidgetEntry {
         if let payload {
             let firstDate = payload.matches.first?.date ?? "none"
             diagnosticLog("[Widget] payload loaded: matches=\(payload.matches.count) firstDate=\(firstDate) lastUpdated=\(payload.lastUpdated?.description ?? "nil")")
@@ -990,6 +1154,26 @@ private struct TopScoresWidgetProvider: TimelineProvider {
         }
 
         return TopScoresWidgetEntry(date: Date(), days: days, lastUpdated: payload?.lastUpdated)
+    }
+
+    private func nextRefreshDate(for entry: TopScoresWidgetEntry, now: Date = Date()) -> Date {
+        let matches = entry.days.flatMap(\.matches)
+        let minimumRefreshDate = now.addingTimeInterval(Self.liveRefreshInterval)
+
+        if matches.contains(where: { match in
+            match.isInProgress || (match.dateTime.map { $0 <= now } ?? false)
+        }) {
+            return minimumRefreshDate
+        }
+
+        if let nextKickoff = matches.compactMap(\.dateTime).filter({ $0 > now }).min() {
+            return min(
+                now.addingTimeInterval(Self.standardRefreshInterval),
+                max(minimumRefreshDate, nextKickoff)
+            )
+        }
+
+        return now.addingTimeInterval(Self.standardRefreshInterval)
     }
 
     private var sampleDays: [WidgetMatchDay] {

@@ -668,88 +668,86 @@ function toNumber(value) {
   return value !== null && value !== undefined && value !== "" ? Number(value) : null;
 }
 
-const BSD_TWO_LEG_MAX_GAP_MS = 30 * 24 * 60 * 60 * 1000;
-
-function bsdTwoLegTieKey(event) {
-  if (!event || typeof event !== "object") return null;
-  const leagueId = String(event.league_id || "").trim();
-  const roundName = String(event.round_name || "").trim().toLowerCase();
-  const homeTeamId = String(event.home_team_id || "").trim();
-  const awayTeamId = String(event.away_team_id || "").trim();
-  if (!leagueId || !roundName || !homeTeamId || !awayTeamId || homeTeamId === awayTeamId) {
-    return null;
-  }
-  return `${leagueId}|${roundName}|${[homeTeamId, awayTeamId].sort().join("|")}`;
+function bsdEventScoreIncludingExtraTime(event) {
+  const home = toNumber(event && event.home_score);
+  const away = toNumber(event && event.away_score);
+  if (!Number.isFinite(home) || !Number.isFinite(away)) return null;
+  const extraTime = resolveBsdExtraTimeScore(event);
+  return {
+    home: home + (extraTime ? extraTime.home : 0),
+    away: away + (extraTime ? extraTime.away : 0),
+  };
 }
 
 function applyBsdTwoLegAggregates(events, matches) {
-  const groups = new Map();
-  (Array.isArray(events) ? events : []).forEach((event) => {
-    const key = bsdTwoLegTieKey(event);
-    const kickoffMs = Date.parse(String(event && event.event_date || ""));
-    if (!key || !Number.isFinite(kickoffMs)) return;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push({ event, kickoffMs });
-  });
-
+  const eventsById = new Map(
+    (Array.isArray(events) ? events : [])
+      .filter((event) => event && event.id != null)
+      .map((event) => [String(event.id), event])
+  );
   const matchesById = new Map(
     (Array.isArray(matches) ? matches : [])
       .filter((match) => match && match.id != null)
       .map((match) => [String(match.id), match])
   );
 
-  groups.forEach((entries) => {
-    entries.sort((lhs, rhs) => lhs.kickoffMs - rhs.kickoffMs);
-    entries.forEach((current, index) => {
-      const currentEvent = current.event;
-      const previous = entries
-        .slice(0, index)
-        .reverse()
-        .find((candidate) => {
-          const previousEvent = candidate.event;
-          if (current.kickoffMs - candidate.kickoffMs > BSD_TWO_LEG_MAX_GAP_MS) return false;
-          if (String(previousEvent.status || "").trim().toLowerCase() !== "finished") return false;
-          if (
-            currentEvent.season_id != null &&
-            previousEvent.season_id != null &&
-            String(currentEvent.season_id) !== String(previousEvent.season_id)
-          ) {
-            return false;
-          }
-          if (
-            currentEvent.round_number != null &&
-            previousEvent.round_number != null &&
-            String(currentEvent.round_number) !== String(previousEvent.round_number)
-          ) {
-            return false;
-          }
-          return (
-            String(currentEvent.home_team_id) === String(previousEvent.away_team_id) &&
-            String(currentEvent.away_team_id) === String(previousEvent.home_team_id)
-          );
-        });
-      if (!previous) return;
+  eventsById.forEach((event, eventId) => {
+    const previousLegId = String(event.previous_leg_event_id || "").trim();
+    if (!previousLegId || previousLegId === eventId) return;
+    const previousLeg = eventsById.get(previousLegId);
+    const match = matchesById.get(eventId);
+    if (!previousLeg || !match) return;
+    if (String(previousLeg.status || "").trim().toLowerCase() !== "finished") return;
+    for (const field of ["league_id", "season_id", "round_number"]) {
+      if (
+        event[field] != null &&
+        previousLeg[field] != null &&
+        String(event[field]) !== String(previousLeg[field])
+      ) {
+        return;
+      }
+    }
 
-      const previousHomeScore = toNumber(previous.event.home_score);
-      const previousAwayScore = toNumber(previous.event.away_score);
-      if (!Number.isFinite(previousHomeScore) || !Number.isFinite(previousAwayScore)) return;
+    const currentHomeTeamId = String(event.home_team_id || "").trim();
+    const currentAwayTeamId = String(event.away_team_id || "").trim();
+    const previousHomeTeamId = String(previousLeg.home_team_id || "").trim();
+    const previousAwayTeamId = String(previousLeg.away_team_id || "").trim();
+    const previousScore = bsdEventScoreIncludingExtraTime(previousLeg);
+    if (
+      !currentHomeTeamId ||
+      !currentAwayTeamId ||
+      !previousScore
+    ) {
+      return;
+    }
 
-      const match = matchesById.get(String(currentEvent.id));
-      if (!match) return;
-      const firstLegHomeScore = previousAwayScore;
-      const firstLegAwayScore = previousHomeScore;
-      const currentHomeScore = toNumber(match.home_score);
-      const currentAwayScore = toNumber(match.away_score);
+    let firstLegHomeScore;
+    let firstLegAwayScore;
+    if (
+      currentHomeTeamId === previousHomeTeamId &&
+      currentAwayTeamId === previousAwayTeamId
+    ) {
+      firstLegHomeScore = previousScore.home;
+      firstLegAwayScore = previousScore.away;
+    } else if (
+      currentHomeTeamId === previousAwayTeamId &&
+      currentAwayTeamId === previousHomeTeamId
+    ) {
+      firstLegHomeScore = previousScore.away;
+      firstLegAwayScore = previousScore.home;
+    } else {
+      return;
+    }
 
-      match.first_leg_home_score = firstLegHomeScore;
-      match.first_leg_away_score = firstLegAwayScore;
-      match.aggregate_home_score = firstLegHomeScore + (
-        Number.isFinite(currentHomeScore) ? currentHomeScore : 0
-      );
-      match.aggregate_away_score = firstLegAwayScore + (
-        Number.isFinite(currentAwayScore) ? currentAwayScore : 0
-      );
-    });
+    const currentScore = bsdEventScoreIncludingExtraTime(event);
+    match.first_leg_home_score = firstLegHomeScore;
+    match.first_leg_away_score = firstLegAwayScore;
+    match.aggregate_home_score = firstLegHomeScore + (
+      currentScore ? currentScore.home : 0
+    );
+    match.aggregate_away_score = firstLegAwayScore + (
+      currentScore ? currentScore.away : 0
+    );
   });
 
   return matches;
@@ -1488,13 +1486,17 @@ async function projectBsdMatchDetails(eventId, options = {}) {
   const eventDoc = options.eventDoc
     || await getBsdRecords("bsd_events", { _id: id }).then((r) => r[0] || null);
   if (!eventDoc || !eventDoc.payload) return null;
+  const previousLegId = String(eventDoc.payload.previous_leg_event_id || "").trim();
   const venueId = eventDoc.payload.venue_id != null ? String(eventDoc.payload.venue_id) : null;
-  const [incidentsDoc, lineupsDoc, broadcastsDoc, venueDoc, leagues] = await Promise.all([
+  const [incidentsDoc, lineupsDoc, broadcastsDoc, venueDoc, previousLegDoc, leagues] = await Promise.all([
     options.incidentsDoc || getBsdRecords("bsd_incidents", { _id: id }).then((r) => r[0] || null),
     options.lineupsDoc || getBsdRecords("bsd_lineups", { _id: id }).then((r) => r[0] || null),
     options.broadcastsDoc || getBsdRecords("bsd_broadcasts", { _id: id }).then((r) => r[0] || null),
     options.venueDoc || (venueId
       ? getBsdRecords("bsd_venues", { _id: venueId }).then((r) => r[0] || null)
+      : Promise.resolve(null)),
+    options.previousLegDoc || (previousLegId
+      ? getBsdRecords("bsd_events", { _id: previousLegId }).then((r) => r[0] || null)
       : Promise.resolve(null)),
     getBsdRecords("bsd_leagues"),
   ]);
@@ -1513,7 +1515,10 @@ async function projectBsdMatchDetails(eventId, options = {}) {
       ? new Map([[venueId, venueDoc.payload || null]])
       : new Map(),
   });
-  return match;
+  return applyBsdTwoLegAggregates(
+    [previousLegDoc && previousLegDoc.payload, eventDoc.payload].filter(Boolean),
+    [match]
+  )[0];
 }
 
 module.exports = {
@@ -1549,6 +1554,7 @@ module.exports = {
     bsdKickoffLightContext,
     bsdVenueDetails,
     fallbackKickoffLightContext,
+    bsdEventScoreIncludingExtraTime,
     applyBsdTwoLegAggregates,
     isCurrentSeasonEvent,
     buildCurrentBsdEventsFilter,

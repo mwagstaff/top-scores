@@ -38,6 +38,11 @@ struct Top_ScoresApp: App {
                 .task {
                     await stadiumBackdropStore.runHourlyRotation()
                 }
+                .task(id: preferences.apiBaseURL) {
+                    await TopTeamsPresetStore.shared.ensureFresh(
+                        apiBaseURL: preferences.apiBaseURL
+                    )
+                }
         }
         .onChange(of: scenePhase) { _, newPhase in
             diagnosticLog("[TopScoresApp] scenePhase changed to %@", String(describing: newPhase))
@@ -55,6 +60,11 @@ struct Top_ScoresApp: App {
                 LiveActivitySyncService.shared.reconcileOnForeground()
                 let snapshot = preferences.showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
                 matchesStore.refreshOnForeground(preferences: snapshot)
+                Task {
+                    await TopTeamsPresetStore.shared.ensureFresh(
+                        apiBaseURL: preferences.apiBaseURL
+                    )
+                }
                 scheduleDeferredStartupWork(snapshot: preferences.snapshot)
             default:
                 break

@@ -280,7 +280,7 @@ test("bsdEventToCanonicalMatch: canonicalises names, league, zoned date, status"
   assert.equal(compositeId, "2026-06-21|20:00|FIFA World Cup 2026|Cape Verde|Uruguay");
 });
 
-test("applyBsdTwoLegAggregates adds the first leg to a live reverse fixture", () => {
+test("applyBsdTwoLegAggregates follows previous_leg_event_id and includes extra time", () => {
   const firstLeg = {
     id: 224834,
     league_id: 7,
@@ -298,13 +298,18 @@ test("applyBsdTwoLegAggregates adds the first leg to a live reverse fixture", ()
   const secondLeg = {
     id: 224835,
     league_id: 7,
+    season_id: 1112,
+    round_number: 636,
     round_name: "Playoff round",
     home_team_id: 1404,
     away_team_id: 132,
     event_date: "2026-08-25T19:00:00Z",
-    status: "inprogress",
-    home_score: 5,
+    status: "finished",
+    home_score: 4,
     away_score: 1,
+    extra_time_score: { home: 1, away: 0 },
+    penalty_shootout: { home: 5, away: 4 },
+    previous_leg_event_id: 224834,
   };
   const matches = [
     { id: "224834", home_score: 3, away_score: 0 },
@@ -320,7 +325,7 @@ test("applyBsdTwoLegAggregates adds the first leg to a live reverse fixture", ()
   assert.equal(matches[1].aggregate_away_score, 4);
 });
 
-test("applyBsdTwoLegAggregates ignores reverse fixtures from different rounds", () => {
+test("applyBsdTwoLegAggregates does not infer a tie without previous_leg_event_id", () => {
   const firstMatch = {
     id: 1,
     league_id: 7,
@@ -337,7 +342,6 @@ test("applyBsdTwoLegAggregates ignores reverse fixtures from different rounds", 
   const laterMatch = {
     ...firstMatch,
     id: 2,
-    round_number: 636,
     home_team_id: 1404,
     away_team_id: 132,
     event_date: "2026-08-25T19:00:00Z",
@@ -351,6 +355,57 @@ test("applyBsdTwoLegAggregates ignores reverse fixtures from different rounds", 
 
   assert.equal(matches[1].aggregate_home_score, undefined);
   assert.equal(matches[1].first_leg_home_score, undefined);
+});
+
+test("applyBsdTwoLegAggregates ignores a link whose teams do not match", () => {
+  const firstLeg = {
+    id: 10,
+    home_team_id: 1,
+    away_team_id: 2,
+    home_score: 2,
+    away_score: 0,
+  };
+  const secondLeg = {
+    id: 11,
+    home_team_id: 3,
+    away_team_id: 1,
+    home_score: 1,
+    away_score: 1,
+    previous_leg_event_id: 10,
+  };
+  const matches = [{ id: "11", home_score: 1, away_score: 1 }];
+
+  applyBsdTwoLegAggregates([firstLeg, secondLeg], matches);
+
+  assert.equal(matches[0].aggregate_home_score, undefined);
+  assert.equal(matches[0].first_leg_home_score, undefined);
+});
+
+test("applyBsdTwoLegAggregates waits for the linked first leg to finish", () => {
+  const firstLeg = {
+    id: 20,
+    league_id: 7,
+    home_team_id: 1,
+    away_team_id: 2,
+    home_score: 1,
+    away_score: 0,
+    status: "inprogress",
+  };
+  const secondLeg = {
+    id: 21,
+    league_id: 7,
+    home_team_id: 2,
+    away_team_id: 1,
+    home_score: null,
+    away_score: null,
+    previous_leg_event_id: 20,
+  };
+  const matches = [{ id: "21", home_score: null, away_score: null }];
+
+  applyBsdTwoLegAggregates([firstLeg, secondLeg], matches);
+
+  assert.equal(matches[0].aggregate_home_score, undefined);
+  assert.equal(matches[0].first_leg_home_score, undefined);
 });
 
 test("bsdEventToCanonicalMatch: includes cached venue details only in the detail projection", () => {

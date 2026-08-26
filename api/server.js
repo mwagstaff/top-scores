@@ -20,7 +20,9 @@ const {
   SERVER_CONFIG,
   DEFAULT_COMPETITION_WEIGHTS,
   DEFAULT_COMPETITION_METADATA,
+  DEFAULT_TOP_TEAMS_CONFIG,
   COMPETITION_WEIGHTS_UPDATED_AT,
+  TOP_TEAMS_CONFIG_UPDATED_AT,
   TEAM_RANKING_SOURCE_MERGED,
   TEAM_RANKING_SOURCE_CLUBELO,
   TEAM_RANKING_SOURCE_FOOTBALLDATABASE,
@@ -109,6 +111,7 @@ const {
   loadTeamIdentityConfig,
   normalizeTeamIdentityName,
   canonicalTeamName,
+  teamIdentityNames,
   buildFantasyShortNameMappings,
 } = require("./team_identity");
 const {
@@ -1298,6 +1301,8 @@ let cachedClubEloTeams = [];
 let clubEloLastUpdated = null;
 let cachedFixtureViewFilterContext = null;
 let cachedFixtureViewFilterContextVersion = null;
+let cachedResolvedTopTeamsPreset = null;
+let cachedResolvedTopTeamsPresetVersion = null;
 let clubEloUpdating = false;
 let clubEloLastSuccessAt = null;
 let clubEloLastFailureAt = null;
@@ -7532,6 +7537,7 @@ const CLUB_ELO_NATIONAL_TEAM_NAME_EXTRAS = [
   "china",
   "chinese taipei",
   "colombia",
+  "comoros",
   "costa rica",
   "croatia",
   "cyprus",
@@ -15587,8 +15593,90 @@ const FIXTURE_VIEW_UEFA_TEAM_RULE_IDS = new Set([
   "rule:top-uefa-clubs",
   "rule:premier-league-teams",
 ]);
+const TOP_TEAMS_PRESET_ID = String(DEFAULT_TOP_TEAMS_CONFIG.id || "preset:top-teams");
+const TOP_TEAMS_CHAMPIONS_LEAGUE_ID = String(
+  DEFAULT_TOP_TEAMS_CONFIG.champions_league_competition_id || "uefa-champions-league"
+);
+const TOP_TEAMS_OTHER_UEFA_COMPETITION_IDS = new Set(
+  Array.isArray(DEFAULT_TOP_TEAMS_CONFIG.other_uefa_competition_ids)
+    ? DEFAULT_TOP_TEAMS_CONFIG.other_uefa_competition_ids.map(String)
+    : []
+);
+const TOP_TEAMS_HOME_ASSOCIATION_COUNTRY_CODES = new Set(
+  Array.isArray(DEFAULT_TOP_TEAMS_CONFIG.home_association_country_codes)
+    ? DEFAULT_TOP_TEAMS_CONFIG.home_association_country_codes.map((value) => String(value).toUpperCase())
+    : []
+);
+const TOP_TEAMS_CLUB_ELO_THRESHOLD = Number(
+  DEFAULT_TOP_TEAMS_CONFIG.club_elo_threshold || 1750
+);
 const TOP_UEFA_CLUB_ELO_RANK_CUTOFF = 40;
 const TOP_UEFA_CLUB_ELO_FALLBACK_SCORE = 1700;
+
+function configuredTopTeamsTeamMatches(teamName, entries) {
+  const normalizedTeam = normalizeFilterTeamName(teamName);
+  if (!normalizedTeam) return false;
+  return (Array.isArray(entries) ? entries : []).some((entry) => {
+    if (!entry || typeof entry !== "object") return false;
+    return [entry.name, ...(Array.isArray(entry.aliases) ? entry.aliases : [])]
+      .filter(Boolean)
+      .some((candidate) => normalizeFilterTeamName(candidate) === normalizedTeam);
+  });
+}
+
+function isChampionsLeagueQualifyingMatch(match) {
+  if (!match) return false;
+  const roundText = [match.league, match.league_subcategory]
+    .filter(Boolean)
+    .join(" ");
+  return /\bqualif(?:y|ying|ication|ier|iers)\b|\bplay[\s-]?offs?\b/i.test(roundText);
+}
+
+function clubEloRowMeetsTopTeamsThreshold(row) {
+  const elo = Number(row && (row.Elo ?? row.elo));
+  return Number.isFinite(elo) && elo >= TOP_TEAMS_CLUB_ELO_THRESHOLD;
+}
+
+function matchPassesTopTeamsPreset(match, context = {}) {
+  if (!match) return false;
+  const catalog = context.competitionCatalog || competitionCatalogLookup();
+  const competition = catalog.get(normalizeCompetitionFilterName(match.league));
+  const competitionID = competition ? competition.id : null;
+  const teamNames = [match.home_team, match.away_team];
+
+  if (teamNames.some((teamName) => context.isPremierLeagueTeam?.(teamName))) {
+    return true;
+  }
+  if (teamNames.some((teamName) => configuredTopTeamsTeamMatches(
+    teamName,
+    DEFAULT_TOP_TEAMS_CONFIG.international_teams
+  ))) {
+    return true;
+  }
+  if (teamNames.some((teamName) => configuredTopTeamsTeamMatches(
+    teamName,
+    DEFAULT_TOP_TEAMS_CONFIG.always_include_teams
+  ))) {
+    return true;
+  }
+
+  if (
+    competitionID === TOP_TEAMS_CHAMPIONS_LEAGUE_ID &&
+    !isChampionsLeagueQualifyingMatch(match)
+  ) {
+    return true;
+  }
+
+  const isConditionalUefaMatch =
+    competitionID === TOP_TEAMS_CHAMPIONS_LEAGUE_ID ||
+    TOP_TEAMS_OTHER_UEFA_COMPETITION_IDS.has(competitionID);
+  if (!isConditionalUefaMatch) return false;
+
+  return teamNames.some((teamName) =>
+    context.isTopTeamsHomeAssociationClub?.(teamName) ||
+    context.isTopTeamsMajorClub?.(teamName)
+  );
+}
 
 function fixtureViewTeamMatches(
   teamName,
@@ -15654,7 +15742,23 @@ function buildFixtureViewFilterContext(options = {}) {
     : currentPremierLeagueTeamsDatasetSnapshot().items;
   const clubEloIndex = buildClubEloCandidateIndex(clubEloTeams);
   const topClubByNormalizedName = new Map();
+  const clubEloMatchByNormalizedName = new Map();
   const teamCatalogSnapshot = options.teamCatalogSnapshot || currentTeamCatalogSnapshot();
+  const clubEloTeamForName = (teamName) => {
+    const normalizedName = normalizeFilterTeamName(teamName);
+    if (clubEloMatchByNormalizedName.has(normalizedName)) {
+      return clubEloMatchByNormalizedName.get(normalizedName);
+    }
+    const match = findBestClubEloMatch(
+      teamName,
+      clubEloTeams,
+      clubEloIndex,
+      manualMappings
+    );
+    const row = match && match.accepted ? match.team : null;
+    clubEloMatchByNormalizedName.set(normalizedName, row);
+    return row;
+  };
   return {
     competitionCatalog: competitionCatalogLookup(),
     teamCatalogByID: teamCatalogSnapshot.byID,
@@ -15667,16 +15771,21 @@ function buildFixtureViewFilterContext(options = {}) {
       if (topClubByNormalizedName.has(normalizedName)) {
         return topClubByNormalizedName.get(normalizedName);
       }
-      const match = findBestClubEloMatch(
-        teamName,
-        clubEloTeams,
-        clubEloIndex,
-        manualMappings
-      );
-      const isTopClub = Boolean(match && match.accepted && clubEloRowIsTopTeam(match.team));
+      const isTopClub = clubEloRowIsTopTeam(clubEloTeamForName(teamName));
       topClubByNormalizedName.set(normalizedName, isTopClub);
       return isTopClub;
     }),
+    clubEloTeamForName,
+    isTopTeamsMajorClub:
+      options.isTopTeamsMajorClub ||
+      ((teamName) => clubEloRowMeetsTopTeamsThreshold(clubEloTeamForName(teamName))),
+    isTopTeamsHomeAssociationClub:
+      options.isTopTeamsHomeAssociationClub ||
+      ((teamName) => {
+        const row = clubEloTeamForName(teamName);
+        const countryCode = String(row && (row.Country ?? row.country) || "").toUpperCase();
+        return TOP_TEAMS_HOME_ASSOCIATION_COUNTRY_CODES.has(countryCode);
+      }),
   };
 }
 
@@ -15701,6 +15810,160 @@ function currentFixtureViewFilterContext() {
   return cachedFixtureViewFilterContext;
 }
 
+function buildResolvedTopTeamsPreset() {
+  const premierLeagueDataset = currentPremierLeagueTeamsDatasetSnapshot();
+  const teamCatalogSnapshot = currentTeamCatalogSnapshot();
+  const version = [
+    TOP_TEAMS_CONFIG_UPDATED_AT || "unknown",
+    clubEloLastUpdated || "unknown",
+    cachedClubEloTeams.length,
+    premierLeagueDataset.updated_at || "unknown",
+    premierLeagueDataset.items.length,
+    teamCatalogSnapshot.updatedAt || "unknown",
+    teamCatalogSnapshot.teams.length,
+  ].join(":");
+  if (
+    cachedResolvedTopTeamsPreset &&
+    cachedResolvedTopTeamsPresetVersion === version
+  ) {
+    return cachedResolvedTopTeamsPreset;
+  }
+  const context = currentFixtureViewFilterContext();
+  const unconditionalTeams = new Map();
+  const conditionalUefaTeams = new Map();
+  const majorTeams = new Map();
+
+  const addTeam = (target, name, options = {}) => {
+    const trimmedName = String(name || "").trim();
+    if (!trimmedName) return;
+    const canonicalName = canonicalTeamName(trimmedName) || trimmedName;
+    const key = normalizeFilterTeamName(canonicalName);
+    if (!key) return;
+    const existing = target.get(key) || {
+      id: String(options.id || key.replace(/[^a-z0-9]+/g, "-")).replace(/^-+|-+$/g, ""),
+      name: canonicalName,
+      aliases: new Set(),
+      source_team_ids: new Set(),
+      elo: null,
+      country_code: null,
+    };
+    [
+      trimmedName,
+      ...teamIdentityNames(canonicalName),
+      ...(Array.isArray(options.aliases) ? options.aliases : []),
+    ].forEach((alias) => {
+      const trimmedAlias = String(alias || "").trim();
+      if (trimmedAlias && normalizeFilterTeamName(trimmedAlias) !== key) {
+        existing.aliases.add(trimmedAlias);
+      }
+    });
+    (Array.isArray(options.sourceTeamIDs) ? options.sourceTeamIDs : []).forEach((id) => {
+      const trimmedID = String(id || "").trim();
+      if (trimmedID) existing.source_team_ids.add(trimmedID);
+    });
+    const elo = Number(options.elo);
+    if (Number.isFinite(elo)) existing.elo = elo;
+    const countryCode = String(options.countryCode || "").trim().toUpperCase();
+    if (countryCode) existing.country_code = countryCode;
+    target.set(key, existing);
+  };
+
+  const addConfiguredTeams = (target, entries) => {
+    (Array.isArray(entries) ? entries : []).forEach((entry) => {
+      addTeam(target, entry && entry.name, {
+        aliases: entry && entry.aliases,
+      });
+    });
+  };
+  addConfiguredTeams(unconditionalTeams, DEFAULT_TOP_TEAMS_CONFIG.international_teams);
+  addConfiguredTeams(unconditionalTeams, DEFAULT_TOP_TEAMS_CONFIG.always_include_teams);
+  premierLeagueDataset.items.forEach((teamName) => addTeam(unconditionalTeams, teamName));
+
+  teamCatalogSnapshot.teams.forEach((team) => {
+    const names = [team.name, ...(Array.isArray(team.aliases) ? team.aliases : [])];
+    const isUnconditional = names.some((name) =>
+      context.isPremierLeagueTeam(name) ||
+      configuredTopTeamsTeamMatches(name, DEFAULT_TOP_TEAMS_CONFIG.international_teams) ||
+      configuredTopTeamsTeamMatches(name, DEFAULT_TOP_TEAMS_CONFIG.always_include_teams)
+    );
+    const row = context.clubEloTeamForName(team.name);
+    const isMajor = clubEloRowMeetsTopTeamsThreshold(row);
+    const countryCode = String(row && (row.Country ?? row.country) || "").toUpperCase();
+    const isHomeAssociation = TOP_TEAMS_HOME_ASSOCIATION_COUNTRY_CODES.has(countryCode);
+    const entryOptions = {
+      id: team.id,
+      aliases: [
+        ...(Array.isArray(team.aliases) ? team.aliases : []),
+        row && (row.Name || row.name || row.Club || row.club),
+      ].filter(Boolean),
+      sourceTeamIDs: team.source_team_ids,
+      elo: row && (row.Elo ?? row.elo),
+      countryCode,
+    };
+    if (isUnconditional) addTeam(unconditionalTeams, team.name, entryOptions);
+    if (isMajor || isHomeAssociation) addTeam(conditionalUefaTeams, team.name, entryOptions);
+    if (isMajor) addTeam(majorTeams, team.name, entryOptions);
+  });
+
+  cachedClubEloTeams.forEach((row) => {
+    const countryCode = String(row && (row.Country ?? row.country) || "").toUpperCase();
+    const isMajor = clubEloRowMeetsTopTeamsThreshold(row);
+    const isHomeAssociation = TOP_TEAMS_HOME_ASSOCIATION_COUNTRY_CODES.has(countryCode);
+    if (!isMajor && !isHomeAssociation) return;
+    const name = row && (row.Name || row.name || row.Club || row.club);
+    const options = {
+      elo: row && (row.Elo ?? row.elo),
+      countryCode,
+    };
+    addTeam(conditionalUefaTeams, name, options);
+    if (isMajor) addTeam(majorTeams, name, options);
+  });
+
+  const serializeTeams = (target, sortByElo = false) => Array.from(target.values())
+    .map((team) => ({
+      ...team,
+      aliases: Array.from(team.aliases).sort(compareInsensitive),
+      source_team_ids: Array.from(team.source_team_ids).sort(compareInsensitive),
+    }))
+    .sort((left, right) => {
+      if (sortByElo && left.elo !== right.elo) return (right.elo || 0) - (left.elo || 0);
+      return compareInsensitive(left.name, right.name);
+    });
+  const updatedAt = newestIsoTimestamp([
+    TOP_TEAMS_CONFIG_UPDATED_AT,
+    clubEloLastUpdated,
+    premierLeagueDataset.updated_at,
+    teamCatalogSnapshot.updatedAt,
+  ]);
+
+  const payload = {
+    schema_version: Number(DEFAULT_TOP_TEAMS_CONFIG.schema_version || 1),
+    id: TOP_TEAMS_PRESET_ID,
+    revision: String(DEFAULT_TOP_TEAMS_CONFIG.revision || "1"),
+    title: String(DEFAULT_TOP_TEAMS_CONFIG.title || "Top teams"),
+    club_elo_threshold: TOP_TEAMS_CLUB_ELO_THRESHOLD,
+    champions_league_competition_id: TOP_TEAMS_CHAMPIONS_LEAGUE_ID,
+    other_uefa_competition_ids: Array.from(TOP_TEAMS_OTHER_UEFA_COMPETITION_IDS),
+    qualifying_round_patterns: ["qualifying", "qualification", "playoff", "play-off", "play off"],
+    display_sections: Array.isArray(DEFAULT_TOP_TEAMS_CONFIG.display_sections)
+      ? DEFAULT_TOP_TEAMS_CONFIG.display_sections
+      : [],
+    unconditional_teams: serializeTeams(unconditionalTeams),
+    conditional_uefa_teams: serializeTeams(conditionalUefaTeams),
+    major_teams: serializeTeams(majorTeams, true),
+    updated_at: updatedAt || null,
+    sources: {
+      config_updated_at: TOP_TEAMS_CONFIG_UPDATED_AT || null,
+      club_elo_updated_at: clubEloLastUpdated || null,
+      premier_league_updated_at: premierLeagueDataset.updated_at || null,
+      team_catalog_updated_at: teamCatalogSnapshot.updatedAt || null,
+    },
+  };
+  cachedResolvedTopTeamsPreset = payload;
+  cachedResolvedTopTeamsPresetVersion = version;
+  return payload;
+}
+
 function fixtureViewOptionIDsForPreferences(preferences = {}) {
   if (preferences.showAllMatches === true) return [];
   const usesFavourites = preferences.fixtureAllMajorMatchesEnabled === true;
@@ -15711,11 +15974,16 @@ function fixtureViewOptionIDsForPreferences(preferences = {}) {
 }
 
 function matchPassesFixtureViewOptions(match, optionIDs, context = {}) {
-  const normalizedOptionIDs = Array.isArray(optionIDs)
+  let normalizedOptionIDs = Array.isArray(optionIDs)
     ? optionIDs.map((value) => String(value || "").trim()).filter(Boolean)
     : [];
   if (normalizedOptionIDs.length === 0 || normalizedOptionIDs.includes("scope:all")) {
     return true;
+  }
+  if (normalizedOptionIDs.includes(TOP_TEAMS_PRESET_ID)) {
+    if (matchPassesTopTeamsPreset(match, context)) return true;
+    normalizedOptionIDs = normalizedOptionIDs.filter((optionID) => optionID !== TOP_TEAMS_PRESET_ID);
+    if (normalizedOptionIDs.length === 0) return false;
   }
 
   const catalog = context.competitionCatalog || competitionCatalogLookup();
@@ -24314,6 +24582,24 @@ app.get(`${API_PREFIX}/competitions/weights`, async (_req, res) => {
   res.json(buildCompetitionWeightsPayload());
 });
 
+app.get(`${API_PREFIX}/match-view-presets/top-teams`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+  try {
+    await getBsdMatchesForServing();
+    const payload = buildResolvedTopTeamsPreset();
+    setLastModifiedHeaders(res, payload.updated_at);
+    res.set("X-Operational-Source", "server_config");
+    if (isNotModifiedRequest(req, payload.updated_at)) {
+      res.status(304).end();
+      return;
+    }
+    res.status(200).json(payload);
+  } catch (error) {
+    console.warn("Failed to serve top teams preset:", error.message || error);
+    res.status(500).json({ error: "Failed to load top teams preset." });
+  }
+});
+
 app.get(`${API_PREFIX}/teams/catalog`, async (req, res) => {
   setCacheOnlyHeaders(res);
   try {
@@ -31949,6 +32235,8 @@ module.exports = {
     buildSyntheticMatchDetailsId,
     parseMatchStatusMinute,
     normalizeTeamName,
+    findBestClubEloMatch,
+    findBestNationalEloMatch,
     normalizeTeamShortNameEntry,
     knownTeamLogoNameCandidates,
     extractTeamShortNameEntriesFromMatch,
@@ -31974,7 +32262,11 @@ module.exports = {
     matchIsMajorUefaClubKnockoutFixture,
     matchPassesCategoryFilters,
     clubEloRowIsTopTeam,
+    clubEloRowMeetsTopTeamsThreshold,
     buildFixtureViewFilterContext,
+    buildResolvedTopTeamsPreset,
+    isChampionsLeagueQualifyingMatch,
+    matchPassesTopTeamsPreset,
     matchPassesFixtureViewOptions,
     isListPayloadVisibleForMode,
     mergeClubEloFixtureMetadata,

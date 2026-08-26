@@ -503,6 +503,14 @@ struct APIClient {
         return try JSONDecoder().decode(CompetitionCatalogResponse.self, from: data)
     }
 
+    func fetchTopTeamsPreset() async throws -> TopTeamsPresetDefinition {
+        var request = try buildRequest(path: "match-view-presets/top-teams", queryItems: [])
+        request.timeoutInterval = 5
+        let (data, http) = try await performRequest(request, operation: "top_teams_preset")
+        try validateSuccess(http, data: data, operation: "top_teams_preset")
+        return try JSONDecoder().decode(TopTeamsPresetDefinition.self, from: data)
+    }
+
     func fetchTeamCatalog(
         query: String? = nil,
         competitionID: String? = nil,

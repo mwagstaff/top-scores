@@ -1337,6 +1337,174 @@ struct Top_ScoresTests {
         #expect(filtered.map(\.id) == [arsenal.id])
     }
 
+    @Test func fixtureBrowserSelection_premierLeaguePresetIncludesTeamsAcrossCompetitions() {
+        let competitions = [
+            CompetitionCatalogEntry(
+                id: "english-league-cup",
+                name: "EFL Cup",
+                aliases: ["Carabao Cup"],
+                weight: 80,
+                region: "england",
+                logoURL: nil
+            ),
+        ]
+        let newcastle = Match(
+            date: "2026-08-26",
+            time: "19:45",
+            homeTeam: "Newcastle United",
+            awayTeam: "West Bromwich Albion",
+            league: "EFL Cup",
+            tvChannels: []
+        )
+        let tottenham = Match(
+            date: "2026-08-26",
+            time: "19:45",
+            homeTeam: "Tottenham Hotspur",
+            awayTeam: "Charlton Athletic",
+            league: "EFL Cup",
+            tvChannels: []
+        )
+        let everton = Match(
+            date: "2026-08-26",
+            time: "19:45",
+            homeTeam: "Preston North End",
+            awayTeam: "Everton",
+            league: "EFL Cup",
+            tvChannels: []
+        )
+        let nonPremierLeague = Match(
+            date: "2026-08-26",
+            time: "19:45",
+            homeTeam: "Coventry City",
+            awayTeam: "West Bromwich Albion",
+            league: "EFL Cup",
+            tvChannels: []
+        )
+
+        let filtered = FixtureBrowseSelectionResolver.filterMatches(
+            [newcastle, tottenham, everton, nonPremierLeague],
+            topMatchesOnly: false,
+            selectedCompetitionIDs: [],
+            competitions: competitions,
+            fixtureViewOptionIDs: FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs,
+            includePostponed: false
+        )
+
+        #expect(filtered.map(\.id) == [newcastle.id, tottenham.id, everton.id])
+    }
+
+    @Test func fixtureBrowserSelection_topTeamsUsesCachedServerDefinition() {
+        let competitions = [
+            CompetitionCatalogEntry(
+                id: "uefa-champions-league",
+                name: "UEFA Champions League",
+                aliases: [],
+                weight: 100,
+                region: "europe",
+                logoURL: nil
+            ),
+            CompetitionCatalogEntry(
+                id: "uefa-europa-league",
+                name: "UEFA Europa League",
+                aliases: [],
+                weight: 90,
+                region: "europe",
+                logoURL: nil
+            ),
+            CompetitionCatalogEntry(
+                id: "serie-a",
+                name: "Serie A",
+                aliases: [],
+                weight: 80,
+                region: "italy",
+                logoURL: nil
+            ),
+            CompetitionCatalogEntry(
+                id: "international-friendly",
+                name: "International Friendly",
+                aliases: [],
+                weight: 50,
+                region: "international",
+                logoURL: nil
+            ),
+        ]
+        let team: (String, [String]) -> TopTeamsPresetTeam = { name, aliases in
+            TopTeamsPresetTeam(
+                id: name.lowercased().replacingOccurrences(of: " ", with: "-"),
+                name: name,
+                aliases: aliases,
+                sourceTeamIDs: [],
+                elo: nil,
+                countryCode: nil
+            )
+        }
+        let definition = TopTeamsPresetDefinition(
+            schemaVersion: 1,
+            id: FixtureViewOptionID.topTeamsPreset,
+            revision: "test",
+            title: "Top teams",
+            clubEloThreshold: 1750,
+            championsLeagueCompetitionID: "uefa-champions-league",
+            otherUEFACompetitionIDs: ["uefa-europa-league"],
+            qualifyingRoundPatterns: ["qualifying", "playoff", "play-off"],
+            displaySections: [],
+            unconditionalTeams: [team("Republic of Ireland", ["Ireland"])],
+            conditionalUEFATeams: [
+                team("Celtic", ["Celtic FC"]),
+                team("Juventus", ["Juventus FC"]),
+            ],
+            majorTeams: [team("Juventus", ["Juventus FC"])],
+            updatedAt: nil,
+            sources: nil
+        )
+        let matcher = TopTeamsPresetMatcher(definition: definition)
+        let leaguePhase = Match(
+            date: "2026-09-16", time: "20:00",
+            homeTeam: "Basel", awayTeam: "Young Boys",
+            league: "UEFA Champions League", leagueSubcategory: "League Phase",
+            tvChannels: []
+        )
+        let minorQualifier = Match(
+            date: "2026-08-20", time: "20:00",
+            homeTeam: "Basel", awayTeam: "Young Boys",
+            league: "UEFA Champions League Qualifying",
+            tvChannels: []
+        )
+        let ukQualifier = Match(
+            date: "2026-08-20", time: "20:00",
+            homeTeam: "Celtic", awayTeam: "Basel",
+            league: "UEFA Champions League", leagueSubcategory: "Playoff round",
+            tvChannels: []
+        )
+        let majorEuropa = Match(
+            date: "2026-10-01", time: "20:00",
+            homeTeam: "Juventus", awayTeam: "Basel",
+            league: "UEFA Europa League", tvChannels: []
+        )
+        let majorDomestic = Match(
+            date: "2026-10-04", time: "19:45",
+            homeTeam: "Juventus", awayTeam: "Udinese",
+            league: "Serie A", tvChannels: []
+        )
+        let ireland = Match(
+            date: "2026-10-08", time: "19:45",
+            homeTeam: "Ireland", awayTeam: "Japan",
+            league: "International Friendly", tvChannels: []
+        )
+
+        let filtered = FixtureBrowseSelectionResolver.filterMatches(
+            [leaguePhase, minorQualifier, ukQualifier, majorEuropa, majorDomestic, ireland],
+            topMatchesOnly: false,
+            selectedCompetitionIDs: [],
+            competitions: competitions,
+            fixtureViewOptionIDs: Set([FixtureViewOptionID.topTeamsPreset]),
+            includePostponed: false,
+            topTeamsMatcher: matcher
+        )
+
+        #expect(filtered.map(\.id) == [leaguePhase.id, ukQualifier.id, majorEuropa.id, ireland.id])
+    }
+
     @Test func fixtureBrowserSelection_resolvesSwipeAndNextMatchNavigation() {
         let days = [
             FixtureCalendarDay(

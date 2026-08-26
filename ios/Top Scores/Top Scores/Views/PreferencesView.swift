@@ -5,6 +5,7 @@ import UIKit
 
 private enum FixturePreferenceMode: String, CaseIterable, Identifiable {
     case favourites
+    case topTeams
     case all
     case custom
 
@@ -13,7 +14,24 @@ private enum FixturePreferenceMode: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .favourites: return "Favourites"
+        case .topTeams: return "Top teams"
         case .all: return "All"
+        case .custom: return "Custom"
+        }
+    }
+}
+
+private enum NotificationCoverageMode: String, CaseIterable, Identifiable {
+    case favourites
+    case topTeams
+    case custom
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .favourites: return "Favourites"
+        case .topTeams: return "Top teams"
         case .custom: return "Custom"
         }
     }
@@ -60,6 +78,7 @@ struct PreferencesView: View {
 
     @EnvironmentObject private var preferences: PreferencesStore
     @StateObject private var viewModel = PreferencesViewModel()
+    @ObservedObject private var topTeamsPresetStore = TopTeamsPresetStore.shared
     #if DEBUG
     @ObservedObject private var fixtureLoadDiagnostics = FixtureLoadDiagnosticsStore.shared
     #endif
@@ -72,6 +91,7 @@ struct PreferencesView: View {
     @State private var testNotificationStatusIsError = false
     @State private var predictionDebugStatusMessage: String?
     @State private var deviceIDDebugStatusMessage: String?
+    @State private var isMajorTeamsExpanded = false
 
     var body: some View {
         Group {
@@ -84,7 +104,11 @@ struct PreferencesView: View {
             }
         }
         .task {
-            await reloadVisibleCatalogs(baseURL: preferences.apiBaseURL)
+            async let catalogs: Void = reloadVisibleCatalogs(baseURL: preferences.apiBaseURL)
+            async let topTeams: Void = topTeamsPresetStore.ensureFresh(
+                apiBaseURL: preferences.apiBaseURL
+            )
+            _ = await (catalogs, topTeams)
         }
         .onAppear {
             let openedAt = Date()
@@ -138,11 +162,15 @@ struct PreferencesView: View {
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
 
-                            if fixturePreferenceModeBinding.wrappedValue != .all {
+                            if [.favourites, .custom].contains(fixturePreferenceModeBinding.wrappedValue) {
                                 fixtureViewOptionPicker(
                                     editingFavourites: fixturePreferenceModeBinding.wrappedValue == .favourites
                                 )
                             }
+                        }
+
+                        if fixturePreferenceModeBinding.wrappedValue == .topTeams {
+                            topTeamsInformationSection
                         }
 
                         Section("Notifications") {
@@ -152,12 +180,13 @@ struct PreferencesView: View {
                                 .foregroundStyle(.secondary)
 
                             if !preferences.notificationMatchesFixturesEnabled {
-                                Picker("Match coverage", selection: notificationAllMajorMatchesBinding) {
-                                    Text("Favourites").tag(true)
-                                    Text("Custom").tag(false)
+                                Picker("Match coverage", selection: notificationCoverageModeBinding) {
+                                    ForEach(NotificationCoverageMode.allCases) { mode in
+                                        Text(mode.title).tag(mode)
+                                    }
                                 }
 
-                                if !preferences.notificationAllMajorMatchesEnabled {
+                                if notificationCoverageModeBinding.wrappedValue == .custom {
                                     competitionPicker(
                                         search: $notificationLeagueSearch,
                                         selectionIsActive: notificationLeagueIsSelected,
@@ -719,17 +748,68 @@ struct PreferencesView: View {
         )
     }
 
+    private var topTeamsInformationSection: some View {
+        let preset = topTeamsPresetStore.preset
+        return Section("Top teams includes") {
+            ForEach(Array(preset.displaySections.enumerated()), id: \.offset) { _, description in
+                Label(description, systemImage: "checkmark.circle.fill")
+                    .font(.subheadline)
+            }
+
+            DisclosureGroup(isExpanded: $isMajorTeamsExpanded) {
+                ForEach(preset.majorTeams) { team in
+                    HStack(spacing: 10) {
+                        MajorTeamLogo(team: team)
+                        Text(team.name)
+                        Spacer()
+                        if let elo = team.elo {
+                            Text(String(Int(elo.rounded())))
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                                .accessibilityLabel("Club Elo \(Int(elo.rounded()))")
+                        }
+                    }
+                }
+            } label: {
+                Text("Major teams (\(preset.majorTeams.count))")
+            }
+
+            LabeledContent("Club Elo threshold") {
+                Text(String(Int(preset.clubEloThreshold.rounded())))
+                    .monospacedDigit()
+            }
+
+            if topTeamsPresetStore.isRefreshing {
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("Updating server-defined team list…")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
     private var fixturePreferenceModeBinding: Binding<FixturePreferenceMode> {
         Binding(
             get: {
                 if preferences.showAllMatches { return .all }
+                if Set(preferences.selectedFixtureViewOptionIDs) == Set([FixtureViewOptionID.topTeamsPreset]),
+                   !preferences.fixtureAllMajorMatchesEnabled {
+                    return .topTeams
+                }
                 return preferences.fixtureAllMajorMatchesEnabled ? .favourites : .custom
             },
             set: { mode in
                 preferences.fixtureAllMajorMatchesEnabled = mode == .favourites
                 preferences.showAllMatches = mode == .all
-                preferences.competitionFilterEnabled = mode == .custom
-                if mode == .custom, preferences.selectedFixtureViewOptionIDs.isEmpty {
+                preferences.competitionFilterEnabled = mode == .custom || mode == .topTeams
+                if mode == .topTeams {
+                    preferences.selectedFixtureViewOptionIDs = [FixtureViewOptionID.topTeamsPreset]
+                }
+                if mode == .custom,
+                   preferences.selectedFixtureViewOptionIDs.isEmpty ||
+                    Set(preferences.selectedFixtureViewOptionIDs) == Set([FixtureViewOptionID.topTeamsPreset]) {
                     preferences.selectedFixtureViewOptionIDs = preferences.favouriteFixtureViewOptionIDs
                         .filter { $0 != FixtureViewOptionID.all }
                 }
@@ -742,6 +822,8 @@ struct PreferencesView: View {
         switch fixturePreferenceModeBinding.wrappedValue {
         case .favourites:
             return "Edit the saved leagues, teams and rivalry fixtures shown in Favourites."
+        case .topTeams:
+            return "Show featured clubs, home internationals and selected European matches."
         case .all:
             return "Show fixtures from every available competition."
         case .custom:
@@ -749,15 +831,28 @@ struct PreferencesView: View {
         }
     }
 
-    private var notificationAllMajorMatchesBinding: Binding<Bool> {
+    private var notificationCoverageModeBinding: Binding<NotificationCoverageMode> {
         Binding(
-            get: { preferences.notificationAllMajorMatchesEnabled },
-            set: { enabled in
-                preferences.notificationAllMajorMatchesEnabled = enabled
-                preferences.notificationPremierLeagueTeamsOnly = enabled
-                preferences.notificationMajorUEFAClubGamesEnabled = enabled
-                preferences.notificationHomeNationsFilterEnabled = enabled
-                preferences.notificationMajorTournamentsFilterEnabled = enabled
+            get: {
+                if preferences.notificationAllMajorMatchesEnabled { return .favourites }
+                if Set(preferences.selectedNotificationViewOptionIDs) == Set([FixtureViewOptionID.topTeamsPreset]) {
+                    return .topTeams
+                }
+                return .custom
+            },
+            set: { mode in
+                let usesFavourites = mode == .favourites
+                preferences.notificationAllMajorMatchesEnabled = usesFavourites
+                preferences.notificationPremierLeagueTeamsOnly = usesFavourites
+                preferences.notificationMajorUEFAClubGamesEnabled = usesFavourites
+                preferences.notificationHomeNationsFilterEnabled = usesFavourites
+                preferences.notificationMajorTournamentsFilterEnabled = usesFavourites
+                if mode == .topTeams {
+                    preferences.selectedNotificationViewOptionIDs = [FixtureViewOptionID.topTeamsPreset]
+                } else if mode == .custom,
+                          Set(preferences.selectedNotificationViewOptionIDs) == Set([FixtureViewOptionID.topTeamsPreset]) {
+                    preferences.selectedNotificationViewOptionIDs = []
+                }
                 AppMetricsService.shared.fireActivity("pref_notifications_all_major_matches_toggle", screen: "preferences", apiBaseURL: preferences.apiBaseURL)
             }
         )
@@ -1132,6 +1227,30 @@ private struct NotificationEventToggle: View {
                 }
             }
         ))
+    }
+}
+
+private struct MajorTeamLogo: View {
+    let team: TopTeamsPresetTeam
+
+    var body: some View {
+        Group {
+            if let image = LogoResolver.shared.image(
+                for: team.name,
+                alternateNames: team.aliases
+            ) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Image(systemName: "shield.fill")
+                    .resizable()
+                    .scaledToFit()
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 28, height: 28)
+        .accessibilityHidden(true)
     }
 }
 

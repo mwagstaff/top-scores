@@ -68,6 +68,9 @@ const {
     matchIsMajorGameOfInterest,
     matchIsMajorTournament,
     matchPassesCategoryFilters,
+    isChampionsLeagueQualifyingMatch,
+    matchPassesTopTeamsPreset,
+    matchPassesFixtureViewOptions,
     isListPayloadVisibleForMode,
     mergeClubEloFixtureMetadata,
     operationalMatchSortDesc,
@@ -1471,6 +1474,69 @@ test("matchPassesCategoryFilters fails closed when the current Premier League da
       }
     ),
     false
+  );
+});
+
+test("top teams includes Champions League league-phase matches but gates qualifying rounds", () => {
+  const context = {
+    isPremierLeagueTeam: () => false,
+    isTopTeamsHomeAssociationClub: (teamName) => teamName === "Celtic",
+    isTopTeamsMajorClub: (teamName) => teamName === "Juventus",
+  };
+  const leaguePhase = {
+    league: "UEFA Champions League",
+    league_subcategory: "League Phase",
+    home_team: "Slavia Prague",
+    away_team: "Young Boys",
+  };
+  const minorQualifier = {
+    ...leaguePhase,
+    league_subcategory: "Third qualifying round",
+  };
+  const ukQualifier = {
+    ...minorQualifier,
+    home_team: "Celtic",
+  };
+  const majorQualifier = {
+    ...minorQualifier,
+    away_team: "Juventus",
+  };
+
+  assert.equal(isChampionsLeagueQualifyingMatch(leaguePhase), false);
+  assert.equal(isChampionsLeagueQualifyingMatch(minorQualifier), true);
+  assert.equal(matchPassesTopTeamsPreset(leaguePhase, context), true);
+  assert.equal(matchPassesTopTeamsPreset(minorQualifier, context), false);
+  assert.equal(matchPassesTopTeamsPreset(ukQualifier, context), true);
+  assert.equal(matchPassesTopTeamsPreset(majorQualifier, context), true);
+});
+
+test("top teams applies unconditional and conditional inclusion rules", () => {
+  const context = {
+    isPremierLeagueTeam: (teamName) => teamName === "Everton",
+    isTopTeamsHomeAssociationClub: (teamName) => teamName === "Shamrock Rovers",
+    isTopTeamsMajorClub: (teamName) => teamName === "AC Milan",
+  };
+  const match = (league, home_team, away_team, league_subcategory = null) => ({
+    league,
+    league_subcategory,
+    home_team,
+    away_team,
+  });
+
+  assert.equal(matchPassesTopTeamsPreset(match("EFL Cup", "Preston North End", "Everton"), context), true);
+  assert.equal(matchPassesTopTeamsPreset(match("International Friendly", "Ireland", "Japan"), context), true);
+  assert.equal(matchPassesTopTeamsPreset(match("La Liga", "Real Madrid", "Getafe"), context), true);
+  assert.equal(matchPassesTopTeamsPreset(match("UEFA Europa League", "Shamrock Rovers", "Basel"), context), true);
+  assert.equal(matchPassesTopTeamsPreset(match("UEFA Conference League", "AC Milan", "Basel"), context), true);
+  assert.equal(matchPassesTopTeamsPreset(match("UEFA Europa League", "Basel", "Young Boys"), context), false);
+  assert.equal(matchPassesTopTeamsPreset(match("Serie A", "AC Milan", "Udinese"), context), false);
+  assert.equal(
+    matchPassesFixtureViewOptions(
+      match("EFL Cup", "Preston North End", "Everton"),
+      ["preset:top-teams"],
+      context
+    ),
+    true
   );
 });
 

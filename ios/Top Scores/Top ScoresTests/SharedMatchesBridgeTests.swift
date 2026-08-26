@@ -71,6 +71,7 @@ struct SharedMatchesBridgeTests {
             homeTeam: "Visible Home",
             awayTeam: "Visible Away",
             league: "Selected League",
+            matchDetailsID: "12345",
             tvChannels: []
         )
         let unfilteredMatch = Match(
@@ -91,6 +92,7 @@ struct SharedMatchesBridgeTests {
         )
 
         #expect(payload.matches.map(\.homeTeam) == [visibleMatch.homeTeam])
+        #expect(payload.matches.first?.matchDetailsIDValue == "12345")
     }
 
     private func makeSnapshot(showAllMatches: Bool) -> PreferencesSnapshot {

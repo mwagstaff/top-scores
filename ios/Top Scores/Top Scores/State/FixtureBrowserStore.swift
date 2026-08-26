@@ -280,7 +280,8 @@ nonisolated enum FixtureBrowseSelectionResolver {
         competitions: [CompetitionCatalogEntry],
         fixtureViewOptionIDs: Set<String> = [],
         showAllMatches: Bool = false,
-        includePostponed: Bool
+        includePostponed: Bool,
+        topTeamsMatcher: TopTeamsPresetMatcher = TopTeamsPresetMatcher(definition: .fallback)
     ) -> [Match] {
         let displayableMatches: [Match]
         #if DEBUG
@@ -292,6 +293,21 @@ nonisolated enum FixtureBrowseSelectionResolver {
         let competitionFiltered: [Match]
         if showAllMatches {
             competitionFiltered = displayableMatches
+        } else if fixtureViewOptionIDs == Set([FixtureViewOptionID.topTeamsPreset]) {
+            let lookup = competitionLookup(competitions)
+            competitionFiltered = displayableMatches.filter { match in
+                topTeamsMatcher.matches(
+                    match,
+                    competitionID: topTeamsCompetitionID(
+                        for: match,
+                        competitionLookup: lookup
+                    )
+                )
+            }
+        } else if fixtureViewOptionIDs == FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs {
+            competitionFiltered = displayableMatches.filter(
+                MatchesStore.matchIncludesPremierLeagueTeam
+            )
         } else if !fixtureViewOptionIDs.isEmpty {
             let lookup = competitionLookup(competitions)
             competitionFiltered = displayableMatches.filter { match in
@@ -330,6 +346,19 @@ nonisolated enum FixtureBrowseSelectionResolver {
             }
         }
         return lookup
+    }
+
+    private static func topTeamsCompetitionID(
+        for match: Match,
+        competitionLookup: [String: String]
+    ) -> String? {
+        let leagueKey = normalizedKey(match.league)
+        if let exact = competitionLookup[leagueKey] { return exact }
+        if leagueKey.contains("champions league") { return "uefa-champions-league" }
+        if leagueKey.contains("europa league") { return "uefa-europa-league" }
+        if leagueKey.contains("conference league") { return "uefa-conference-league" }
+        if leagueKey.contains("uefa super cup") { return "uefa-super-cup" }
+        return nil
     }
 
     private static let fixtureTeamAliases: [String: Set<String>] = [
@@ -518,9 +547,18 @@ final class FixtureBrowserStore: ObservableObject {
     let pageCache = FixtureBrowsePageCache()
 
     private let apiSession: URLSession?
+    private var topTeamsMatcher: TopTeamsPresetMatcher
+    private var topTeamsPresetCancellable: AnyCancellable?
 
     init(apiSession: URLSession? = nil) {
         self.apiSession = apiSession
+        let presetStore = TopTeamsPresetStore.shared
+        topTeamsMatcher = TopTeamsPresetMatcher(definition: presetStore.preset)
+        topTeamsPresetCancellable = presetStore.$preset
+            .dropFirst()
+            .sink { [weak self] preset in
+                self?.applyTopTeamsPreset(preset)
+            }
     }
 
     var cachedMatchesByDate: [String: [Match]] {
@@ -1284,7 +1322,14 @@ final class FixtureBrowserStore: ObservableObject {
     private func calendarRequiresMatchLevelFiltering(
         _ snapshot: PreferencesSnapshot
     ) -> Bool {
-        snapshot.effectiveFixtureViewOptionIDs.contains { optionID in
+        let optionIDs = Set(snapshot.effectiveFixtureViewOptionIDs)
+        if optionIDs == Set([FixtureViewOptionID.topTeamsPreset]) {
+            return true
+        }
+        if optionIDs == FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs {
+            return true
+        }
+        return optionIDs.contains { optionID in
             FixtureViewOptionID.teamStableID(from: optionID) != nil ||
                 optionID.hasPrefix("rivalry:")
         }
@@ -1308,8 +1353,20 @@ final class FixtureBrowserStore: ObservableObject {
             competitions: competitions,
             fixtureViewOptionIDs: Set(snapshot.effectiveFixtureViewOptionIDs),
             showAllMatches: snapshot.fixtureViewShowsAll,
-            includePostponed: snapshot.showPostponedGames
+            includePostponed: snapshot.showPostponedGames,
+            topTeamsMatcher: topTeamsMatcher
         )
+    }
+
+    private func applyTopTeamsPreset(_ preset: TopTeamsPresetDefinition) {
+        topTeamsMatcher = TopTeamsPresetMatcher(definition: preset)
+        guard let snapshot,
+              Set(snapshot.effectiveFixtureViewOptionIDs) == Set([FixtureViewOptionID.topTeamsPreset]) else {
+            return
+        }
+        recomputeAvailableDays(keepCurrentDate: true)
+        rebuildCachedMatchesByDate()
+        visibleMatches = selectedDateKey.flatMap { pageCache.matchesByDate[$0] } ?? []
     }
 
     private func persistCache() {

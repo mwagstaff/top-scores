@@ -2070,6 +2070,14 @@ struct FixtureCompetitionDockView: View {
             )
             Divider().padding(.leading, 58)
             fixtureFavouritesActionRow(
+                title: "Show top teams",
+                subtitle: "Featured clubs, internationals and European matches",
+                icon: .system("trophy.fill"),
+                isSelected: isTopTeamsPresetSelected,
+                action: selectTopTeams
+            )
+            Divider().padding(.leading, 58)
+            fixtureFavouritesActionRow(
                 title: "Show all",
                 subtitle: "Include every competition",
                 icon: .system("globe"),
@@ -2107,14 +2115,22 @@ struct FixtureCompetitionDockView: View {
     private var fixtureViewOptionsSymbol: String {
         if preferences.fixtureAllMajorMatchesEnabled { return "star.fill" }
         if preferences.showAllMatches { return "globe" }
+        if isTopTeamsPresetSelected { return "trophy.fill" }
         return "slider.horizontal.3"
     }
 
     private var fixtureViewOptionsAccessibilityValue: String {
         if preferences.fixtureAllMajorMatchesEnabled { return "Favourites selected" }
         if preferences.showAllMatches { return "All competitions selected" }
+        if isTopTeamsPresetSelected { return "Top teams selected" }
         if isPremierLeagueMatchesPresetSelected { return "Premier League teams selected" }
         return "Custom view selected"
+    }
+
+    private var isTopTeamsPresetSelected: Bool {
+        !preferences.fixtureAllMajorMatchesEnabled &&
+        !preferences.showAllMatches &&
+        Set(preferences.selectedFixtureViewOptionIDs) == Set([FixtureViewOptionID.topTeamsPreset])
     }
 
     private var isPremierLeagueMatchesPresetSelected: Bool {
@@ -2535,6 +2551,9 @@ struct FixtureCompetitionDockView: View {
         let hasChanges = !preferences.showAllMatches
         fixturePickerDraftOptionIDs = nil
         fixturePickerBaselineOptionIDs = nil
+        withAnimation(accessibilityReduceMotion ? nil : FootballVisualStyle.easeOut) {
+            coordinator.clearSaveFixtureViewPresentation()
+        }
         withAnimation(.easeOut(duration: 0.2)) {
             expandedFixtureRegionID = nil
             isFixtureFavouritesMenuExpanded = false
@@ -2551,7 +2570,6 @@ struct FixtureCompetitionDockView: View {
             preferences: preferences.snapshot,
             resetSelectedDate: true
         )
-        updateFixtureSavePrompt()
         AppMetricsService.shared.fireActivity(
             "fixture_competition_all",
             screen: MatchesViewMode.fixtures.rawValue,
@@ -2583,12 +2601,18 @@ struct FixtureCompetitionDockView: View {
         let hasChanges = !isPremierLeagueMatchesPresetSelected
         fixturePickerDraftOptionIDs = nil
         fixturePickerBaselineOptionIDs = nil
+        withAnimation(accessibilityReduceMotion ? nil : FootballVisualStyle.easeOut) {
+            coordinator.clearSaveFixtureViewPresentation()
+        }
         withAnimation(.easeOut(duration: 0.2)) {
             expandedFixtureRegionID = nil
             isFixtureFavouritesMenuExpanded = false
         }
         guard hasChanges else { return }
-        applyCustomFixtureView(FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs)
+        applyCustomFixtureView(
+            FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs,
+            shouldOfferSavePrompt: false
+        )
         AppMetricsService.shared.fireActivity(
             "fixture_premier_league_matches_preset",
             screen: MatchesViewMode.fixtures.rawValue,
@@ -2596,7 +2620,33 @@ struct FixtureCompetitionDockView: View {
         )
     }
 
-    private func applyCustomFixtureView(_ selectedIDs: Set<String>) {
+    private func selectTopTeams() {
+        let hasChanges = !isTopTeamsPresetSelected
+        fixturePickerDraftOptionIDs = nil
+        fixturePickerBaselineOptionIDs = nil
+        withAnimation(accessibilityReduceMotion ? nil : FootballVisualStyle.easeOut) {
+            coordinator.clearSaveFixtureViewPresentation()
+        }
+        withAnimation(.easeOut(duration: 0.2)) {
+            expandedFixtureRegionID = nil
+            isFixtureFavouritesMenuExpanded = false
+        }
+        guard hasChanges else { return }
+        applyCustomFixtureView(
+            Set([FixtureViewOptionID.topTeamsPreset]),
+            shouldOfferSavePrompt: false
+        )
+        AppMetricsService.shared.fireActivity(
+            "fixture_top_teams_preset",
+            screen: MatchesViewMode.fixtures.rawValue,
+            apiBaseURL: preferences.apiBaseURL
+        )
+    }
+
+    private func applyCustomFixtureView(
+        _ selectedIDs: Set<String>,
+        shouldOfferSavePrompt: Bool = true
+    ) {
         preferences.selectedFixtureViewOptionIDs = selectedIDs.sorted()
         let selectedCompetitionIDs = Set(selectedIDs.compactMap(FixtureViewOptionID.competitionStableID))
         preferences.selectedLeagues = fixtureBrowser.competitions
@@ -2615,9 +2665,13 @@ struct FixtureCompetitionDockView: View {
         preferences.showAllMatches = false
         fixtureBrowser.configure(
             preferences: preferences.snapshot,
-            resetSelectedDate: true
+            resetSelectedDate: false
         )
-        updateFixtureSavePrompt()
+        if shouldOfferSavePrompt {
+            updateFixtureSavePrompt()
+        } else {
+            coordinator.clearSaveFixtureViewPresentation()
+        }
     }
 }
 

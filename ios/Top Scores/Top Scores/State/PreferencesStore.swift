@@ -49,6 +49,7 @@ enum FixturesViewDensity: String, Codable, Sendable {
 
 nonisolated enum FixtureViewOptionID {
     static let all = "scope:all"
+    static let topTeamsPreset = "preset:top-teams"
     static let topUEFAClubs = "rule:top-uefa-clubs"
     static let premierLeagueTeams = "rule:premier-league-teams"
     static let uefaClubCompetitionStableIDs: Set<String> = [
@@ -157,7 +158,7 @@ nonisolated struct FixtureViewSpecialOption: Identifiable, Hashable, Sendable {
         .init(id: FixtureViewOptionID.team("ac-milan"), title: "AC Milan", subtitle: "All AC Milan matches", regionID: "italy", logoTeamNames: ["AC Milan"], systemImage: nil),
         .init(id: FixtureViewOptionID.team("juventus"), title: "Juventus", subtitle: "All Juventus matches", regionID: "italy", logoTeamNames: ["Juventus"], systemImage: nil),
         .init(id: FixtureViewOptionID.rivalry("le-classique"), title: "Le Classique", subtitle: "Paris Saint-Germain vs Marseille", regionID: "france", logoTeamNames: ["Paris Saint-Germain", "Marseille"], systemImage: nil),
-        .init(id: FixtureViewOptionID.topUEFAClubs, title: "Top teams only", subtitle: "Major clubs in UEFA club competitions", regionID: "europe", logoTeamNames: [], systemImage: "chart.line.uptrend.xyaxis"),
+        .init(id: FixtureViewOptionID.topUEFAClubs, title: "Major European clubs", subtitle: "High-ranked clubs in UEFA competitions", regionID: "europe", logoTeamNames: [], systemImage: "chart.line.uptrend.xyaxis"),
         .init(id: FixtureViewOptionID.premierLeagueTeams, title: "Premier League teams only", subtitle: "Premier League clubs in UEFA competitions", regionID: "europe", logoTeamNames: [], systemImage: nil)
     ]
 

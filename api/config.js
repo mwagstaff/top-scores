@@ -3,6 +3,7 @@ const path = require("path");
 
 const COMPETITION_WEIGHTS_PATH = path.resolve(__dirname, "./competition_weights.json");
 const COMPETITION_METADATA_PATH = path.resolve(__dirname, "./competition_metadata.json");
+const TOP_TEAMS_CONFIG_PATH = path.resolve(__dirname, "./top_teams_config.json");
 
 function loadCompetitionWeightsConfig() {
   try {
@@ -38,12 +39,32 @@ const DEFAULT_COMPETITION_METADATA = (() => {
   }
 })();
 const DEFAULT_COMPETITION_ALLOWLIST = Object.keys(DEFAULT_COMPETITION_WEIGHTS);
+const DEFAULT_TOP_TEAMS_CONFIG = (() => {
+  try {
+    const raw = fs.readFileSync(TOP_TEAMS_CONFIG_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("Top teams config must be a JSON object.");
+    }
+    return parsed;
+  } catch (error) {
+    console.error("[config] Failed to load top teams config:", error);
+    return {};
+  }
+})();
 const COMPETITION_WEIGHTS_UPDATED_AT = (() => {
   try {
     const updatedAt = [COMPETITION_WEIGHTS_PATH, COMPETITION_METADATA_PATH]
       .map((configPath) => fs.statSync(configPath).mtime)
       .sort((left, right) => right.getTime() - left.getTime())[0];
     return updatedAt.toISOString();
+  } catch (_error) {
+    return null;
+  }
+})();
+const TOP_TEAMS_CONFIG_UPDATED_AT = (() => {
+  try {
+    return fs.statSync(TOP_TEAMS_CONFIG_PATH).mtime.toISOString();
   } catch (_error) {
     return null;
   }
@@ -113,9 +134,12 @@ const SERVER_CONFIG = {
 module.exports = {
   COMPETITION_WEIGHTS_PATH,
   COMPETITION_METADATA_PATH,
+  TOP_TEAMS_CONFIG_PATH,
   DEFAULT_COMPETITION_WEIGHTS,
   DEFAULT_COMPETITION_METADATA,
+  DEFAULT_TOP_TEAMS_CONFIG,
   COMPETITION_WEIGHTS_UPDATED_AT,
+  TOP_TEAMS_CONFIG_UPDATED_AT,
   DEFAULT_COMPETITION_ALLOWLIST,
   TEAM_RANKING_SOURCE_MERGED,
   TEAM_RANKING_SOURCE_CLUBELO,

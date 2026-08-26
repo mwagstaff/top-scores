@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "id": "preset:top-teams",
+  "revision": "2026-08-26.1",
+  "title": "Top teams",
+  "club_elo_threshold": 1750,
+  "champions_league_competition_id": "uefa-champions-league",
+  "other_uefa_competition_ids": [
+    "uefa-europa-league",
+    "uefa-conference-league",
+    "uefa-super-cup"
+  ],
+  "home_association_country_codes": ["ENG", "WAL", "SCO", "NIR", "IRL"],
+  "international_teams": [
+    { "name": "England", "aliases": [] },
+    { "name": "Wales", "aliases": [] },
+    { "name": "Scotland", "aliases": [] },
+    { "name": "Northern Ireland", "aliases": [] },
+    { "name": "Republic of Ireland", "aliases": ["Ireland"] }
+  ],
+  "always_include_teams": [
+    { "name": "Real Madrid", "aliases": [] },
+    { "name": "Barcelona", "aliases": ["FC Barcelona"] },
+    {
+      "name": "Bayern Munich",
+      "aliases": ["Bayern", "Bayern Munchen", "Bayern München", "FC Bayern München"]
+    }
+  ],
+  "display_sections": [
+    "Any match involving a current Premier League team",
+    "Any international involving England, Wales, Scotland, Northern Ireland or Republic of Ireland",
+    "Any match involving Real Madrid, Barcelona or Bayern Munich",
+    "Every Champions League league-phase or knockout match",
+    "Champions League qualifying and other UEFA club matches involving UK or Irish clubs",
+    "Champions League qualifying and other UEFA club matches involving major Club Elo teams"
+  ]
+}

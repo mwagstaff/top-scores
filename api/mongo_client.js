@@ -714,6 +714,22 @@ function shouldPreserveExistingBsdEventRoundName(collectionName, payload) {
   return collectionName === "bsd_events" && !hasBsdEventRoundName(payload);
 }
 
+function shouldPreserveExistingBsdPreviousLegId(collectionName, payload) {
+  return (
+    collectionName === "bsd_events" &&
+    payload &&
+    typeof payload === "object" &&
+    !Object.prototype.hasOwnProperty.call(payload, "previous_leg_event_id")
+  );
+}
+
+function shouldMergeExistingBsdEventMetadata(collectionName, payload) {
+  return (
+    shouldPreserveExistingBsdEventRoundName(collectionName, payload) ||
+    shouldPreserveExistingBsdPreviousLegId(collectionName, payload)
+  );
+}
+
 function existingBsdEventRoundNameExpression() {
   return {
     $and: [
@@ -739,10 +755,23 @@ function bsdEventPayloadPreservingRoundNameExpression(payload) {
 }
 
 function bsdUpsertSetStage(collectionName, payload, extra, updatedAtIso) {
+  let payloadExpression = shouldPreserveExistingBsdEventRoundName(collectionName, payload)
+    ? bsdEventPayloadPreservingRoundNameExpression(payload)
+    : { $literal: payload };
+  if (shouldPreserveExistingBsdPreviousLegId(collectionName, payload)) {
+    payloadExpression = {
+      $mergeObjects: [
+        payloadExpression,
+        {
+          previous_leg_event_id: {
+            $ifNull: ["$payload.previous_leg_event_id", null],
+          },
+        },
+      ],
+    };
+  }
   const setStage = {
-    payload: shouldPreserveExistingBsdEventRoundName(collectionName, payload)
-      ? bsdEventPayloadPreservingRoundNameExpression(payload)
-      : { $literal: payload },
+    payload: payloadExpression,
     updated_at: updatedAtIso,
   };
   Object.entries(extra && typeof extra === "object" ? extra : {}).forEach(([key, value]) => {
@@ -757,7 +786,7 @@ async function upsertBsdRecord(collectionName, id, payload, extra = {}) {
   const normalizedId = normalizeRecordId(id);
   if (!normalizedId) return null;
   const updatedAtIso = new Date().toISOString();
-  const update = shouldPreserveExistingBsdEventRoundName(collectionName, payload)
+  const update = shouldMergeExistingBsdEventMetadata(collectionName, payload)
     ? [
         {
           $set: {
@@ -789,7 +818,7 @@ async function upsertBsdRecords(collectionName, records = []) {
   records.forEach(({ id, payload, extra }) => {
     const normalizedId = normalizeRecordId(id);
     if (!normalizedId) return;
-    const update = shouldPreserveExistingBsdEventRoundName(collectionName, payload)
+    const update = shouldMergeExistingBsdEventMetadata(collectionName, payload)
       ? [
           {
             $set: {
@@ -903,6 +932,8 @@ module.exports = {
     runtimeRoleFromEntrypoint,
     hasBsdEventRoundName,
     shouldPreserveExistingBsdEventRoundName,
+    shouldPreserveExistingBsdPreviousLegId,
+    shouldMergeExistingBsdEventMetadata,
     bsdEventPayloadPreservingRoundNameExpression,
     bsdUpsertSetStage,
   },
