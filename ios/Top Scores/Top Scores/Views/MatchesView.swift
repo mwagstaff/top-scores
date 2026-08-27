@@ -329,6 +329,9 @@ struct MatchesView: View {
     @State private var fixtureBrowseGroupedDays: [MatchDay] = []
     @State private var fixtureBrowsePageGroupedDays: [String: [MatchDay]] = [:]
     @State private var fixtureBrowsePageSourceMatchesByDate: [String: [Match]] = [:]
+    @State private var fixtureBrowseUnfilteredPageGroupedDays: [String: [MatchDay]] = [:]
+    @State private var fixtureBrowseUnfilteredPageSourceMatchesByDate: [String: [Match]] = [:]
+    @State private var expandedFixtureCompetitionKeys: Set<String> = []
     @State private var isFixtureDatePickerPresented = false
     @State private var fixtureDatePickerSelection = Date()
     init(
@@ -565,6 +568,9 @@ struct MatchesView: View {
             guard isSelected else { return }
             fixtureBrowsePageSourceMatchesByDate = [:]
             fixtureBrowsePageGroupedDays = [:]
+            fixtureBrowseUnfilteredPageSourceMatchesByDate = [:]
+            fixtureBrowseUnfilteredPageGroupedDays = [:]
+            expandedFixtureCompetitionKeys.removeAll(keepingCapacity: true)
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
             #if DEBUG
             diagnosticLog("[MatchesView] snapshot_change mode=%@ showAllMatches=%d epl_pref=%d effective_snapshot=%@",
@@ -1159,11 +1165,21 @@ struct MatchesView: View {
     }
 
     private func competitionCardRow(for league: MatchLeague, day: MatchDay) -> some View {
-        let competitionName = league.matches.first?.league ?? league.league
-        let competitionSubtitle = league.matches.first?.leagueSubcategory?
+        let unfilteredLeague = unfilteredFixtureLeague(matching: league, on: day)
+        let visibleMatchIDs = Set(league.matches.map(\.id))
+        let hiddenMatchCount = unfilteredLeague?.matches.reduce(into: 0) { count, match in
+            if !visibleMatchIDs.contains(match.id) {
+                count += 1
+            }
+        } ?? 0
+        let expansionKey = fixtureCompetitionExpansionKey(for: league, on: day)
+        let isExpanded = hiddenMatchCount > 0 && expandedFixtureCompetitionKeys.contains(expansionKey)
+        let displayedLeague = isExpanded ? (unfilteredLeague ?? league) : league
+        let competitionName = displayedLeague.matches.first?.league ?? displayedLeague.league
+        let competitionSubtitle = displayedLeague.matches.first?.leagueSubcategory?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let accentRole = CompetitionAccentRole.resolve(
-            competitionID: league.matches.first?.leagueId,
+            competitionID: displayedLeague.matches.first?.leagueId,
             competitionName: competitionName
         )
         let accentColor = accentRole.color
@@ -1171,7 +1187,7 @@ struct MatchesView: View {
         return VStack(spacing: 0) {
             HStack(spacing: 11) {
                 LeagueBadgeImage(
-                    competitionID: league.matches.first?.leagueId,
+                    competitionID: displayedLeague.matches.first?.leagueId,
                     competitionName: competitionName,
                     size: 29
                 )
@@ -1206,8 +1222,8 @@ struct MatchesView: View {
                 .frame(height: 0.5)
                 .padding(.horizontal, 16)
 
-            ForEach(Array(league.matches.enumerated()), id: \.element.id) { index, match in
-                let previousTime = index > 0 ? league.matches[index - 1].time : nil
+            ForEach(Array(displayedLeague.matches.enumerated()), id: \.element.id) { index, match in
+                let previousTime = index > 0 ? displayedLeague.matches[index - 1].time : nil
                 if shouldShowKickoffDivider(currentTime: match.time, previousTime: previousTime) {
                     embeddedKickoffDivider(time: match.time)
                 }
@@ -1215,12 +1231,26 @@ struct MatchesView: View {
                 matchButton(for: match, day: day)
                     .padding(.horizontal, 8)
 
-                if index < league.matches.count - 1 {
+                if index < displayedLeague.matches.count - 1 {
                     Rectangle()
                         .fill(FootballVisualStyle.divider)
                         .frame(height: 0.5)
                         .padding(.horizontal, 16)
                 }
+            }
+
+            if hiddenMatchCount > 0 {
+                Rectangle()
+                    .fill(FootballVisualStyle.divider)
+                    .frame(height: 0.5)
+                    .padding(.horizontal, 16)
+
+                fixtureCompetitionExpansionButton(
+                    hiddenMatchCount: hiddenMatchCount,
+                    isExpanded: isExpanded,
+                    expansionKey: expansionKey,
+                    competitionName: competitionName
+                )
             }
         }
         .background {
@@ -1244,6 +1274,60 @@ struct MatchesView: View {
         .listRowSeparator(.hidden)
         .listRowBackground(Color.clear)
         .accessibilityElement(children: .contain)
+    }
+
+    private func unfilteredFixtureLeague(
+        matching league: MatchLeague,
+        on day: MatchDay
+    ) -> MatchLeague? {
+        guard usesFixtureBrowser else { return nil }
+        return fixtureBrowseUnfilteredPageGroupedDays[day.dateKey]?
+            .first(where: { $0.dateKey == day.dateKey })?
+            .leagues
+            .first(where: { $0.id == league.id })
+    }
+
+    private func fixtureCompetitionExpansionKey(
+        for league: MatchLeague,
+        on day: MatchDay
+    ) -> String {
+        "\(day.dateKey)|\(league.id)"
+    }
+
+    private func fixtureCompetitionExpansionButton(
+        hiddenMatchCount: Int,
+        isExpanded: Bool,
+        expansionKey: String,
+        competitionName: String
+    ) -> some View {
+        let matchLabel = hiddenMatchCount == 1 ? "match" : "matches"
+        let title = isExpanded
+            ? "Hide \(hiddenMatchCount) other \(matchLabel)"
+            : "View \(hiddenMatchCount) other \(matchLabel)"
+
+        return Button {
+            if isExpanded {
+                expandedFixtureCompetitionKeys.remove(expansionKey)
+            } else {
+                expandedFixtureCompetitionKeys.insert(expansionKey)
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Text(title)
+                Spacer(minLength: 8)
+                Image(systemName: isExpanded ? "chevron.up" : "chevron.down")
+                    .font(.caption.weight(.bold))
+                    .accessibilityHidden(true)
+            }
+            .font(.footnote.weight(.semibold))
+            .foregroundStyle(Color.accentColor)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .padding(.horizontal, 16)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(title) in \(competitionName)")
+        .accessibilityHint(isExpanded ? "Returns to matches included by the current view" : "Shows every match in this competition")
     }
 
     @ViewBuilder
@@ -2061,14 +2145,16 @@ struct FixtureCompetitionDockView: View {
 
             Divider()
 
-            fixtureFavouritesActionRow(
-                title: "Show favourites",
-                subtitle: "Use your saved match view",
-                icon: .system("star.fill"),
-                isSelected: preferences.fixtureAllMajorMatchesEnabled,
-                action: selectFavourites
-            )
-            Divider().padding(.leading, 58)
+            if preferences.hasSavedFavouriteFixtureView {
+                fixtureFavouritesActionRow(
+                    title: "Show favourites",
+                    subtitle: "Use your saved match view",
+                    icon: .system("star.fill"),
+                    isSelected: preferences.fixtureAllMajorMatchesEnabled,
+                    action: selectFavourites
+                )
+                Divider().padding(.leading, 58)
+            }
             fixtureFavouritesActionRow(
                 title: "Show top teams",
                 subtitle: "Featured clubs, internationals and European matches",
@@ -2512,6 +2598,10 @@ struct FixtureCompetitionDockView: View {
     }
 
     private func selectFavourites() {
+        guard preferences.hasSavedFavouriteFixtureView else {
+            selectTopTeams()
+            return
+        }
         fixturePickerDraftOptionIDs = nil
         fixturePickerBaselineOptionIDs = nil
         withAnimation(accessibilityReduceMotion ? nil : FootballVisualStyle.easeOut) {
@@ -2582,6 +2672,7 @@ struct FixtureCompetitionDockView: View {
         guard !optionIDs.isEmpty else { return }
         preferences.favouriteFixtureViewOptionIDs = optionIDs
         preferences.favouriteShowPredictedScores = preferences.showPredictedScores
+        preferences.hasSavedFavouriteFixtureView = true
         activateFavouriteFixtureView()
         withAnimation(accessibilityReduceMotion ? nil : FootballVisualStyle.easeOut) {
             coordinator.clearSaveFixtureViewPresentation()
@@ -2719,14 +2810,20 @@ private extension MatchesView {
         from matchesByDate: [String: [Match]]
     ) -> [String: [MatchDay]] {
         guard mode == .fixtures else { return fixtureBrowsePageGroupedDays }
-        guard matchesByDate != fixtureBrowsePageSourceMatchesByDate else {
+        let unfilteredMatchesByDate = Dictionary(uniqueKeysWithValues: matchesByDate.keys.map {
+            ($0, fixtureBrowser.cachedUnfilteredMatches(for: $0))
+        })
+        guard matchesByDate != fixtureBrowsePageSourceMatchesByDate ||
+                unfilteredMatchesByDate != fixtureBrowseUnfilteredPageSourceMatchesByDate else {
             return fixtureBrowsePageGroupedDays
         }
 
         var groupedByDate = fixtureBrowsePageGroupedDays
+        var unfilteredGroupedByDate = fixtureBrowseUnfilteredPageGroupedDays
         for removedDateKey in fixtureBrowsePageSourceMatchesByDate.keys
             where matchesByDate[removedDateKey] == nil {
             groupedByDate.removeValue(forKey: removedDateKey)
+            unfilteredGroupedByDate.removeValue(forKey: removedDateKey)
         }
 
         for (dateKey, matches) in matchesByDate {
@@ -2746,9 +2843,31 @@ private extension MatchesView {
             }
         }
 
+        for (dateKey, matches) in unfilteredMatchesByDate {
+            guard fixtureBrowseUnfilteredPageSourceMatchesByDate[dateKey] != matches else { continue }
+            guard !matches.isEmpty else {
+                unfilteredGroupedByDate.removeValue(forKey: dateKey)
+                continue
+            }
+            let groupedDays = matchesStore.groupFixtureBrowseMatches(
+                matches,
+                preferences: preferences.snapshot,
+                pinningContext: "fixture-browser-unfiltered"
+            )
+            if groupedDays.isEmpty {
+                unfilteredGroupedByDate.removeValue(forKey: dateKey)
+            } else {
+                unfilteredGroupedByDate[dateKey] = groupedDays
+            }
+        }
+
         fixtureBrowsePageSourceMatchesByDate = matchesByDate
+        fixtureBrowseUnfilteredPageSourceMatchesByDate = unfilteredMatchesByDate
         if groupedByDate != fixtureBrowsePageGroupedDays {
             fixtureBrowsePageGroupedDays = groupedByDate
+        }
+        if unfilteredGroupedByDate != fixtureBrowseUnfilteredPageGroupedDays {
+            fixtureBrowseUnfilteredPageGroupedDays = unfilteredGroupedByDate
         }
         return groupedByDate
     }

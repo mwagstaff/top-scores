@@ -16,6 +16,7 @@ struct Top_ScoresApp: App {
     @StateObject private var matchesStore = MatchesStore()
     @StateObject private var fantasyViewModel = FantasyViewModel()
     @StateObject private var stadiumBackdropStore = StadiumBackdropStore()
+    @StateObject private var stadiumArtworkStore = StadiumArtworkStore()
     @State private var deferredStartupWorkTask: Task<Void, Never>?
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
@@ -34,12 +35,18 @@ struct Top_ScoresApp: App {
                 .environmentObject(preferences)
                 .environmentObject(matchesStore)
                 .environmentObject(fantasyViewModel)
+                .environmentObject(stadiumArtworkStore)
                 .environment(\.stadiumBackdropAssetName, stadiumBackdropStore.assetName)
                 .task {
                     await stadiumBackdropStore.runHourlyRotation()
                 }
                 .task(id: preferences.apiBaseURL) {
                     await TopTeamsPresetStore.shared.ensureFresh(
+                        apiBaseURL: preferences.apiBaseURL
+                    )
+                }
+                .task(id: preferences.apiBaseURL) {
+                    await stadiumArtworkStore.ensureFresh(
                         apiBaseURL: preferences.apiBaseURL
                     )
                 }
@@ -62,6 +69,11 @@ struct Top_ScoresApp: App {
                 matchesStore.refreshOnForeground(preferences: snapshot)
                 Task {
                     await TopTeamsPresetStore.shared.ensureFresh(
+                        apiBaseURL: preferences.apiBaseURL
+                    )
+                }
+                Task {
+                    await stadiumArtworkStore.ensureFresh(
                         apiBaseURL: preferences.apiBaseURL
                     )
                 }

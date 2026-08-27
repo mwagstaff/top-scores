@@ -107,6 +107,12 @@ struct FixtureBrowserLocalCompetitionCacheTests {
         }
 
         #expect(store.visibleMatches.map(\.homeTeam) == ["Arsenal"])
+        let requestCountBeforeUnfilteredRead = requestLog.urls.count
+        #expect(
+            store.cachedUnfilteredMatches(for: "2026-08-26").map(\.homeTeam) ==
+                ["Arsenal", "Barcelona"]
+        )
+        #expect(requestLog.urls.count == requestCountBeforeUnfilteredRead)
         await store.warmAllUpcomingFixtures()
         #expect(requestLog.matchRequestCount == 2)
         let requestCountBeforeSwitch = requestLog.urls.count

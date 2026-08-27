@@ -87,6 +87,26 @@ Review the retained images before shipping them. V1 scoring and time-of-day clas
 `review-sheet` generates a labelled overview of each stadium's highest-ranked images under
 `output/review/` for a fast visual pass.
 
+## Publish artwork to the app
+
+The checked-in `config/publishing.yaml` is the server artwork assignment file. Each asset points to an existing image, declares whether it is a generic screen backdrop, a generic match image, or a team image, and records its day/night context, team/venue assignments, and credit metadata. Team definitions can match the app by stable key, provider team ID, alias, or optional venue ID.
+
+To replace an image or change its assignment, edit that YAML file and run:
+
+```bash
+stadium-images publish
+```
+
+Publishing converts the selected sources to bounded WebP files, names them by SHA-256 content hash, validates every assignment and credit, then atomically replaces the ignored `published/` bundle. It does not crop images or modify the source files.
+
+The normal Top Scores API deployment runs this publish step automatically, uploads new content-addressed files to the persistent directory on `sky`, validates their hashes remotely, and activates the catalogue atomically:
+
+```bash
+/Users/mwagstaff/dev/server-tooling/deploy/node_project.zsh top-scores sky
+```
+
+Existing asset files are retained so clients with an older cached catalogue can finish downloads safely. The API serves the catalogue from `/api/v1/stadium-artwork/catalog`; the app checks it on launch and foreground activation at most once every 15 minutes. Bundled artwork remains the fallback when the catalogue or an image is unavailable. Published credits appear under Profile > About > Data sources > Image credits.
+
 ## Add a league or update a season
 
 Copy `config/premier-league.yaml` to a new slug such as `config/championship.yaml`, then change:

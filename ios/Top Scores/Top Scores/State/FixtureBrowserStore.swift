@@ -565,6 +565,21 @@ final class FixtureBrowserStore: ObservableObject {
         pageCache.matchesByDate
     }
 
+    func cachedUnfilteredMatches(for dateKey: String) -> [Match] {
+        guard let snapshot,
+              let bucket = cachePayload?.buckets[Self.bucketKey(dateKey: dateKey)] else {
+            return []
+        }
+        return FixtureBrowseSelectionResolver.filterMatches(
+            bucket.matches,
+            topMatchesOnly: false,
+            selectedCompetitionIDs: [],
+            competitions: competitions,
+            showAllMatches: true,
+            includePostponed: snapshot.showPostponedGames
+        )
+    }
+
     var calendarCompetitionSummariesByDate: [String: [FixtureCalendarCompetitionSummary]] {
         guard let snapshot else { return [:] }
 

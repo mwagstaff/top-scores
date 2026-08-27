@@ -25,6 +25,7 @@ struct TopTeamsPresetDefinition: Codable, Equatable, Sendable {
     let revision: String
     let title: String
     let clubEloThreshold: Double
+    let premierLeagueCompetitionID: String?
     let championsLeagueCompetitionID: String
     let otherUEFACompetitionIDs: [String]
     let qualifyingRoundPatterns: [String]
@@ -41,6 +42,7 @@ struct TopTeamsPresetDefinition: Codable, Equatable, Sendable {
         case revision
         case title
         case clubEloThreshold = "club_elo_threshold"
+        case premierLeagueCompetitionID = "premier_league_competition_id"
         case championsLeagueCompetitionID = "champions_league_competition_id"
         case otherUEFACompetitionIDs = "other_uefa_competition_ids"
         case qualifyingRoundPatterns = "qualifying_round_patterns"
@@ -58,6 +60,7 @@ struct TopTeamsPresetDefinition: Codable, Equatable, Sendable {
         revision: "bundled-1",
         title: "Top teams",
         clubEloThreshold: 1750,
+        premierLeagueCompetitionID: "premier-league",
         championsLeagueCompetitionID: "uefa-champions-league",
         otherUEFACompetitionIDs: [
             "uefa-europa-league",
@@ -135,6 +138,81 @@ struct TopTeamsPresetDefinition: Codable, Equatable, Sendable {
             .split { !$0.isLetter && !$0.isNumber }
             .joined(separator: "-")
     }
+
+    nonisolated func sanitized() -> TopTeamsPresetDefinition {
+        let excludedConditionalTeamKeys: Set<String> = [
+            Self.normalizedTeamKey("FK Arsenal Tivat"),
+            Self.normalizedTeamKey("Comoros"),
+        ]
+        return TopTeamsPresetDefinition(
+            schemaVersion: schemaVersion,
+            id: id,
+            revision: revision,
+            title: title,
+            clubEloThreshold: clubEloThreshold,
+            premierLeagueCompetitionID: premierLeagueCompetitionID,
+            championsLeagueCompetitionID: championsLeagueCompetitionID,
+            otherUEFACompetitionIDs: otherUEFACompetitionIDs,
+            qualifyingRoundPatterns: qualifyingRoundPatterns,
+            displaySections: displaySections,
+            unconditionalTeams: Self.deduplicated(unconditionalTeams),
+            conditionalUEFATeams: Self.deduplicated(
+                conditionalUEFATeams.filter {
+                    !excludedConditionalTeamKeys.contains(Self.normalizedTeamKey($0.name))
+                }
+            ),
+            majorTeams: Self.deduplicated(
+                majorTeams.filter {
+                    !excludedConditionalTeamKeys.contains(Self.normalizedTeamKey($0.name))
+                }
+            ),
+            updatedAt: updatedAt,
+            sources: sources
+        )
+    }
+
+    private nonisolated static func deduplicated(
+        _ teams: [TopTeamsPresetTeam]
+    ) -> [TopTeamsPresetTeam] {
+        var result: [TopTeamsPresetTeam] = []
+        var keysByIndex: [Set<String>] = []
+
+        for team in teams {
+            let teamKeys = Set(([team.name] + team.aliases).map(normalizedTeamKey).filter { !$0.isEmpty })
+            guard !teamKeys.isEmpty else { continue }
+
+            if let index = keysByIndex.firstIndex(where: { !$0.isDisjoint(with: teamKeys) }) {
+                let existing = result[index]
+                var aliases = Set(existing.aliases + team.aliases)
+                if normalizedTeamKey(team.name) != normalizedTeamKey(existing.name) {
+                    aliases.insert(team.name)
+                }
+                aliases.remove(existing.name)
+                result[index] = TopTeamsPresetTeam(
+                    id: existing.id,
+                    name: existing.name,
+                    aliases: aliases.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending },
+                    sourceTeamIDs: Array(Set(existing.sourceTeamIDs + team.sourceTeamIDs)).sorted(),
+                    elo: [existing.elo, team.elo].compactMap { $0 }.max(),
+                    countryCode: existing.countryCode ?? team.countryCode
+                )
+                keysByIndex[index].formUnion(teamKeys)
+            } else {
+                result.append(team)
+                keysByIndex.append(teamKeys)
+            }
+        }
+
+        return result
+    }
+
+    private nonisolated static func normalizedTeamKey(_ value: String) -> String {
+        value
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .joined()
+    }
 }
 
 struct TopTeamsPresetSources: Codable, Equatable, Sendable {
@@ -167,7 +245,8 @@ nonisolated struct TopTeamsPresetMatcher: Sendable {
     }
 
     func matches(_ match: Match, competitionID: String?) -> Bool {
-        if MatchesStore.matchIncludesPremierLeagueTeam(match) ||
+        if competitionID == (definition.premierLeagueCompetitionID ?? "premier-league") ||
+            MatchesStore.matchIncludesPremierLeagueTeam(match) ||
             teamMatches(match.homeTeam, sourceID: match.homeTeamId, ids: unconditionalTeamIDs, keys: unconditionalTeamKeys) ||
             teamMatches(match.awayTeam, sourceID: match.awayTeamId, ids: unconditionalTeamIDs, keys: unconditionalTeamKeys) {
             return true
@@ -251,7 +330,7 @@ final class TopTeamsPresetStore: ObservableObject {
     private init() {
         if let cached = Self.loadCache(),
            cached.preset.schemaVersion == Self.supportedSchemaVersion {
-            preset = cached.preset
+            preset = cached.preset.sanitized()
             fetchedAt = cached.fetchedAt
         } else {
             preset = .fallback
@@ -281,7 +360,7 @@ final class TopTeamsPresetStore: ObservableObject {
         }
 
         do {
-            let fetched = try await task.value
+            let fetched = try await task.value.sanitized()
             guard fetched.schemaVersion == Self.supportedSchemaVersion,
                   fetched.id == FixtureViewOptionID.topTeamsPreset,
                   !fetched.unconditionalTeams.isEmpty else {

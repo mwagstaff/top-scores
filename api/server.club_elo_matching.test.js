@@ -69,3 +69,22 @@ test("Comoros is treated as a national team without blocking the Como club match
   assert.equal(comorosNationalResult.accepted, true);
   assert.equal(comorosNationalResult.team, comoros);
 });
+
+test("top teams identity keys collapse the Paris Saint-Germain Club Elo alias", () => {
+  const manualMappings = new Map([
+    ["paris saint germain", "Paris SG"],
+  ]);
+
+  assert.equal(
+    __private.topTeamsIdentityKey("Paris Saint-Germain", manualMappings),
+    __private.topTeamsIdentityKey("Paris SG", manualMappings)
+  );
+  assert.equal(
+    __private.normalizeTeamName("Paris SG"),
+    __private.normalizeTeamName("Paris Saint-Germain")
+  );
+  assert.notEqual(
+    __private.topTeamsIdentityKey("Arsenal", manualMappings),
+    __private.topTeamsIdentityKey("FK Arsenal Tivat", manualMappings)
+  );
+});

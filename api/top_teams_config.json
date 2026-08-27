@@ -1,9 +1,10 @@
 {
   "schema_version": 1,
   "id": "preset:top-teams",
-  "revision": "2026-08-26.1",
+  "revision": "2026-08-27.1",
   "title": "Top teams",
   "club_elo_threshold": 1750,
+  "premier_league_competition_id": "premier-league",
   "champions_league_competition_id": "uefa-champions-league",
   "other_uefa_competition_ids": [
     "uefa-europa-league",

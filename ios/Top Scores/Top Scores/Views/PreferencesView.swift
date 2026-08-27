@@ -153,7 +153,7 @@ struct PreferencesView: View {
                     if !showsOnlyAdvancedSettings {
                         Section("Fixtures") {
                             Picker("Fixture view", selection: fixturePreferenceModeBinding) {
-                                ForEach(FixturePreferenceMode.allCases) { mode in
+                                ForEach(availableFixturePreferenceModes) { mode in
                                     Text(mode.title).tag(mode)
                                 }
                             }
@@ -181,7 +181,7 @@ struct PreferencesView: View {
 
                             if !preferences.notificationMatchesFixturesEnabled {
                                 Picker("Match coverage", selection: notificationCoverageModeBinding) {
-                                    ForEach(NotificationCoverageMode.allCases) { mode in
+                                    ForEach(availableNotificationCoverageModes) { mode in
                                         Text(mode.title).tag(mode)
                                     }
                                 }
@@ -798,7 +798,9 @@ struct PreferencesView: View {
                    !preferences.fixtureAllMajorMatchesEnabled {
                     return .topTeams
                 }
-                return preferences.fixtureAllMajorMatchesEnabled ? .favourites : .custom
+                return preferences.fixtureAllMajorMatchesEnabled && preferences.hasSavedFavouriteFixtureView
+                    ? .favourites
+                    : .custom
             },
             set: { mode in
                 preferences.fixtureAllMajorMatchesEnabled = mode == .favourites
@@ -810,12 +812,19 @@ struct PreferencesView: View {
                 if mode == .custom,
                    preferences.selectedFixtureViewOptionIDs.isEmpty ||
                     Set(preferences.selectedFixtureViewOptionIDs) == Set([FixtureViewOptionID.topTeamsPreset]) {
-                    preferences.selectedFixtureViewOptionIDs = preferences.favouriteFixtureViewOptionIDs
-                        .filter { $0 != FixtureViewOptionID.all }
+                    preferences.selectedFixtureViewOptionIDs = preferences.hasSavedFavouriteFixtureView
+                        ? preferences.favouriteFixtureViewOptionIDs.filter { $0 != FixtureViewOptionID.all }
+                        : []
                 }
                 AppMetricsService.shared.fireActivity("pref_fixtures_all_major_matches_toggle", screen: "preferences", apiBaseURL: preferences.apiBaseURL)
             }
         )
+    }
+
+    private var availableFixturePreferenceModes: [FixturePreferenceMode] {
+        FixturePreferenceMode.allCases.filter {
+            $0 != .favourites || preferences.hasSavedFavouriteFixtureView
+        }
     }
 
     private var fixturePreferenceModeDescription: String {
@@ -834,7 +843,10 @@ struct PreferencesView: View {
     private var notificationCoverageModeBinding: Binding<NotificationCoverageMode> {
         Binding(
             get: {
-                if preferences.notificationAllMajorMatchesEnabled { return .favourites }
+                if preferences.notificationAllMajorMatchesEnabled,
+                   preferences.hasSavedFavouriteFixtureView {
+                    return .favourites
+                }
                 if Set(preferences.selectedNotificationViewOptionIDs) == Set([FixtureViewOptionID.topTeamsPreset]) {
                     return .topTeams
                 }
@@ -856,6 +868,12 @@ struct PreferencesView: View {
                 AppMetricsService.shared.fireActivity("pref_notifications_all_major_matches_toggle", screen: "preferences", apiBaseURL: preferences.apiBaseURL)
             }
         )
+    }
+
+    private var availableNotificationCoverageModes: [NotificationCoverageMode] {
+        NotificationCoverageMode.allCases.filter {
+            $0 != .favourites || preferences.hasSavedFavouriteFixtureView
+        }
     }
 
     private var notificationMatchesFixturesBinding: Binding<Bool> {

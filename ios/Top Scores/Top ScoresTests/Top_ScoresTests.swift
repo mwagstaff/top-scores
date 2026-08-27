@@ -310,9 +310,12 @@ struct Top_ScoresTests {
         #expect(store.englishPremierLeagueTeamsOnly)
         #expect(store.homeNationsFilterEnabled)
         #expect(store.majorTournamentsFilterEnabled)
-        #expect(store.fixtureAllMajorMatchesEnabled)
-        #expect(store.notificationAllMajorMatchesEnabled)
-        #expect(!store.competitionFilterEnabled)
+        #expect(!store.fixtureAllMajorMatchesEnabled)
+        #expect(!store.notificationAllMajorMatchesEnabled)
+        #expect(store.competitionFilterEnabled)
+        #expect(store.selectedFixtureViewOptionIDs == [FixtureViewOptionID.topTeamsPreset])
+        #expect(store.selectedNotificationViewOptionIDs == [FixtureViewOptionID.topTeamsPreset])
+        #expect(!store.hasSavedFavouriteFixtureView)
         #expect(store.notificationsEnabled)
         #expect(store.notificationDelayMinutes == 2)
         #expect(store.notificationEventTypes == PreferencesStore.defaultNotificationEventTypes)
@@ -330,6 +333,53 @@ struct Top_ScoresTests {
         #expect(!store.showPredictedScores)
         #expect(!store.favouriteShowPredictedScores)
         #expect(!store.channelFilterEnabled)
+    }
+
+    @Test @MainActor func preferencesStore_onlyExposesFavouritesAfterSavingAView() async throws {
+        let defaults = UserDefaults(suiteName: #function)!
+        defaults.removePersistentDomain(forName: #function)
+
+        let store = PreferencesStore(userDefaults: defaults)
+        #expect(!store.hasSavedFavouriteFixtureView)
+
+        store.favouriteFixtureViewOptionIDs = [FixtureViewOptionID.competition("fa-cup")]
+        store.hasSavedFavouriteFixtureView = true
+
+        let reloaded = PreferencesStore(userDefaults: defaults)
+        #expect(reloaded.hasSavedFavouriteFixtureView)
+        #expect(reloaded.favouriteFixtureViewOptionIDs == [FixtureViewOptionID.competition("fa-cup")])
+    }
+
+    @Test @MainActor func preferencesStore_migratesUnsavedLegacyDefaultToTopTeams() async throws {
+        let defaults = UserDefaults(suiteName: #function)!
+        defaults.removePersistentDomain(forName: #function)
+        defaults.set(true, forKey: "preferences.fixtureAllMajorMatchesEnabled")
+        defaults.set(
+            PreferencesStore.defaultFavouriteFixtureViewOptionIDs,
+            forKey: "preferences.favouriteFixtureViewOptionIDs"
+        )
+
+        let store = PreferencesStore(userDefaults: defaults)
+
+        #expect(!store.hasSavedFavouriteFixtureView)
+        #expect(!store.fixtureAllMajorMatchesEnabled)
+        #expect(store.selectedFixtureViewOptionIDs == [FixtureViewOptionID.topTeamsPreset])
+    }
+
+    @Test @MainActor func preferencesStore_preservesCustomizedLegacyFavourites() async throws {
+        let defaults = UserDefaults(suiteName: #function)!
+        defaults.removePersistentDomain(forName: #function)
+        defaults.set(true, forKey: "preferences.fixtureAllMajorMatchesEnabled")
+        defaults.set(
+            [FixtureViewOptionID.competition("fa-cup")],
+            forKey: "preferences.favouriteFixtureViewOptionIDs"
+        )
+
+        let store = PreferencesStore(userDefaults: defaults)
+
+        #expect(store.hasSavedFavouriteFixtureView)
+        #expect(store.fixtureAllMajorMatchesEnabled)
+        #expect(store.favouriteFixtureViewOptionIDs == [FixtureViewOptionID.competition("fa-cup")])
     }
 
     @Test @MainActor func preferencesStore_persistsFavouritePredictionsSetting() async throws {
@@ -1396,6 +1446,14 @@ struct Top_ScoresTests {
     @Test func fixtureBrowserSelection_topTeamsUsesCachedServerDefinition() {
         let competitions = [
             CompetitionCatalogEntry(
+                id: "premier-league",
+                name: "Premier League",
+                aliases: [],
+                weight: 110,
+                region: "england",
+                logoURL: nil
+            ),
+            CompetitionCatalogEntry(
                 id: "uefa-champions-league",
                 name: "UEFA Champions League",
                 aliases: [],
@@ -1444,6 +1502,7 @@ struct Top_ScoresTests {
             revision: "test",
             title: "Top teams",
             clubEloThreshold: 1750,
+            premierLeagueCompetitionID: "premier-league",
             championsLeagueCompetitionID: "uefa-champions-league",
             otherUEFACompetitionIDs: ["uefa-europa-league"],
             qualifyingRoundPatterns: ["qualifying", "playoff", "play-off"],
@@ -1458,6 +1517,11 @@ struct Top_ScoresTests {
             sources: nil
         )
         let matcher = TopTeamsPresetMatcher(definition: definition)
+        let promotedPremierLeagueTeams = Match(
+            date: "2026-08-29", time: "15:00",
+            homeTeam: "Coventry City", awayTeam: "Hull City",
+            league: "Premier League", tvChannels: []
+        )
         let leaguePhase = Match(
             date: "2026-09-16", time: "20:00",
             homeTeam: "Basel", awayTeam: "Young Boys",
@@ -1493,7 +1557,7 @@ struct Top_ScoresTests {
         )
 
         let filtered = FixtureBrowseSelectionResolver.filterMatches(
-            [leaguePhase, minorQualifier, ukQualifier, majorEuropa, majorDomestic, ireland],
+            [promotedPremierLeagueTeams, leaguePhase, minorQualifier, ukQualifier, majorEuropa, majorDomestic, ireland],
             topMatchesOnly: false,
             selectedCompetitionIDs: [],
             competitions: competitions,
@@ -1502,7 +1566,55 @@ struct Top_ScoresTests {
             topTeamsMatcher: matcher
         )
 
-        #expect(filtered.map(\.id) == [leaguePhase.id, ukQualifier.id, majorEuropa.id, ireland.id])
+        #expect(filtered.map(\.id) == [
+            promotedPremierLeagueTeams.id,
+            leaguePhase.id,
+            ukQualifier.id,
+            majorEuropa.id,
+            ireland.id,
+        ])
+    }
+
+    @Test func topTeamsPresetSanitizesFalseMatchesAndDuplicateAliases() {
+        let team: (String, [String], Double) -> TopTeamsPresetTeam = { name, aliases, elo in
+            TopTeamsPresetTeam(
+                id: name.lowercased().replacingOccurrences(of: " ", with: "-"),
+                name: name,
+                aliases: aliases,
+                sourceTeamIDs: [],
+                elo: elo,
+                countryCode: nil
+            )
+        }
+        let arsenal = team("Arsenal", [], 2056)
+        let falseArsenal = team("FK Arsenal Tivat", ["Arsenal"], 2056)
+        let como = team("Como", [], 1753)
+        let falseComoros = team("Comoros", ["Como"], 1753)
+        let paris = team("Paris Saint-Germain", ["PSG", "Paris SG"], 1955)
+        let parisAlias = team("Paris SG", [], 1955)
+        let definition = TopTeamsPresetDefinition(
+            schemaVersion: 1,
+            id: FixtureViewOptionID.topTeamsPreset,
+            revision: "test",
+            title: "Top teams",
+            clubEloThreshold: 1750,
+            premierLeagueCompetitionID: "premier-league",
+            championsLeagueCompetitionID: "uefa-champions-league",
+            otherUEFACompetitionIDs: [],
+            qualifyingRoundPatterns: [],
+            displaySections: [],
+            unconditionalTeams: [],
+            conditionalUEFATeams: [arsenal, falseArsenal, como, falseComoros, paris, parisAlias],
+            majorTeams: [arsenal, falseArsenal, como, falseComoros, paris, parisAlias],
+            updatedAt: nil,
+            sources: nil
+        )
+
+        let sanitized = definition.sanitized()
+
+        #expect(sanitized.majorTeams.map(\.name) == ["Arsenal", "Como", "Paris Saint-Germain"])
+        #expect(sanitized.conditionalUEFATeams.map(\.name) == ["Arsenal", "Como", "Paris Saint-Germain"])
+        #expect(sanitized.majorTeams.last?.aliases.contains("Paris SG") == true)
     }
 
     @Test func fixtureBrowserSelection_resolvesSwipeAndNextMatchNavigation() {

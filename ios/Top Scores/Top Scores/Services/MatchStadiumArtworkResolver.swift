@@ -17,6 +17,59 @@ struct MatchStadiumArtworkResolver: Sendable {
     // continue to append Day/Night and fall back to the deterministic pool.
     private let venueAssetFamilies: [String: String] = [:]
 
+    func remoteAsset(
+        for match: Match,
+        catalog: StadiumArtworkCatalog,
+        selectionSeed: UInt32? = nil
+    ) -> StadiumArtworkAsset? {
+        let light = lightContext(for: match)
+        let seed = selectionSeed ?? stableHash(
+            "\(match.date)|\(match.time)|\(match.homeTeam)|\(match.awayTeam)"
+        )
+
+        if let teamID = resolvedTeamID(
+            teamID: match.homeTeamId,
+            teamName: match.homeTeam,
+            venueID: match.venueID,
+            catalog: catalog
+        ) {
+            let teamAssets = catalog.assets.filter {
+                $0.role == .team &&
+                $0.lightContext.rawValue == light.rawValue &&
+                $0.teamIDs.contains(teamID)
+            }
+            if let selected = selectedAsset(teamAssets, seed: seed) {
+                return selected
+            }
+        }
+
+        let genericAssets = catalog.assets.filter {
+            $0.role == .genericMatch && $0.lightContext.rawValue == light.rawValue
+        }
+        return selectedAsset(genericAssets, seed: seed)
+    }
+
+    func remoteTeamHeroAsset(
+        teamID: String?,
+        teamName: String,
+        catalog: StadiumArtworkCatalog
+    ) -> StadiumArtworkAsset? {
+        guard let resolvedTeamID = resolvedTeamID(
+            teamID: teamID,
+            teamName: teamName,
+            venueID: nil,
+            catalog: catalog
+        ) else { return nil }
+        let teamAssets = catalog.assets.filter {
+            $0.role == .team && $0.teamIDs.contains(resolvedTeamID)
+        }
+        let night = teamAssets.filter { $0.lightContext == .night }
+        let preferred = night.isEmpty
+            ? teamAssets.filter { $0.lightContext == .day }
+            : night
+        return selectedAsset(preferred, seed: stableHash(teamName.lowercased()))
+    }
+
     func assetName(for match: Match, selectionSeed: UInt32? = nil) -> String {
         let light = lightContext(for: match)
 
@@ -86,6 +139,52 @@ struct MatchStadiumArtworkResolver: Sendable {
             ?? homeTeamID?.trimmingCharacters(in: .whitespacesAndNewlines).nonEmpty
             ?? "unknown-home-team"
         return Int(stableHash(identity) % UInt32(genericFamilyCount)) + 1
+    }
+
+    private func resolvedTeamID(
+        teamID: String?,
+        teamName: String,
+        venueID: String?,
+        catalog: StadiumArtworkCatalog
+    ) -> String? {
+        if let venueID = venueID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !venueID.isEmpty,
+           let venueMatch = catalog.teams
+            .sorted(by: { $0.key < $1.key })
+            .first(where: { $0.value.venueIDs.contains(venueID) }) {
+            return venueMatch.key
+        }
+
+        if let teamID = teamID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !teamID.isEmpty {
+            if catalog.teams[teamID] != nil {
+                return teamID
+            }
+            if let sourceMatch = catalog.teams
+                .sorted(by: { $0.key < $1.key })
+                .first(where: { $0.value.sourceTeamIDs.contains(teamID) }) {
+                return sourceMatch.key
+            }
+        }
+
+        let targetName = TeamIdentityStore.normalizedKey(teamName)
+        guard !targetName.isEmpty else { return nil }
+        return catalog.teams
+            .sorted(by: { $0.key < $1.key })
+            .first { entry in
+                ([entry.value.name] + entry.value.aliases)
+                    .contains { TeamIdentityStore.normalizedKey($0) == targetName }
+            }?
+            .key
+    }
+
+    private func selectedAsset(
+        _ assets: [StadiumArtworkAsset],
+        seed: UInt32
+    ) -> StadiumArtworkAsset? {
+        let sorted = assets.sorted { $0.id < $1.id }
+        guard !sorted.isEmpty else { return nil }
+        return sorted[Int(seed % UInt32(sorted.count))]
     }
 
     private func stableHash(_ value: String) -> UInt32 {

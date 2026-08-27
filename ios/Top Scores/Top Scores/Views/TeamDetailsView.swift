@@ -613,6 +613,7 @@ private final class TeamDetailsViewModel {
 
 struct TeamDetailsView: View {
     @EnvironmentObject private var preferences: PreferencesStore
+    @EnvironmentObject private var stadiumArtworkStore: StadiumArtworkStore
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ObservedObject private var teamColorCatalog = TeamColorCatalog.shared
@@ -743,13 +744,17 @@ struct TeamDetailsView: View {
         GeometryReader { proxy in
             let scrollOffset = proxy.frame(in: .named("TeamDetailsScroll")).minY
             ZStack {
-                Image(
-                    MatchStadiumArtworkResolver.shared.teamHeroAssetName(
+                RemoteStadiumArtworkImage(
+                    asset: stadiumArtworkStore.teamHeroAsset(
+                        teamID: context.teamID,
+                        teamName: context.teamName
+                    ),
+                    apiBaseURL: preferences.apiBaseURL,
+                    fallbackAssetName: MatchStadiumArtworkResolver.shared.teamHeroAssetName(
                         teamID: context.teamID,
                         teamName: context.teamName
                     )
                 )
-                    .resizable()
                     .scaledToFill()
                     .frame(width: proxy.size.width, height: heroHeight + 28)
                     .scaleEffect(1.08)

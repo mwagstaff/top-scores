@@ -1018,6 +1018,8 @@ private struct MatchVenueFact: View {
 // MARK: - FPL Squad Sections
 
 private struct MatchDetailScoreboardHero: View {
+    @EnvironmentObject private var preferences: PreferencesStore
+    @EnvironmentObject private var stadiumArtworkStore: StadiumArtworkStore
     let match: Match
     let kickoffText: String
     let predictionDisplay: FixturePredictionDisplayState
@@ -1158,13 +1160,17 @@ private struct MatchDetailScoreboardHero: View {
         .padding(.vertical, 24)
         .background(
             ZStack {
-                Image(
-                    MatchStadiumArtworkResolver.shared.assetName(
+                RemoteStadiumArtworkImage(
+                    asset: stadiumArtworkStore.matchAsset(
+                        for: match,
+                        selectionSeed: artworkSelectionSeed
+                    ),
+                    apiBaseURL: preferences.apiBaseURL,
+                    fallbackAssetName: MatchStadiumArtworkResolver.shared.assetName(
                         for: match,
                         selectionSeed: artworkSelectionSeed
                     )
                 )
-                    .resizable()
                     .scaledToFill()
                     .scaleEffect(1.04)
                     .blur(radius: 3, opaque: true)

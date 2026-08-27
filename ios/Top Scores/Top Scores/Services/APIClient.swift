@@ -637,6 +637,33 @@ struct APIClient {
         return try JSONDecoder().decode(TeamColorsCatalogResponse.self, from: data)
     }
 
+    func fetchStadiumArtworkCatalog(ifNoneMatch: String?) async throws -> StadiumArtworkFetchResult {
+        var request = try buildRequest(path: "stadium-artwork/catalog", queryItems: [])
+        request.timeoutInterval = 5
+        if let ifNoneMatch, !ifNoneMatch.isEmpty {
+            request.setValue(ifNoneMatch, forHTTPHeaderField: "If-None-Match")
+        }
+        let (data, http) = try await performRequest(
+            request,
+            operation: "stadium_artwork_catalog",
+            maxAttempts: 1
+        )
+        try validateSuccess(http, data: data, operation: "stadium_artwork_catalog")
+        let responseETag = http.value(forHTTPHeaderField: "ETag")
+        if http.statusCode == 304 {
+            return StadiumArtworkFetchResult(
+                catalog: nil,
+                etag: responseETag ?? ifNoneMatch,
+                isNotModified: true
+            )
+        }
+        return StadiumArtworkFetchResult(
+            catalog: try JSONDecoder().decode(StadiumArtworkCatalog.self, from: data),
+            etag: responseETag,
+            isNotModified: false
+        )
+    }
+
     func fetchTeamShortNames() async throws -> TeamShortNamesResponse {
         let request = try buildRequest(path: "team-short-names", queryItems: [])
         let (data, http) = try await performRequest(request, operation: "team_short_names")

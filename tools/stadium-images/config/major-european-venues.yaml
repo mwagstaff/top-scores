@@ -21,6 +21,7 @@ retention:
 
 stadiums:
   - club: FC Barcelona
+    club_elo_names: [Barcelona]
     stadium: Spotify Camp Nou
     slug: camp-nou
     aliases: [Camp Nou, Nou Camp]
@@ -32,6 +33,7 @@ stadiums:
       - Camp Nou night floodlights
 
   - club: Real Madrid
+    club_elo_names: [Real Madrid]
     stadium: Santiago Bernabéu Stadium
     slug: santiago-bernabeu
     aliases: [Santiago Bernabéu, Estadio Santiago Bernabéu, Bernabeu Stadium]
@@ -43,6 +45,7 @@ stadiums:
       - Santiago Bernabeu night floodlights
 
   - club: Atlético de Madrid
+    club_elo_names: [Atletico]
     stadium: Estadio Metropolitano
     slug: estadio-metropolitano
     aliases: [Metropolitano Stadium, Wanda Metropolitano, Riyadh Air Metropolitano]
@@ -54,6 +57,7 @@ stadiums:
       - Estadio Metropolitano night floodlights
 
   - club: Bayern Munich
+    club_elo_names: [Bayern]
     stadium: Allianz Arena
     slug: allianz-arena
     aliases: [FC Bayern Munich Stadium]
@@ -65,6 +69,7 @@ stadiums:
       - Allianz Arena night floodlights
 
   - club: Borussia Dortmund
+    club_elo_names: [Dortmund]
     stadium: Signal Iduna Park
     slug: signal-iduna-park
     aliases: [Westfalenstadion, BVB Stadion Dortmund]
@@ -81,7 +86,20 @@ stadiums:
       - Westfalenstadion panoramio Dortmund
       - IMAG0206 Borussia Dortmund Stadium
 
+  - club: Bayer Leverkusen
+    club_elo_names: [Leverkusen]
+    stadium: BayArena
+    slug: bayarena
+    aliases: [Ulrich-Haberland-Stadion]
+    search_terms:
+      - BayArena Bayer Leverkusen stadium
+      - BayArena interior pitch
+      - BayArena panorama
+      - BayArena daytime
+      - BayArena night floodlights
+
   - club: RB Leipzig
+    club_elo_names: [RB Leipzig]
     stadium: Red Bull Arena Leipzig
     slug: red-bull-arena-leipzig
     aliases: [Leipzig Stadium, Zentralstadion Leipzig]
@@ -94,6 +112,7 @@ stadiums:
       - 'incategory:"Red Bull Arena (Leipzig)"'
 
   - club: VfB Stuttgart
+    club_elo_names: [Stuttgart]
     stadium: MHPArena
     slug: mhparena
     aliases: [Mercedes-Benz Arena Stuttgart, Neckarstadion]
@@ -105,6 +124,10 @@ stadiums:
       - Stuttgart stadium night floodlights
 
   - club: AC Milan / Inter
+    club_elo_names: [Milan, Inter]
+    teams:
+      - { name: AC Milan, aliases: [Milan] }
+      - { name: Inter Milan, aliases: [Inter, Internazionale] }
     stadium: San Siro
     slug: san-siro
     aliases: [Stadio Giuseppe Meazza, Giuseppe Meazza Stadium]
@@ -119,7 +142,20 @@ stadiums:
       - 'incategory:"Interior of Stadio Giuseppe Meazza"'
       - 'incategory:"Panoramics of Stadio Giuseppe Meazza"'
 
+  - club: Atalanta
+    club_elo_names: [Atalanta]
+    stadium: New Balance Arena
+    slug: new-balance-arena
+    aliases: [Stadio di Bergamo, Gewiss Stadium, Stadio Atleti Azzurri d'Italia]
+    search_terms:
+      - New Balance Arena Atalanta
+      - Gewiss Stadium Atalanta interior pitch
+      - Stadio di Bergamo panorama
+      - Atalanta stadium daytime
+      - Atalanta stadium night floodlights
+
   - club: Juventus
+    club_elo_names: [Juventus]
     stadium: Juventus Stadium
     slug: juventus-stadium
     aliases: [Allianz Stadium Turin, Juventus Arena]
@@ -131,6 +167,10 @@ stadiums:
       - Juventus Stadium night floodlights
 
   - club: AS Roma / Lazio
+    club_elo_names: [Roma, Lazio]
+    teams:
+      - { name: AS Roma, aliases: [Roma] }
+      - { name: Lazio, aliases: [SS Lazio] }
     stadium: Stadio Olimpico
     slug: stadio-olimpico
     aliases: [Olympic Stadium Rome, Stadio Olimpico di Roma]
@@ -142,6 +182,7 @@ stadiums:
       - Stadio Olimpico night floodlights
 
   - club: Napoli
+    club_elo_names: [Napoli]
     stadium: Stadio Diego Armando Maradona
     slug: stadio-diego-armando-maradona
     aliases: [Stadio San Paolo, San Paolo Stadium Naples]
@@ -152,7 +193,20 @@ stadiums:
       - Stadio Maradona daytime
       - Stadio Maradona night floodlights
 
+  - club: Como 1907
+    club_elo_names: [Como]
+    stadium: Stadio Giuseppe Sinigaglia
+    slug: stadio-giuseppe-sinigaglia
+    aliases: [Stadio Comunale G. Sinigaglia, Stadio Sinigaglia]
+    search_terms:
+      - Stadio Giuseppe Sinigaglia Como football
+      - Stadio Sinigaglia interior pitch
+      - Giuseppe Sinigaglia stadium panorama
+      - Como stadium daytime
+      - Como stadium night floodlights
+
   - club: Paris Saint-Germain
+    club_elo_names: [Paris SG]
     stadium: Parc des Princes
     slug: parc-des-princes
     aliases: [PSG Stadium]
@@ -164,6 +218,7 @@ stadiums:
       - Parc des Princes night floodlights
 
   - club: Olympique de Marseille
+    club_elo_names: [Marseille]
     stadium: Stade Vélodrome
     slug: stade-velodrome
     aliases: [Orange Vélodrome, Stade Velodrome]
@@ -175,6 +230,7 @@ stadiums:
       - Stade Velodrome night floodlights
 
   - club: Olympique Lyonnais
+    club_elo_names: [Lyon]
     stadium: Groupama Stadium
     slug: groupama-stadium
     aliases: [Parc Olympique Lyonnais, Stade des Lumières]
@@ -185,7 +241,32 @@ stadiums:
       - Groupama Stadium daytime
       - Groupama Stadium night floodlights
 
+  - club: RC Lens
+    club_elo_names: [Lens]
+    stadium: Stade Bollaert-Delelis
+    slug: stade-bollaert-delelis
+    aliases: [Stade Félix-Bollaert, Stade Bollaert]
+    search_terms:
+      - Stade Bollaert Delelis RC Lens
+      - Bollaert Delelis interior pitch
+      - Stade Bollaert panorama
+      - RC Lens stadium daytime
+      - RC Lens stadium night floodlights
+
+  - club: Villarreal CF
+    club_elo_names: [Villarreal]
+    stadium: Estadio de la Cerámica
+    slug: estadio-de-la-ceramica
+    aliases: [El Madrigal, Campo del Villarreal]
+    search_terms:
+      - Estadio de la Ceramica Villarreal
+      - El Madrigal interior pitch
+      - Estadio de la Ceramica panorama
+      - Villarreal stadium daytime
+      - Villarreal stadium night floodlights
+
   - club: Ajax
+    club_elo_names: [Ajax]
     stadium: Johan Cruyff Arena
     slug: johan-cruyff-arena
     aliases: [Johan Cruijff ArenA, Amsterdam ArenA]
@@ -197,6 +278,7 @@ stadiums:
       - Johan Cruyff Arena night floodlights
 
   - club: Feyenoord
+    club_elo_names: [Feyenoord]
     stadium: De Kuip
     slug: de-kuip
     aliases: [Stadion Feijenoord, Feyenoord Stadium]
@@ -208,6 +290,7 @@ stadiums:
       - De Kuip night floodlights
 
   - club: PSV Eindhoven
+    club_elo_names: [PSV]
     stadium: Philips Stadion
     slug: philips-stadion
     aliases: [Philips Stadium]
@@ -219,6 +302,7 @@ stadiums:
       - Philips Stadion night floodlights
 
   - club: Benfica
+    club_elo_names: [Benfica]
     stadium: Estádio da Luz
     slug: estadio-da-luz
     aliases: [Estadio da Luz, Stadium of Light Lisbon]
@@ -230,6 +314,7 @@ stadiums:
       - Estadio da Luz night floodlights
 
   - club: FC Porto
+    club_elo_names: [Porto]
     stadium: Estádio do Dragão
     slug: estadio-do-dragao
     aliases: [Estadio do Dragao, Dragon Stadium Porto]
@@ -241,6 +326,7 @@ stadiums:
       - Estadio do Dragao night floodlights
 
   - club: Sporting CP
+    club_elo_names: [Sporting]
     stadium: Estádio José Alvalade
     slug: estadio-jose-alvalade
     aliases: [Estadio Jose Alvalade, José Alvalade Stadium]
@@ -252,6 +338,7 @@ stadiums:
       - Estadio Jose Alvalade night floodlights
 
   - club: Celtic
+    club_elo_names: [Celtic]
     stadium: Celtic Park
     slug: celtic-park
     aliases: [Parkhead, Paradise Glasgow]
@@ -263,6 +350,7 @@ stadiums:
       - Celtic Park night floodlights
 
   - club: Rangers
+    club_elo_names: [Rangers]
     stadium: Ibrox Stadium
     slug: ibrox-stadium
     aliases: [Ibrox Park, Rangers Stadium]
@@ -274,6 +362,7 @@ stadiums:
       - Ibrox night floodlights
 
   - club: Galatasaray
+    club_elo_names: [Galatasaray]
     stadium: Rams Park
     slug: rams-park
     aliases: [Ali Sami Yen Sports Complex, Türk Telekom Stadium, Nef Stadium]
@@ -285,6 +374,7 @@ stadiums:
       - Galatasaray stadium night floodlights
 
   - club: Beşiktaş
+    club_elo_names: [Besiktas]
     stadium: Beşiktaş Stadium
     slug: besiktas-stadium
     aliases: [Tüpraş Stadyumu, Vodafone Park, Beşiktaş Park]

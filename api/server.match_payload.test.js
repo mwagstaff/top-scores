@@ -68,6 +68,7 @@ const {
     matchIsMajorGameOfInterest,
     matchIsMajorTournament,
     matchPassesCategoryFilters,
+    buildFixtureViewFilterContext,
     isChampionsLeagueQualifyingMatch,
     matchPassesTopTeamsPreset,
     matchPassesFixtureViewOptions,
@@ -1534,6 +1535,64 @@ test("top teams applies unconditional and conditional inclusion rules", () => {
     matchPassesFixtureViewOptions(
       match("EFL Cup", "Preston North End", "Everton"),
       ["preset:top-teams"],
+      context
+    ),
+    true
+  );
+});
+
+test("top teams always includes Premier League fixtures", () => {
+  assert.equal(
+    matchPassesTopTeamsPreset(
+      {
+        league: "Premier League",
+        home_team: "Coventry City",
+        away_team: "Hull City",
+      },
+      {
+        isPremierLeagueTeam: () => false,
+        isTopTeamsHomeAssociationClub: () => false,
+        isTopTeamsMajorClub: () => false,
+      }
+    ),
+    true
+  );
+});
+
+test("top teams derives current Premier League clubs from the live team catalog", () => {
+  const context = buildFixtureViewFilterContext({
+    premierLeagueTeams: ["Liverpool"],
+    clubEloTeams: [],
+    manualMappings: new Map(),
+    teamCatalogSnapshot: {
+      teams: [
+        {
+          id: "coventry-city",
+          name: "Coventry City",
+          aliases: ["Coventry"],
+          competition_ids: ["english-league-cup", "premier-league"],
+        },
+        {
+          id: "hull-city",
+          name: "Hull City",
+          aliases: ["Hull"],
+          competition_ids: ["premier-league"],
+        },
+      ],
+      byID: new Map(),
+      updatedAt: "2026-08-27T00:00:00.000Z",
+    },
+  });
+
+  assert.equal(context.isPremierLeagueTeam("Coventry City"), true);
+  assert.equal(context.isPremierLeagueTeam("Hull"), true);
+  assert.equal(
+    matchPassesTopTeamsPreset(
+      {
+        league: "EFL Cup",
+        home_team: "Coventry City",
+        away_team: "Oxford United",
+      },
       context
     ),
     true

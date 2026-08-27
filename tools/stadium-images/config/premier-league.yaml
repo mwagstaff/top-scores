@@ -21,6 +21,7 @@ retention:
 
 stadiums:
   - club: Arsenal
+    club_elo_names: [Arsenal]
     stadium: Emirates Stadium
     slug: emirates-stadium
     aliases: [Arsenal Stadium, Ashburton Grove]
@@ -33,6 +34,7 @@ stadiums:
       - Emirates Stadium floodlights
 
   - club: Aston Villa
+    club_elo_names: [Aston Villa]
     stadium: Villa Park
     slug: villa-park
     aliases: [Aston Villa Stadium]
@@ -45,6 +47,7 @@ stadiums:
       - Villa Park floodlights
 
   - club: AFC Bournemouth
+    club_elo_names: [Bournemouth]
     stadium: Vitality Stadium
     slug: vitality-stadium
     aliases: [Dean Court, Bournemouth Stadium]
@@ -57,6 +60,7 @@ stadiums:
       - Vitality Stadium night
 
   - club: Brentford
+    club_elo_names: [Brentford]
     stadium: Gtech Community Stadium
     slug: gtech-community-stadium
     aliases: [Brentford Community Stadium]
@@ -73,6 +77,7 @@ stadiums:
       - Brentford Gtech Community Stadium
 
   - club: Brighton & Hove Albion
+    club_elo_names: [Brighton]
     stadium: American Express Stadium
     slug: american-express-stadium
     aliases: [Amex Stadium, Falmer Stadium]
@@ -85,6 +90,7 @@ stadiums:
       - Amex Stadium night floodlights
 
   - club: Chelsea
+    club_elo_names: [Chelsea]
     stadium: Stamford Bridge
     slug: stamford-bridge
     aliases: [Chelsea Stadium]
@@ -97,6 +103,7 @@ stadiums:
       - Stamford Bridge floodlights
 
   - club: Coventry City
+    club_elo_names: [Coventry]
     stadium: Coventry Building Society Arena
     slug: coventry-building-society-arena
     aliases: [CBS Arena, Ricoh Arena, City of Coventry Stadium]
@@ -109,6 +116,7 @@ stadiums:
       - Coventry Building Society Arena night
 
   - club: Crystal Palace
+    club_elo_names: [Crystal Palace]
     stadium: Selhurst Park
     slug: selhurst-park
     aliases: [Crystal Palace Stadium]
@@ -121,6 +129,7 @@ stadiums:
       - Selhurst Park floodlights
 
   - club: Everton
+    club_elo_names: [Everton]
     stadium: Hill Dickinson Stadium
     slug: hill-dickinson-stadium
     aliases: [Everton Stadium, Bramley-Moore Dock Stadium, Bramley-Moore Dock]
@@ -134,6 +143,7 @@ stadiums:
       - 'incategory:"Hill Dickinson Stadium"'
 
   - club: Fulham
+    club_elo_names: [Fulham]
     stadium: Craven Cottage
     slug: craven-cottage
     aliases: [Fulham Stadium]
@@ -146,6 +156,7 @@ stadiums:
       - Craven Cottage floodlights
 
   - club: Hull City
+    club_elo_names: [Hull]
     stadium: MKM Stadium
     slug: mkm-stadium
     aliases: [KCOM Stadium, KC Stadium, Kingston Communications Stadium]
@@ -158,6 +169,7 @@ stadiums:
       - MKM Stadium night floodlights
 
   - club: Ipswich Town
+    club_elo_names: [Ipswich]
     stadium: Portman Road
     slug: portman-road
     aliases: [Ipswich Town Stadium]
@@ -171,6 +183,7 @@ stadiums:
       - 'incategory:"Portman Road"'
 
   - club: Leeds United
+    club_elo_names: [Leeds]
     stadium: Elland Road
     slug: elland-road
     aliases: [Leeds United Stadium]
@@ -183,6 +196,7 @@ stadiums:
       - Elland Road floodlights
 
   - club: Liverpool
+    club_elo_names: [Liverpool]
     stadium: Anfield
     slug: anfield
     aliases: [Liverpool Stadium]
@@ -195,6 +209,7 @@ stadiums:
       - Anfield floodlights
 
   - club: Manchester City
+    club_elo_names: [Man City]
     stadium: Etihad Stadium
     slug: etihad-stadium
     aliases: [City of Manchester Stadium, Eastlands]
@@ -207,6 +222,7 @@ stadiums:
       - Etihad Stadium night floodlights
 
   - club: Manchester United
+    club_elo_names: [Man United]
     stadium: Old Trafford
     slug: old-trafford
     aliases: [Manchester United Stadium, Theatre of Dreams]
@@ -219,6 +235,7 @@ stadiums:
       - Old Trafford floodlights
 
   - club: Newcastle United
+    club_elo_names: [Newcastle]
     stadium: St James' Park
     slug: st-james-park
     aliases: [St. James' Park, Newcastle United Stadium]
@@ -231,6 +248,7 @@ stadiums:
       - St James Park floodlights Newcastle
 
   - club: Nottingham Forest
+    club_elo_names: [Forest]
     stadium: The City Ground
     slug: city-ground
     aliases: [City Ground, Nottingham Forest Stadium]
@@ -243,6 +261,7 @@ stadiums:
       - City Ground floodlights Nottingham
 
   - club: Sunderland
+    club_elo_names: [Sunderland]
     stadium: Stadium of Light
     slug: stadium-of-light
     aliases: [Sunderland Stadium]
@@ -255,6 +274,7 @@ stadiums:
       - Stadium of Light floodlights Sunderland
 
   - club: Tottenham Hotspur
+    club_elo_names: [Tottenham]
     stadium: Tottenham Hotspur Stadium
     slug: tottenham-hotspur-stadium
     aliases: [Spurs Stadium, New White Hart Lane]

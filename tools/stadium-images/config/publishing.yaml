@@ -1,0 +1,114 @@
+schema_version: 1
+
+# Created by collector/promote_reviewed.py after human review. It is optional
+# so the bundled fallback catalogue can still be published on a clean checkout.
+optional_include_files:
+  - tools/stadium-images/collector/deployment/publishing.yaml
+
+# Every remote image must retain enough information to render its credit in
+# Profile > About > Data sources > Image credits. Override this block per asset
+# when publishing third-party photography from the collector output.
+credit_defaults:
+  author: Top Scores
+  source: Top Scores
+  license: Top Scores artwork
+  attribution: Top Scores artwork
+
+teams:
+  afc-bournemouth:
+    name: AFC Bournemouth
+    aliases: [Bournemouth]
+    source_team_ids: ["1044"]
+    venue_ids: []
+
+assets:
+  - { id: header-stadium-01, file: "ios/Top Scores/Media.xcassets/HeaderStadium01.imageset/HeaderStadium01.jpg", role: generic_backdrop }
+  - { id: header-stadium-02, file: "ios/Top Scores/Media.xcassets/HeaderStadium02.imageset/HeaderStadium02.jpg", role: generic_backdrop }
+  - { id: header-stadium-03, file: "ios/Top Scores/Media.xcassets/HeaderStadium03.imageset/HeaderStadium03.jpg", role: generic_backdrop }
+  - { id: header-stadium-04, file: "ios/Top Scores/Media.xcassets/HeaderStadium04.imageset/HeaderStadium04.jpg", role: generic_backdrop }
+  - { id: header-stadium-05, file: "ios/Top Scores/Media.xcassets/HeaderStadium05.imageset/HeaderStadium05.jpg", role: generic_backdrop }
+  - { id: header-stadium-06, file: "ios/Top Scores/Media.xcassets/HeaderStadium06.imageset/HeaderStadium06.jpg", role: generic_backdrop }
+  - { id: header-stadium-07, file: "ios/Top Scores/Media.xcassets/HeaderStadium07.imageset/HeaderStadium07.jpg", role: generic_backdrop }
+  - { id: header-stadium-08, file: "ios/Top Scores/Media.xcassets/HeaderStadium08.imageset/HeaderStadium08.jpg", role: generic_backdrop }
+  - { id: header-stadium-09, file: "ios/Top Scores/Media.xcassets/HeaderStadium09.imageset/HeaderStadium09.jpg", role: generic_backdrop }
+  - { id: header-stadium-10, file: "ios/Top Scores/Media.xcassets/HeaderStadium10.imageset/HeaderStadium10.jpg", role: generic_backdrop }
+  - { id: header-stadium-11, file: "ios/Top Scores/Media.xcassets/HeaderStadium11.imageset/HeaderStadium11.jpg", role: generic_backdrop }
+  - { id: header-stadium-12, file: "ios/Top Scores/Media.xcassets/HeaderStadium12.imageset/HeaderStadium12.jpg", role: generic_backdrop }
+  - { id: header-stadium-13, file: "ios/Top Scores/Media.xcassets/HeaderStadium13.imageset/HeaderStadium13.jpg", role: generic_backdrop }
+  - { id: header-stadium-14, file: "ios/Top Scores/Media.xcassets/HeaderStadium14.imageset/HeaderStadium14.jpg", role: generic_backdrop }
+  - { id: header-stadium-15, file: "ios/Top Scores/Media.xcassets/HeaderStadium15.imageset/HeaderStadium15.jpg", role: generic_backdrop }
+  - { id: header-stadium-16, file: "ios/Top Scores/Media.xcassets/HeaderStadium16.imageset/HeaderStadium16.jpg", role: generic_backdrop }
+  - { id: header-stadium-17, file: "ios/Top Scores/Media.xcassets/HeaderStadium17.imageset/HeaderStadium17.jpg", role: generic_backdrop }
+  - { id: header-stadium-18, file: "ios/Top Scores/Media.xcassets/HeaderStadium18.imageset/HeaderStadium18.jpg", role: generic_backdrop }
+  - { id: header-stadium-19, file: "ios/Top Scores/Media.xcassets/HeaderStadium19.imageset/HeaderStadium19.jpg", role: generic_backdrop }
+  - { id: header-stadium-20, file: "ios/Top Scores/Media.xcassets/HeaderStadium20.imageset/HeaderStadium20.jpg", role: generic_backdrop }
+  - { id: header-stadium-21, file: "ios/Top Scores/Media.xcassets/HeaderStadium21.imageset/HeaderStadium21.jpg", role: generic_backdrop }
+  - { id: header-stadium-22, file: "ios/Top Scores/Media.xcassets/HeaderStadium22.imageset/HeaderStadium22.jpg", role: generic_backdrop }
+
+  - { id: match-stadium-01-day, file: "ios/Top Scores/Media.xcassets/MatchStadium01Day.imageset/MatchStadium01Day.jpg", role: generic_match, light_context: day }
+  - { id: match-stadium-01-night, file: "ios/Top Scores/Media.xcassets/MatchStadium01Night.imageset/MatchStadium01Night.jpg", role: generic_match, light_context: night }
+  - { id: match-stadium-02-day, file: "ios/Top Scores/Media.xcassets/MatchStadium02Day.imageset/MatchStadium02Day.jpg", role: generic_match, light_context: day }
+  - { id: match-stadium-02-night, file: "ios/Top Scores/Media.xcassets/MatchStadium02Night.imageset/MatchStadium02Night.jpg", role: generic_match, light_context: night }
+  - { id: match-stadium-03-day, file: "ios/Top Scores/Media.xcassets/MatchStadium03Day.imageset/MatchStadium03Day.jpg", role: generic_match, light_context: day }
+  - { id: match-stadium-03-night, file: "ios/Top Scores/Media.xcassets/MatchStadium03Night.imageset/MatchStadium03Night.jpg", role: generic_match, light_context: night }
+
+  - id: bournemouth-day-01
+    file: "ios/Top Scores/Media.xcassets/BournemouthStadiumDay01.imageset/BournemouthStadiumDay01.jpg"
+    role: team
+    light_context: day
+    team_ids: [afc-bournemouth]
+    stadium: Vitality Stadium
+  - id: bournemouth-day-02
+    file: "ios/Top Scores/Media.xcassets/BournemouthStadiumDay02.imageset/BournemouthStadiumDay02.jpg"
+    role: team
+    light_context: day
+    team_ids: [afc-bournemouth]
+    stadium: Vitality Stadium
+  - id: bournemouth-day-03
+    file: "ios/Top Scores/Media.xcassets/BournemouthStadiumDay03.imageset/BournemouthStadiumDay03.jpg"
+    role: team
+    light_context: day
+    team_ids: [afc-bournemouth]
+    stadium: Vitality Stadium
+  - id: bournemouth-day-04
+    file: "ios/Top Scores/Media.xcassets/BournemouthStadiumDay04.imageset/BournemouthStadiumDay04.jpg"
+    role: team
+    light_context: day
+    team_ids: [afc-bournemouth]
+    stadium: Vitality Stadium
+  - id: bournemouth-day-05
+    file: "ios/Top Scores/Media.xcassets/BournemouthStadiumDay05.imageset/BournemouthStadiumDay05.jpg"
+    role: team
+    light_context: day
+    team_ids: [afc-bournemouth]
+    stadium: Vitality Stadium
+  - id: bournemouth-day-06
+    file: "ios/Top Scores/Media.xcassets/BournemouthStadiumDay06.imageset/BournemouthStadiumDay06.jpg"
+    role: team
+    light_context: day
+    team_ids: [afc-bournemouth]
+    stadium: Vitality Stadium
+  - id: bournemouth-night-01
+    file: "ios/Top Scores/Media.xcassets/BournemouthStadiumNight01.imageset/BournemouthStadiumNight01.jpg"
+    role: team
+    light_context: night
+    team_ids: [afc-bournemouth]
+    stadium: Vitality Stadium
+  - id: bournemouth-night-02
+    file: "ios/Top Scores/Media.xcassets/BournemouthStadiumNight02.imageset/BournemouthStadiumNight02.jpg"
+    role: team
+    light_context: night
+    team_ids: [afc-bournemouth]
+    stadium: Vitality Stadium
+  - id: bournemouth-night-03
+    file: "ios/Top Scores/Media.xcassets/BournemouthStadiumNight03.imageset/BournemouthStadiumNight03.jpg"
+    role: team
+    light_context: night
+    team_ids: [afc-bournemouth]
+    stadium: Vitality Stadium
+  - id: bournemouth-night-04
+    file: "ios/Top Scores/Media.xcassets/BournemouthStadiumNight04.imageset/BournemouthStadiumNight04.jpg"
+    role: team
+    light_context: night
+    team_ids: [afc-bournemouth]
+    stadium: Vitality Stadium

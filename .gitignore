@@ -292,3 +292,6 @@ __pycache__/
 .pytest_cache/
 .venv/
 /tools/stadium-images/output/
+/tools/stadium-images/published/
+/tools/stadium-images/collector/staging/
+/tools/stadium-images/collector/deployment/

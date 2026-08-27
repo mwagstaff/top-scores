@@ -122,6 +122,7 @@ const {
 const fantasyScore = require("./fantasy_score");
 const { registerGoalGuesserRoutes } = require("./goal_guesser");
 const { registerGoalGuesserTestHarnessRoutes } = require("./goal_guesser_test_harness");
+const { registerStadiumArtworkRoutes } = require("./stadium_artwork");
 
 function parseEnvBoolean(value, fallback = false) {
   if (value === undefined || value === null) return fallback;
@@ -706,6 +707,7 @@ registerGoalGuesserTestHarnessRoutes(app, {
   key: process.env.GOAL_GUESSER_TEST_HARNESS_KEY,
   databaseName: process.env.GOAL_GUESSER_TEST_DATABASE,
 });
+registerStadiumArtworkRoutes(app, { apiPrefix: API_PREFIX });
 
 const appUsageMetrics = {
   apiRequestsTotal: 0,
@@ -15594,6 +15596,9 @@ const FIXTURE_VIEW_UEFA_TEAM_RULE_IDS = new Set([
   "rule:premier-league-teams",
 ]);
 const TOP_TEAMS_PRESET_ID = String(DEFAULT_TOP_TEAMS_CONFIG.id || "preset:top-teams");
+const TOP_TEAMS_PREMIER_LEAGUE_ID = String(
+  DEFAULT_TOP_TEAMS_CONFIG.premier_league_competition_id || "premier-league"
+);
 const TOP_TEAMS_CHAMPIONS_LEAGUE_ID = String(
   DEFAULT_TOP_TEAMS_CONFIG.champions_league_competition_id || "uefa-champions-league"
 );
@@ -15644,6 +15649,9 @@ function matchPassesTopTeamsPreset(match, context = {}) {
   const competitionID = competition ? competition.id : null;
   const teamNames = [match.home_team, match.away_team];
 
+  if (competitionID === TOP_TEAMS_PREMIER_LEAGUE_ID) {
+    return true;
+  }
   if (teamNames.some((teamName) => context.isPremierLeagueTeam?.(teamName))) {
     return true;
   }
@@ -15744,6 +15752,17 @@ function buildFixtureViewFilterContext(options = {}) {
   const topClubByNormalizedName = new Map();
   const clubEloMatchByNormalizedName = new Map();
   const teamCatalogSnapshot = options.teamCatalogSnapshot || currentTeamCatalogSnapshot();
+  const catalogPremierLeagueTeams = teamCatalogSnapshot.teams
+    .filter((team) =>
+      Array.isArray(team.competition_ids) &&
+      team.competition_ids.includes(TOP_TEAMS_PREMIER_LEAGUE_ID)
+    )
+    .flatMap((team) => [team.name, ...(Array.isArray(team.aliases) ? team.aliases : [])])
+    .filter(Boolean);
+  const resolvedPremierLeagueTeams = [
+    ...premierLeagueTeams,
+    ...catalogPremierLeagueTeams,
+  ];
   const clubEloTeamForName = (teamName) => {
     const normalizedName = normalizeFilterTeamName(teamName);
     if (clubEloMatchByNormalizedName.has(normalizedName)) {
@@ -15765,7 +15784,7 @@ function buildFixtureViewFilterContext(options = {}) {
     manualMappings,
     isPremierLeagueTeam:
       options.isPremierLeagueTeam ||
-      ((teamName) => teamMatchesPremierLeague(teamName, premierLeagueTeams)),
+      ((teamName) => teamMatchesPremierLeague(teamName, resolvedPremierLeagueTeams)),
     isTopClub: options.isTopClub || ((teamName) => {
       const normalizedName = normalizeFilterTeamName(teamName);
       if (topClubByNormalizedName.has(normalizedName)) {
@@ -15790,11 +15809,13 @@ function buildFixtureViewFilterContext(options = {}) {
 }
 
 function currentFixtureViewFilterContext() {
+  loadClubEloManualMappings();
   const premierLeagueDataset = currentPremierLeagueTeamsDatasetSnapshot();
   const teamCatalogSnapshot = currentTeamCatalogSnapshot();
   const version = [
     clubEloLastUpdated || "unknown",
     cachedClubEloTeams.length,
+    clubEloManualMappingsMtimeMs || 0,
     premierLeagueDataset.updated_at || "unknown",
     premierLeagueDataset.items.length,
     cachedTeamCatalogVersion || "unknown",
@@ -15810,13 +15831,23 @@ function currentFixtureViewFilterContext() {
   return cachedFixtureViewFilterContext;
 }
 
+function topTeamsIdentityKey(teamName, manualMappings = null) {
+  const canonicalName = canonicalTeamName(teamName) || String(teamName || "").trim();
+  return resolveManualCanonicalTeamKey(
+    canonicalName,
+    manualMappings || loadClubEloManualMappings()
+  ) || normalizeFilterTeamName(canonicalName);
+}
+
 function buildResolvedTopTeamsPreset() {
+  const manualMappings = loadClubEloManualMappings();
   const premierLeagueDataset = currentPremierLeagueTeamsDatasetSnapshot();
   const teamCatalogSnapshot = currentTeamCatalogSnapshot();
   const version = [
     TOP_TEAMS_CONFIG_UPDATED_AT || "unknown",
     clubEloLastUpdated || "unknown",
     cachedClubEloTeams.length,
+    clubEloManualMappingsMtimeMs || 0,
     premierLeagueDataset.updated_at || "unknown",
     premierLeagueDataset.items.length,
     teamCatalogSnapshot.updatedAt || "unknown",
@@ -15837,8 +15868,9 @@ function buildResolvedTopTeamsPreset() {
     const trimmedName = String(name || "").trim();
     if (!trimmedName) return;
     const canonicalName = canonicalTeamName(trimmedName) || trimmedName;
-    const key = normalizeFilterTeamName(canonicalName);
+    const key = topTeamsIdentityKey(canonicalName, manualMappings);
     if (!key) return;
+    const displayKey = normalizeTeamIdentityName(canonicalName);
     const existing = target.get(key) || {
       id: String(options.id || key.replace(/[^a-z0-9]+/g, "-")).replace(/^-+|-+$/g, ""),
       name: canonicalName,
@@ -15853,7 +15885,7 @@ function buildResolvedTopTeamsPreset() {
       ...(Array.isArray(options.aliases) ? options.aliases : []),
     ].forEach((alias) => {
       const trimmedAlias = String(alias || "").trim();
-      if (trimmedAlias && normalizeFilterTeamName(trimmedAlias) !== key) {
+      if (trimmedAlias && normalizeTeamIdentityName(trimmedAlias) !== displayKey) {
         existing.aliases.add(trimmedAlias);
       }
     });
@@ -15929,8 +15961,12 @@ function buildResolvedTopTeamsPreset() {
       if (sortByElo && left.elo !== right.elo) return (right.elo || 0) - (left.elo || 0);
       return compareInsensitive(left.name, right.name);
     });
+  const manualMappingsUpdatedAt = Number.isFinite(clubEloManualMappingsMtimeMs)
+    ? new Date(clubEloManualMappingsMtimeMs).toISOString()
+    : null;
   const updatedAt = newestIsoTimestamp([
     TOP_TEAMS_CONFIG_UPDATED_AT,
+    manualMappingsUpdatedAt,
     clubEloLastUpdated,
     premierLeagueDataset.updated_at,
     teamCatalogSnapshot.updatedAt,
@@ -15942,6 +15978,7 @@ function buildResolvedTopTeamsPreset() {
     revision: String(DEFAULT_TOP_TEAMS_CONFIG.revision || "1"),
     title: String(DEFAULT_TOP_TEAMS_CONFIG.title || "Top teams"),
     club_elo_threshold: TOP_TEAMS_CLUB_ELO_THRESHOLD,
+    premier_league_competition_id: TOP_TEAMS_PREMIER_LEAGUE_ID,
     champions_league_competition_id: TOP_TEAMS_CHAMPIONS_LEAGUE_ID,
     other_uefa_competition_ids: Array.from(TOP_TEAMS_OTHER_UEFA_COMPETITION_IDS),
     qualifying_round_patterns: ["qualifying", "qualification", "playoff", "play-off", "play off"],
@@ -32263,6 +32300,7 @@ module.exports = {
     matchPassesCategoryFilters,
     clubEloRowIsTopTeam,
     clubEloRowMeetsTopTeamsThreshold,
+    topTeamsIdentityKey,
     buildFixtureViewFilterContext,
     buildResolvedTopTeamsPreset,
     isChampionsLeagueQualifyingMatch,

@@ -41,7 +41,7 @@ def test_major_european_venue_config_is_expansion_ready() -> None:
     league = load_league("major-european-venues", CONFIG_DIR)
 
     assert league.season == "2026/27"
-    assert len(league.stadiums) == 24
+    assert len(league.stadiums) == 29
     assert league.retention.total == 12
     assert {stadium.name for stadium in league.stadiums} >= {
         "Spotify Camp Nou",
@@ -51,6 +51,11 @@ def test_major_european_venue_config_is_expansion_ready() -> None:
         "Parc des Princes",
         "Estádio da Luz",
         "Celtic Park",
+        "BayArena",
+        "New Balance Arena",
+        "Stade Bollaert-Delelis",
+        "Estadio de la Cerámica",
+        "Stadio Giuseppe Sinigaglia",
     }
     assert all(len(stadium.search_terms) >= 5 for stadium in league.stadiums)
 

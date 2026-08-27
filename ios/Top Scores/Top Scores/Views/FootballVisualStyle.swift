@@ -119,6 +119,8 @@ struct FootballCardSurface: View {
 }
 
 struct FootballScreenBackdrop: View {
+    @EnvironmentObject private var preferences: PreferencesStore
+    @EnvironmentObject private var stadiumArtworkStore: StadiumArtworkStore
     @Environment(\.accessibilityReduceTransparency) private var accessibilityReduceTransparency
     @Environment(\.stadiumBackdropAssetName) private var stadiumBackdropAssetName
 
@@ -127,8 +129,11 @@ struct FootballScreenBackdrop: View {
             ZStack(alignment: .top) {
                 FootballVisualStyle.pageBackground
 
-                Image(stadiumBackdropAssetName)
-                    .resizable()
+                RemoteStadiumArtworkImage(
+                    asset: stadiumArtworkStore.backdropAsset(selectionKey: stadiumBackdropAssetName),
+                    apiBaseURL: preferences.apiBaseURL,
+                    fallbackAssetName: stadiumBackdropAssetName
+                )
                     .scaledToFill()
                     .frame(width: proxy.size.width, height: 300)
                     .clipped()

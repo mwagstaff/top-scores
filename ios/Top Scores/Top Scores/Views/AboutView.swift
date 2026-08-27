@@ -85,9 +85,35 @@ struct AboutView: View {
                         Link(destination: URL(string: "https://www.eloratings.net")!) {
                             Label("World Football Elo Ratings", systemImage: "chart.bar.xaxis")
                         }
+                        NavigationLink {
+                            ImageCreditsView()
+                        } label: {
+                            Label("Image credits", systemImage: "photo.on.rectangle.angled")
+                        }
                     }
 
                     #if DEBUG
+                    Section {
+                        NavigationLink {
+                            DebugStadiumArtworkView()
+                        } label: {
+                            Label("Stadium artwork", systemImage: "photo.on.rectangle.angled")
+                        }
+                    } header: {
+                        HStack {
+                            Text("Image tools")
+                            Spacer()
+                            Text("DEBUG")
+                                .font(.caption)
+                                .fontWeight(.semibold)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                        }
+                    } footer: {
+                        Text("Pull the latest server catalogue, cache its images, and inspect generic or team-specific assignments.")
+                    }
+
                     Section {
                         if isLoadingDiagnostics {
                             HStack(spacing: 10) {
@@ -761,4 +787,5 @@ struct AboutView: View {
     AboutView()
         .environmentObject(PreferencesStore())
         .environmentObject(FantasyViewModel())
+        .environmentObject(StadiumArtworkStore())
 }

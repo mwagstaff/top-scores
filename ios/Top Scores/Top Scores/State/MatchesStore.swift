@@ -610,7 +610,8 @@ final class MatchesStore: ObservableObject {
 
     func groupFixtureBrowseMatches(
         _ matches: [Match],
-        preferences: PreferencesSnapshot
+        preferences: PreferencesSnapshot,
+        pinningContext: String = "fixture-browser"
     ) -> [MatchDay] {
         let signpost = PerformanceSignposter.matches.beginInterval("FixtureBrowseGrouping")
         defer { PerformanceSignposter.matches.endInterval("FixtureBrowseGrouping", signpost) }
@@ -620,7 +621,7 @@ final class MatchesStore: ObservableObject {
             ratingLookup: teamRatingLookup,
             premierLeagueMatchesFirst: preferences.premierLeagueMatchesFirst
         )
-        return matchOrderPinning.stabilize(grouped, context: "fixture-browser")
+        return matchOrderPinning.stabilize(grouped, context: pinningContext)
     }
 
     private struct ModeState {

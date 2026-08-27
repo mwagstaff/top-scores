@@ -24,6 +24,13 @@ from .processing.classifier import HeuristicImageClassifier
 from .processing.convert import create_hero_derivative
 from .processing.dedupe import perceptual_distance
 from .processing.review import create_review_sheet
+from .publishing import (
+    DEFAULT_PROJECT_ROOT,
+    DEFAULT_PUBLISH_DIR,
+    PublishError,
+    build_publish_bundle,
+    validate_publish_bundle,
+)
 from .sources import (
     GeographSource,
     OpenverseSource,
@@ -38,6 +45,32 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+
+
+@app.command("publish")
+def publish_artwork(
+    config: Path = typer.Option(
+        DEFAULT_CONFIG_DIR / "publishing.yaml",
+        exists=True,
+        dir_okay=False,
+        help="Artwork assignments and credit metadata.",
+    ),
+    output: Path = typer.Option(DEFAULT_PUBLISH_DIR, file_okay=False),
+    project_root: Path = typer.Option(
+        DEFAULT_PROJECT_ROOT,
+        exists=True,
+        file_okay=False,
+    ),
+) -> None:
+    """Build and validate the filesystem bundle consumed by the API."""
+    try:
+        catalog = build_publish_bundle(config, output, project_root)
+        validate_publish_bundle(output)
+    except PublishError as error:
+        raise typer.BadParameter(str(error)) from error
+    console.print(
+        f"Published {len(catalog['assets'])} assets as {catalog['catalog_version']}"
+    )
 
 
 @app.command()
