@@ -363,6 +363,7 @@ private enum WatchMatchStatusFormatter {
     private static let inProgressTokens: Set<String> = ["HT", "ET", "LIVE", "PENS", "PEN", "PEN."]
     private static let completeTokens: Set<String> = ["FT", "AET"]
     private static let minutePattern = #"^\d{1,3}(?:\+\d{1,2})?'?$"#
+    private static let extraTimeMinutePattern = #"^ET\s+\d{1,3}(?:\+\d{1,2})?'?$"#
 
     static func displayValue(for rawStatus: String) -> String {
         let status = normalized(rawStatus)
@@ -371,13 +372,19 @@ private enum WatchMatchStatusFormatter {
             let minuteValue = status.replacingOccurrences(of: "'", with: "")
             return "\(minuteValue)'"
         }
+        if isExtraTimeMinuteStatus(status) {
+            let minuteValue = String(status.dropFirst(2))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "'", with: "")
+            return "ET \(minuteValue)'"
+        }
         return status
     }
 
     static func isInProgress(_ rawStatus: String) -> Bool {
         let status = normalized(rawStatus)
         guard !status.isEmpty else { return false }
-        if isMinuteStatus(status) { return true }
+        if isMinuteStatus(status) || isExtraTimeMinuteStatus(status) { return true }
 
         let token = status.uppercased()
         if completeTokens.contains(token) { return false }
@@ -390,6 +397,10 @@ private enum WatchMatchStatusFormatter {
 
     private static func isMinuteStatus(_ status: String) -> Bool {
         status.range(of: minutePattern, options: .regularExpression) != nil
+    }
+
+    private static func isExtraTimeMinuteStatus(_ status: String) -> Bool {
+        status.range(of: extraTimeMinutePattern, options: [.regularExpression, .caseInsensitive]) != nil
     }
 }
 

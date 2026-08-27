@@ -370,7 +370,7 @@ function isInProgressStatus(value) {
   if (!normalized) return false;
   if (FINAL_STATUS_TOKENS.has(normalized)) return false;
   if (normalized === "HT") return true;
-  if (/^\d{1,3}(?:\+\d{1,2})?'?$/.test(normalized)) return true;
+  if (/^(?:ET\s+)?\d{1,3}(?:\+\d{1,2})?'?$/i.test(normalized)) return true;
   return normalized === "LIVE" || normalized === "ET";
 }
 

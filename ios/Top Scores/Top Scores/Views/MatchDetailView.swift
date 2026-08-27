@@ -1154,6 +1154,14 @@ private struct MatchDetailScoreboardHero: View {
             if predictionDisplay != .hidden {
                 MatchDetailPredictionPanel(match: match, predictionDisplay: predictionDisplay)
             }
+
+            if let extendedMatchStatusText = match.extendedMatchStatusText {
+                Text(extendedMatchStatusText)
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.72))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 18)

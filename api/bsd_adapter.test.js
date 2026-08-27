@@ -58,6 +58,7 @@ function loadHelper(name) {
 }
 
 test("default BSD league allowlist includes required competitions", () => {
+  assert.ok(DEFAULT_BSD_LEAGUE_ALLOWLIST.includes("83"), "UEFA Conference League");
   assert.ok(DEFAULT_BSD_LEAGUE_ALLOWLIST.includes("90"), "UEFA Super Cup");
   assert.ok(DEFAULT_BSD_LEAGUE_ALLOWLIST.includes("86"), "League One");
   assert.ok(DEFAULT_BSD_LEAGUE_ALLOWLIST.includes("87"), "League Two");
@@ -76,12 +77,15 @@ test("mapBsdStatus: finished → FT, with pens/ET escalation", () => {
   assert.equal(mapBsdStatus({ status: "finished", period: "FT" }), "FT");
   assert.equal(mapBsdStatus({ status: "finished", penalty_shootout: { home: 4, away: 3 } }), "AET");
   assert.equal(mapBsdStatus({ status: "finished", extra_time_score: "1-1" }), "AET");
+  assert.equal(mapBsdStatus({ status: "finished", period: "extra_time" }), "AET");
 });
 
 test("mapBsdStatus: in-progress → minute / HT / LIVE", () => {
   assert.equal(mapBsdStatus({ status: "inprogress", period: "2nd_half", current_minute: 46 }), "46");
   assert.equal(mapBsdStatus({ status: "inprogress", period: "2nd_half", current_minute: 64 }), "64");
   assert.equal(mapBsdStatus({ status: "inprogress", period: "1st_half", current_minute: 49 }), "45+4");
+  assert.equal(mapBsdStatus({ status: "inprogress", period: "extra_time", current_minute: 101 }), "ET 101");
+  assert.equal(mapBsdStatus({ status: "inprogress", period: "extra_time", current_minute: null }), "ET");
   assert.equal(mapBsdStatus({ status: "inprogress", period: "halftime" }), "HT");
   assert.equal(mapBsdStatus({ status: "halftime" }), "HT");
   assert.equal(mapBsdStatus({ status: "inprogress", current_minute: null }), "LIVE");
@@ -462,6 +466,20 @@ test("bsdEventToCanonicalMatch: maps BSD league 90 to UEFA Super Cup", () => {
   });
 
   assert.equal(match.league, "UEFA Super Cup");
+});
+
+test("bsdEventToCanonicalMatch: maps BSD league 83 to UEFA Conference League", () => {
+  const match = bsdEventToCanonicalMatch({
+    id: 8301,
+    league_id: 83,
+    league_name: "UEFA Conference League 26/27",
+    home_team: "Brighton & Hove Albion",
+    away_team: "Basel",
+    status: "notstarted",
+    event_date: "2026-08-27T19:00:00Z",
+  });
+
+  assert.equal(match.league, "UEFA Conference League");
 });
 
 test("bsdEventToCanonicalMatch: maps EFL League One and League Two to catalog names", () => {

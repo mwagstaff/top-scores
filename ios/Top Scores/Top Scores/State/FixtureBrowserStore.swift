@@ -499,6 +499,7 @@ nonisolated enum FixtureBrowseSelectionResolver {
 nonisolated enum FixtureBrowseAutoRefreshPolicy {
     static let liveIntervalSeconds = 15
     static let pendingTodayIntervalSeconds = 60
+    static let fixtureMembershipRefreshInterval: TimeInterval = 60
     static let preMatchStateWindow: TimeInterval = 30 * 60
     static let postKickoffStateWindow: TimeInterval = 6 * 60 * 60
 
@@ -511,11 +512,17 @@ nonisolated enum FixtureBrowseAutoRefreshPolicy {
         if matches.contains(where: \.isInProgress) {
             return liveIntervalSeconds
         }
-        guard selectedDateKey == todayKey,
-              matches.contains(where: { !$0.isFinished && !$0.isPostponed }) else {
+        guard selectedDateKey == todayKey else {
             return nil
         }
         return pendingTodayIntervalSeconds
+    }
+
+    static func shouldRefreshFixtureMembership(
+        bucketFetchedAt: Date,
+        now: Date = Date()
+    ) -> Bool {
+        now.timeIntervalSince(bucketFetchedAt) >= fixtureMembershipRefreshInterval
     }
 
     static func stateRefreshMatches(in matches: [Match], now: Date = Date()) -> [Match] {
@@ -1030,6 +1037,40 @@ final class FixtureBrowserStore: ObservableObject {
         let bucketKey = Self.bucketKey(dateKey: dateKey)
         guard let bucket = cachePayload?.buckets[bucketKey] else { return }
 
+        if FixtureBrowseAutoRefreshPolicy.shouldRefreshFixtureMembership(
+            bucketFetchedAt: bucket.fetchedAt
+        ) {
+            do {
+                let response = try await APIClient(
+                    baseURL: baseURL,
+                    session: apiSession
+                ).fetchFixtureBrowseMatches(
+                    on: dateKey,
+                    preferences: snapshot,
+                    hydrateStates: false
+                )
+                guard !Task.isCancelled,
+                      isAutoRefreshEnabled,
+                      selectedDateKey == dateKey else {
+                    return
+                }
+
+                let refreshedBuckets = storeRangeResponse(response, for: [dateKey])
+                if let refreshedBucket = refreshedBuckets[dateKey] {
+                    _ = publishCurrentSelection(bucket: refreshedBucket, dateKey: dateKey)
+                }
+                persistCache()
+                return
+            } catch is CancellationError {
+                return
+            } catch {
+                diagnosticLog(
+                    "[FixtureBrowserStore] fixture membership refresh failed: %@",
+                    String(describing: error)
+                )
+            }
+        }
+
         let refreshMatches = FixtureBrowseAutoRefreshPolicy.stateRefreshMatches(
             in: visibleMatches
         )
@@ -1061,7 +1102,7 @@ final class FixtureBrowserStore: ObservableObject {
             let matchesChanged = refreshedMatches != bucket.matches
             let refreshedBucket = FixtureBrowseBucket(
                 matches: refreshedMatches,
-                fetchedAt: Date(),
+                fetchedAt: bucket.fetchedAt,
                 lastUpdated: Date()
             )
             store(bucket: refreshedBucket, for: bucketKey)

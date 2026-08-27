@@ -150,7 +150,14 @@ struct MatchRow: View {
                 }
                 .frame(maxWidth: .infinity)
 
-                if !shouldShowInlineAggregateBrackets, let winnerSummaryText = match.winnerSummaryText {
+                if let extendedMatchStatusText = match.extendedMatchStatusText {
+                    Text(extendedMatchStatusText)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.top, 2)
+                } else if !shouldShowInlineAggregateBrackets,
+                          let winnerSummaryText = match.winnerSummaryText {
                     Text(winnerSummaryText)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
@@ -261,6 +268,13 @@ struct MatchRow: View {
                         size: logoSize
                     )
                 }
+            }
+
+            if let extendedMatchStatusText = match.extendedMatchStatusText {
+                Text(extendedMatchStatusText)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .center)
             }
         }
         .padding(cardPadding)

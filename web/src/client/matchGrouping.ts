@@ -209,6 +209,10 @@ export function displayLeague(match: Match): string {
 export function displayStatus(match: Match): string {
   const rawStatus = (match.scoreStatus || "").trim();
   if (rawStatus) {
+    const extraTimeMinute = rawStatus.match(/^ET\s+(\d{1,3}(?:\+\d{1,2})?)'?$/i);
+    if (extraTimeMinute) {
+      return `ET ${extraTimeMinute[1]}'`;
+    }
     if (/^\d{1,3}(?:\+\d{1,2})?'?$/.test(rawStatus)) {
       return `${rawStatus.replace(/'/g, "")}'`;
     }
@@ -227,7 +231,7 @@ export function isMatchLive(match: Match): boolean {
   if (!status) {
     return false;
   }
-  if (/^\d{1,3}(?:\+\d{1,2})?'?$/.test(status)) {
+  if (/^(?:ET\s+)?\d{1,3}(?:\+\d{1,2})?'?$/.test(status)) {
     return true;
   }
   return ["HT", "ET", "LIVE"].includes(status);

@@ -211,7 +211,7 @@ const LIVE_ACTIVITY_TEAM_DISPLAY_ALIAS_LOOKUP = Object.entries(
 );
 
 // Match status helpers - mirrors server.js MATCH_STATUS_* constants
-const MATCH_STATUS_MINUTE_PATTERN = /^(\d{1,3})(?:\+(\d{1,2}))?'?$/;
+const MATCH_STATUS_MINUTE_PATTERN = /^(?:ET\s+)?(\d{1,3})(?:\+(\d{1,2}))?'?$/i;
 const MATCH_STATUS_COMPLETE_TOKENS = new Set(["FT", "AET"]);
 const MATCH_STATUS_IN_PROGRESS_TOKENS = new Set(["LIVE", "HT", "ET", "PENS", "PEN", "PEN."]);
 const MATCH_STATUS_PENALTY_TOKENS = new Set(["PENS", "PEN", "PEN."]);

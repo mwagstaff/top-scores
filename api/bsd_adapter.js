@@ -37,6 +37,7 @@ const BSD_LEAGUE_NAME_MAP = {
   "41": "Copa del Rey",
   "7": "UEFA Champions League",
   "8": "UEFA Europa League",
+  "83": "UEFA Conference League",
   "90": "UEFA Super Cup",
   "64": "UEFA Nations League",
   "31": "International Friendly",
@@ -231,7 +232,7 @@ function isDisallowedGoalVarDecision(decision, confirmed) {
 }
 
 // Maps BSD status/period/current_minute to the internal score_status vocabulary:
-// null | "HT" | "FT" | "AET" | "Pens" | "POSTPONED" | "ET" | minute | "LIVE").
+// null | "HT" | "FT" | "AET" | "Pens" | "POSTPONED" | "ET" | "ET <minute>" | minute | "LIVE").
 function mapBsdStatus(event, options = {}) {
   const status = String(event.status || "").trim().toLowerCase();
   const period = String(event.period || "").trim().toLowerCase();
@@ -267,6 +268,7 @@ function mapBsdStatus(event, options = {}) {
     if (event.penalty_shootout != null) return "AET";
     if (event.extra_time_score != null) return "AET";
     if (periodSummary && periodSummary.extraTimeScore) return "AET";
+    if (period.includes("extra")) return "AET";
     return "FT";
   }
   if (status === "halftime" || status === "ht" || period === "ht" || period === "halftime") {
@@ -274,7 +276,7 @@ function mapBsdStatus(event, options = {}) {
   }
   // In progress.
   if (period.includes("penal") || status.includes("penal")) return "Pens";
-  if (period.includes("extra")) return minuteStr || "ET";
+  if (period.includes("extra")) return minuteStr ? `ET ${minuteStr}` : "ET";
   if (["1st_half", "first_half", "1h"].includes(period) && Number(minute) > 45) {
     return `45+${Number(minute) - 45}`;
   }

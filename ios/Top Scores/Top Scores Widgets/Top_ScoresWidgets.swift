@@ -4,6 +4,20 @@ import WidgetKit
 import ActivityKit
 import ImageIO
 
+private let extraTimeMinutePattern = #"^ET\s+\d{1,3}(?:\+\d{1,2})?'?$"#
+
+private func isExtraTimeMinuteStatus(_ value: String) -> Bool {
+    value.range(of: extraTimeMinutePattern, options: [.regularExpression, .caseInsensitive]) != nil
+}
+
+private func formattedExtraTimeMinuteStatus(_ value: String) -> String? {
+    guard isExtraTimeMinuteStatus(value) else { return nil }
+    let minute = String(value.dropFirst(2))
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+        .replacingOccurrences(of: "'", with: "")
+    return "ET \(minute)'"
+}
+
 private enum WidgetAppGroupConfig {
     static let identifier = "group.dev.skynolimit.topscores"
     static let sharedMatchesFileName = "shared-matches.json"
@@ -180,7 +194,8 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
         let inProgressTokens: Set<String> = ["HT", "ET", "LIVE", "PENS", "PEN", "PEN."]
         if inProgressTokens.contains(normalized) { return true }
         let minutePattern = #"^\d{1,3}(?:\+\d{1,2})?'?$"#
-        return normalized.range(of: minutePattern, options: .regularExpression) != nil
+        return normalized.range(of: minutePattern, options: .regularExpression) != nil ||
+            isExtraTimeMinuteStatus(normalized)
     }
 
     var isFinished: Bool {
@@ -200,6 +215,9 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
         if normalized.range(of: minutePattern, options: .regularExpression) != nil {
             let minuteValue = normalized.replacingOccurrences(of: "'", with: "")
             return "\(minuteValue)'"
+        }
+        if let extraTimeStatus = formattedExtraTimeMinuteStatus(normalized) {
+            return extraTimeStatus
         }
         return normalized
     }
@@ -524,7 +542,8 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
         let inProgressTokens: Set<String> = ["HT", "ET", "LIVE", "PENS", "PEN", "PEN."]
         if inProgressTokens.contains(normalized) { return true }
         let minutePattern = #"^\d{1,3}(?:\+\d{1,2})?'?$"#
-        return normalized.range(of: minutePattern, options: .regularExpression) != nil
+        return normalized.range(of: minutePattern, options: .regularExpression) != nil ||
+            isExtraTimeMinuteStatus(normalized)
     }
 
     var isFinished: Bool {
@@ -594,7 +613,8 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
             let inProgressTokens: Set<String> = ["HT", "ET", "LIVE", "PENS", "PEN", "PEN."]
             let minutePattern = #"^\d{1,3}(?:\+\d{1,2})?'?$"#
             if inProgressTokens.contains(normalizedStatus) ||
-                normalizedStatus.range(of: minutePattern, options: .regularExpression) != nil {
+                normalizedStatus.range(of: minutePattern, options: .regularExpression) != nil ||
+                isExtraTimeMinuteStatus(normalizedStatus) {
                 return false
             }
         }
@@ -4785,6 +4805,9 @@ private struct UnifiedMultiMatchListView: View {
         if normalized.range(of: minutePattern, options: .regularExpression) != nil {
             let minuteValue = normalized.replacingOccurrences(of: "'", with: "")
             return "\(minuteValue)'"
+        }
+        if let extraTimeStatus = formattedExtraTimeMinuteStatus(normalized) {
+            return extraTimeStatus
         }
         return normalized
     }

@@ -933,7 +933,21 @@ struct Top_ScoresTests {
             selectedDateKey: today,
             todayKey: today,
             matches: [finished]
-        ) == nil)
+        ) == FixtureBrowseAutoRefreshPolicy.pendingTodayIntervalSeconds)
+    }
+
+    @Test func fixtureBrowserAutoRefresh_refreshesFixtureMembershipPeriodically() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let refreshInterval = FixtureBrowseAutoRefreshPolicy.fixtureMembershipRefreshInterval
+
+        #expect(FixtureBrowseAutoRefreshPolicy.shouldRefreshFixtureMembership(
+            bucketFetchedAt: now.addingTimeInterval(-refreshInterval),
+            now: now
+        ))
+        #expect(!FixtureBrowseAutoRefreshPolicy.shouldRefreshFixtureMembership(
+            bucketFetchedAt: now.addingTimeInterval(-(refreshInterval - 1)),
+            now: now
+        ))
     }
 
     @Test func matchOrderPinning_keepsPreviouslyDisplayedOrderWhileMatchesAreInProgress() {
@@ -2470,6 +2484,13 @@ struct Top_ScoresTests {
         #expect(MatchStatusFormatter.preferredStatus(current: "47", incoming: "HT") == "47")
     }
 
+    @Test func matchStatusFormatter_formatsExtraTimeMinutes() async throws {
+        #expect(MatchStatusFormatter.displayValue(for: "ET 101") == "ET 101'")
+        #expect(MatchStatusFormatter.isInProgress("ET 101"))
+        #expect(MatchStatusFormatter.isExtraTimeInProgress("ET 101"))
+        #expect(MatchStatusFormatter.parseMatchTimeMinutes("ET 101") == 101)
+    }
+
     @Test func stabilizedScoreStatus_clampsOverdueLiveMatchesToFullTime() async throws {
         let match = makeMatch(
             date: "2026-03-07",
@@ -2500,7 +2521,7 @@ struct Top_ScoresTests {
             penaltyResult: "West Ham United win 5-3 on penalties"
         )
 
-        #expect(match.winnerSummaryText == "West Ham United win 5 - 3 on penalties")
+        #expect(match.winnerSummaryText == "West Ham United won 5-3 on penalties")
     }
 
     @Test func displayScoreStatus_formatsHomeAwayPenaltyTallyForHomeWinner() async throws {
@@ -2535,6 +2556,7 @@ struct Top_ScoresTests {
         )
 
         #expect(match.displayScoreStatus == "P 3-4")
+        #expect(match.winnerSummaryText == "Real Sociedad won 4-3 on penalties")
     }
 
     @Test func winnerSummaryText_formatsAggregateWinners() async throws {
@@ -2973,7 +2995,44 @@ struct Top_ScoresTests {
             scoreStatus: "AET"
         )
 
-        #expect(match.winnerSummaryText == "Chelsea win 2 - 1 after extra time")
+        #expect(match.winnerSummaryText == "Chelsea won after extra time")
+    }
+
+    @Test func winnerSummaryText_usesAggregateWinnerAfterExtraTime() async throws {
+        let match = Match(
+            date: "2026-03-01",
+            time: "20:00",
+            homeTeam: "Chelsea",
+            awayTeam: "Liverpool",
+            league: "UEFA Champions League",
+            tvChannels: [],
+            homeScore: 1,
+            awayScore: 1,
+            aggregateHomeScore: 3,
+            aggregateAwayScore: 2,
+            scoreStatus: "AET"
+        )
+
+        #expect(match.winnerSummaryText == "Chelsea won 3-2 on aggregate after extra time")
+    }
+
+    @Test func extendedMatchStatusText_describesLiveExtraTime() async throws {
+        let match = Match(
+            date: "2099-03-01",
+            time: "20:00",
+            homeTeam: "Chelsea",
+            awayTeam: "Liverpool",
+            league: "FA Cup",
+            tvChannels: [],
+            homeScore: 1,
+            awayScore: 1,
+            scoreStatus: "ET 101"
+        )
+
+        #expect(match.displayScoreStatus == "ET 101'")
+        #expect(match.isExtraTimeInProgress)
+        #expect(match.extendedMatchStatusText == "Extra time being played")
+        #expect(match.winnerSummaryText == nil)
     }
 
     @Test @MainActor func mergeRefreshedMatches_preservesTerminalStateAcrossResetRefresh() async throws {

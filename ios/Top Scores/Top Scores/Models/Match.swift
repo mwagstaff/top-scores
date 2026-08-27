@@ -736,6 +736,36 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         return "\(homeScore) - \(awayScore)"
     }
 
+    var extendedMatchStatusText: String? {
+        if isExtraTimeInProgress {
+            return "Extra time being played"
+        }
+
+        guard isFinished else { return nil }
+
+        if let penaltyWinnerSummaryText {
+            return penaltyWinnerSummaryText
+        }
+
+        guard stabilizedScoreStatus() == "AET" else {
+            return nil
+        }
+
+        let winner: String
+        if let aggregate = resolvedAggregateScore, aggregate.home != aggregate.away {
+            let homeWins = aggregate.home > aggregate.away
+            winner = homeWins ? homeTeam : awayTeam
+            let winnerScore = homeWins ? aggregate.home : aggregate.away
+            let loserScore = homeWins ? aggregate.away : aggregate.home
+            return "\(winner) won \(winnerScore)-\(loserScore) on aggregate after extra time"
+        } else if let homeScore, let awayScore, homeScore != awayScore {
+            winner = homeScore > awayScore ? homeTeam : awayTeam
+        } else {
+            return nil
+        }
+        return "\(winner) won after extra time"
+    }
+
     var hasAggregateScore: Bool {
         resolvedAggregateScore != nil
     }
@@ -768,24 +798,15 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     }
 
     var winnerSummaryText: String? {
-        if let penaltyWinnerSummary = penaltyWinnerSummaryText {
-            return penaltyWinnerSummary
+        if isFinished, let extendedMatchStatusText {
+            return extendedMatchStatusText
         }
 
         if let aggregateWinnerSummary = aggregateWinnerSummaryText {
             return aggregateWinnerSummary
         }
 
-        guard stabilizedScoreStatus() == "AET",
-              let homeScore,
-              let awayScore,
-              homeScore != awayScore
-        else {
-            return nil
-        }
-
-        let winner = homeScore > awayScore ? homeTeam : awayTeam
-        return "\(winner) win \(homeScore) - \(awayScore) after extra time"
+        return nil
     }
 
     var penaltyDetailSummaryText: String? {
@@ -832,6 +853,11 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     nonisolated var isInProgress: Bool {
         guard let scoreStatus = stabilizedScoreStatus() else { return false }
         return MatchStatusFormatter.isInProgress(scoreStatus)
+    }
+
+    nonisolated var isExtraTimeInProgress: Bool {
+        guard let scoreStatus = stabilizedScoreStatus() else { return false }
+        return MatchStatusFormatter.isExtraTimeInProgress(scoreStatus)
     }
 
     nonisolated var isFinished: Bool {
@@ -1434,15 +1460,22 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         let homeMentioned = Self.containsTeamName(homeTeam, in: trimmedPenaltyResult)
         let awayMentioned = Self.containsTeamName(awayTeam, in: trimmedPenaltyResult)
         let winner: String
+        let winnerScore: Int
+        let loserScore: Int
         if homeMentioned != awayMentioned {
             winner = homeMentioned ? homeTeam : awayTeam
+            winnerScore = scorePair.0
+            loserScore = scorePair.1
         } else if scorePair.0 == scorePair.1 {
             return trimmedPenaltyResult
         } else {
-            winner = scorePair.0 > scorePair.1 ? homeTeam : awayTeam
+            let homeWins = scorePair.0 > scorePair.1
+            winner = homeWins ? homeTeam : awayTeam
+            winnerScore = homeWins ? scorePair.0 : scorePair.1
+            loserScore = homeWins ? scorePair.1 : scorePair.0
         }
 
-        return "\(winner) win \(scorePair.0) - \(scorePair.1) on penalties"
+        return "\(winner) won \(winnerScore)-\(loserScore) on penalties"
     }
 
     private var penaltyDisplayScoreText: String? {
@@ -1547,6 +1580,7 @@ enum MatchStatusFormatter {
     private nonisolated static let completeTokens: Set<String> = ["FT", "AET", "PENS"]
     private nonisolated static let postponedTokens: Set<String> = ["POSTPONED", "MATCH POSTPONED"]
     private nonisolated static let minutePattern = #"^\d{1,3}(?:\+\d{1,2})?'?$"#
+    private nonisolated static let extraTimeMinutePattern = #"^ET\s+(\d{1,3}(?:\+\d{1,2})?)'?$"#
     private nonisolated static let penaltyProgressPattern = #"^P\s+(\d+)\s*-\s*(\d+)$"#
     private nonisolated static let maximumLiveWindow: TimeInterval = 3.5 * 60 * 60
 
@@ -1557,6 +1591,12 @@ enum MatchStatusFormatter {
             let minuteValue = status.replacingOccurrences(of: "'", with: "")
             return "\(minuteValue)'"
         }
+        if isExtraTimeMinuteStatus(status) {
+            let minuteValue = String(status.dropFirst(2))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .replacingOccurrences(of: "'", with: "")
+            return "ET \(minuteValue)'"
+        }
         if status == "POSTPONED" {
             return "Match postponed"
         }
@@ -1566,7 +1606,7 @@ enum MatchStatusFormatter {
     nonisolated static func isInProgress(_ rawStatus: String) -> Bool {
         let status = canonicalStatus(rawStatus) ?? normalized(rawStatus)
         guard !status.isEmpty else { return false }
-        if isMinuteStatus(status) { return true }
+        if isMinuteStatus(status) || isExtraTimeMinuteStatus(status) { return true }
         // Check complete tokens before penalty-shootout detection: "PENS" is a
         // final result, not an in-progress state. Only the live progress pattern
         // "P x-y" (e.g. "P 3-2") indicates an ongoing shootout.
@@ -1581,6 +1621,11 @@ enum MatchStatusFormatter {
         guard !status.isEmpty else { return false }
         let token = status.uppercased()
         return completeTokens.contains(token)
+    }
+
+    nonisolated static func isExtraTimeInProgress(_ rawStatus: String) -> Bool {
+        let status = canonicalStatus(rawStatus) ?? normalized(rawStatus)
+        return status == "ET" || isExtraTimeMinuteStatus(status)
     }
 
     nonisolated static func isPostponed(_ rawStatus: String?) -> Bool {
@@ -1702,6 +1747,13 @@ enum MatchStatusFormatter {
     nonisolated static func parseMatchTimeMinutes(_ matchTime: String?) -> Int? {
         guard let matchTime = matchTime?.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
 
+        if matchTime.uppercased().range(of: extraTimeMinutePattern, options: .regularExpression) != nil {
+            let minute = String(matchTime.dropFirst(2))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .trimmingCharacters(in: CharacterSet(charactersIn: "'"))
+            return Int(minute)
+        }
+
         if let match = matchTime.range(of: #"^(\d+)(?:\+(\d+))?[']?$"#, options: .regularExpression) {
             let components = matchTime[match].split(separator: "+")
             let base = Int(components[0].trimmingCharacters(in: CharacterSet(charactersIn: "'"))) ?? 0
@@ -1727,6 +1779,10 @@ enum MatchStatusFormatter {
 
     private nonisolated static func isMinuteStatus(_ status: String) -> Bool {
         status.range(of: minutePattern, options: .regularExpression) != nil
+    }
+
+    private nonisolated static func isExtraTimeMinuteStatus(_ status: String) -> Bool {
+        status.range(of: extraTimeMinutePattern, options: .regularExpression) != nil
     }
 
     nonisolated static func normalizedStatus(_ value: String?) -> String? {

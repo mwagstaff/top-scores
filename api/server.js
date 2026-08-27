@@ -9017,7 +9017,8 @@ function channelName(channel) {
 const MATCH_STATUS_IN_PROGRESS_TOKENS = new Set(["LIVE", "HT", "ET", "PENS", "PEN", "PEN."]);
 const MATCH_STATUS_COMPLETE_TOKENS = new Set(["FT", "AET", "Pens", "PENS"]);
 const MATCH_STATUS_POSTPONED_TOKENS = new Set(["POSTPONED", "MATCH POSTPONED"]);
-const MATCH_STATUS_MINUTE_PATTERN = /^\d{1,3}(?:\+\d{1,2})?'?$/;
+const MATCH_STATUS_MINUTE_PATTERN = /^(?:ET\s+)?\d{1,3}(?:\+\d{1,2})?'?$/i;
+const MATCH_STATUS_EXTRA_TIME_MINUTE_PATTERN = /^ET\s+(\d{1,3}(?:\+\d{1,2})?)'?$/i;
 const MATCH_STATUS_PENALTY_PROGRESS_PATTERN = /^P\s+(\d+)\s*-\s*(\d+)$/i;
 const MATCH_DETAILS_ID_PATTERN = /^[a-z0-9]+$/i;
 const SYNTHETIC_MATCH_ID_PREFIX = "syn";
@@ -9573,6 +9574,10 @@ function normalizeMatchStatusValue(status) {
   const normalized = String(status || "").trim();
   if (!normalized) return null;
   if (TIME_ONLY_PATTERN.test(normalized)) return null;
+  const extraTimeMinuteMatch = normalized.match(MATCH_STATUS_EXTRA_TIME_MINUTE_PATTERN);
+  if (extraTimeMinuteMatch) {
+    return `ET ${extraTimeMinuteMatch[1]}`;
+  }
   if (MATCH_STATUS_MINUTE_PATTERN.test(normalized)) {
     return normalized.replace(/'$/, "");
   }
@@ -9603,7 +9608,7 @@ function isPostponedMatchStatus(status) {
 function parseMatchStatusMinute(status) {
   const normalized = normalizeMatchStatusValue(status);
   if (!normalized) return null;
-  const match = normalized.match(/^(\d{1,3})(?:\+(\d{1,2}))?$/);
+  const match = normalized.match(/^(?:ET\s+)?(\d{1,3})(?:\+(\d{1,2}))?$/i);
   if (!match) return null;
   const base = Number(match[1]);
   const added = Number(match[2] || 0);

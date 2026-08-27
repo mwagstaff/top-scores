@@ -185,6 +185,10 @@ test("penalty shootout progress tallies are treated as live match status", () =>
   assert.equal(__testHooks.isPenaltyShootoutStatus("P 0-0"), true);
 });
 
+test("extra-time minute statuses are treated as live match status", () => {
+  assert.equal(__testHooks.isLiveMatchStatus("ET 101"), true);
+});
+
 test("mergeSnapshotWithFallback preserves existing league when new payload omits it", () => {
   const merged = __testHooks.mergeSnapshotWithFallback(
     {

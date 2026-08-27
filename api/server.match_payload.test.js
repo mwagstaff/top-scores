@@ -53,6 +53,7 @@ const {
     normalizeOperationalCacheState,
     bumpCacheStateSnapshot,
     normalizeMatchStatusValue,
+    parseMatchStatusMinute,
     normalizeTeamName,
     normalizeCompetitionFilterName,
     normalizeMatchesListMode,
@@ -994,6 +995,11 @@ test("normalizeMatchStatusValue canonicalizes penalty shootout progress tallies"
   assert.equal(normalizeMatchStatusValue("p 4 - 3"), "P 4-3");
 });
 
+test("normalizeMatchStatusValue preserves extra-time minute context", () => {
+  assert.equal(normalizeMatchStatusValue("et 101'"), "ET 101");
+  assert.equal(parseMatchStatusMinute("ET 101"), 101);
+});
+
 test("normalizeCompetitionFilterName maps World Cup qualifying competitions to the World Cup family", () => {
   assert.equal(
     normalizeCompetitionFilterName("FIFA World Cup"),
@@ -1513,7 +1519,7 @@ test("top teams includes Champions League league-phase matches but gates qualify
 
 test("top teams applies unconditional and conditional inclusion rules", () => {
   const context = {
-    isPremierLeagueTeam: (teamName) => teamName === "Everton",
+    isPremierLeagueTeam: (teamName) => ["Brighton & Hove Albion", "Everton"].includes(teamName),
     isTopTeamsHomeAssociationClub: (teamName) => teamName === "Shamrock Rovers",
     isTopTeamsMajorClub: (teamName) => teamName === "AC Milan",
   };
@@ -1525,6 +1531,7 @@ test("top teams applies unconditional and conditional inclusion rules", () => {
   });
 
   assert.equal(matchPassesTopTeamsPreset(match("EFL Cup", "Preston North End", "Everton"), context), true);
+  assert.equal(matchPassesTopTeamsPreset(match("UEFA Conference League", "Brighton & Hove Albion", "Basel"), context), true);
   assert.equal(matchPassesTopTeamsPreset(match("International Friendly", "Ireland", "Japan"), context), true);
   assert.equal(matchPassesTopTeamsPreset(match("La Liga", "Real Madrid", "Getafe"), context), true);
   assert.equal(matchPassesTopTeamsPreset(match("UEFA Europa League", "Shamrock Rovers", "Basel"), context), true);
