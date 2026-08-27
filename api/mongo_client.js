@@ -65,6 +65,15 @@ async function ensureIndexes() {
       { key: { updatedAt: -1 }, name: "updatedAt_desc" },
       { key: { apnsToken: 1 }, name: "apnsToken" },
     ]),
+    collection("calendar_subscriptions").createIndexes([
+      {
+        key: { device_token: 1 },
+        name: "device_active_unique",
+        unique: true,
+        partialFilterExpression: { revoked_at: null },
+      },
+      { key: { updated_at: -1 }, name: "updatedAt_desc" },
+    ]),
     collection("operational_datasets").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
     collection("matches").createIndexes([
       { key: { date: 1 }, name: "date" },
@@ -319,8 +328,69 @@ async function deleteUserPreferences(deviceToken) {
   const mongoDb = await getDb();
   const normalized = normalizeRecordId(deviceToken);
   if (!mongoDb || !normalized) return null;
-  const result = await collection("user_devices").deleteOne({ _id: normalized });
+  const nowIso = new Date().toISOString();
+  const [result] = await Promise.all([
+    collection("user_devices").deleteOne({ _id: normalized }),
+    collection("calendar_subscriptions").updateMany(
+      { device_token: normalized, revoked_at: null },
+      { $set: { revoked_at: nowIso, updated_at: nowIso } }
+    ),
+  ]);
   return result.deletedCount > 0;
+}
+
+async function registerCalendarSubscription(tokenHash, deviceToken) {
+  const mongoDb = await getDb();
+  const normalizedHash = normalizeRecordId(tokenHash).toLowerCase();
+  const normalizedDeviceToken = normalizeRecordId(deviceToken);
+  if (!mongoDb || !normalizedHash || !normalizedDeviceToken) return null;
+
+  const existing = await collection("calendar_subscriptions").findOne({
+    _id: normalizedHash,
+  });
+  if (existing && existing.device_token !== normalizedDeviceToken) {
+    throw new Error("Calendar subscription token is already registered");
+  }
+
+  const nowIso = new Date().toISOString();
+  await collection("calendar_subscriptions").updateMany(
+    {
+      device_token: normalizedDeviceToken,
+      _id: { $ne: normalizedHash },
+      revoked_at: null,
+    },
+    { $set: { revoked_at: nowIso, updated_at: nowIso } }
+  );
+  await collection("calendar_subscriptions").updateOne(
+    { _id: normalizedHash },
+    {
+      $set: {
+        device_token: normalizedDeviceToken,
+        revoked_at: null,
+        updated_at: nowIso,
+      },
+      $setOnInsert: { created_at: nowIso },
+    },
+    { upsert: true }
+  );
+  return {
+    token_hash: normalizedHash,
+    device_token: normalizedDeviceToken,
+    created_at: existing?.created_at || nowIso,
+    updated_at: nowIso,
+    revoked_at: null,
+  };
+}
+
+async function getCalendarSubscription(tokenHash) {
+  const mongoDb = await getDb();
+  const normalizedHash = normalizeRecordId(tokenHash).toLowerCase();
+  if (!mongoDb || !normalizedHash) return null;
+  const record = await collection("calendar_subscriptions").findOne({
+    _id: normalizedHash,
+    revoked_at: null,
+  });
+  return record ? stripMongoId(record) : null;
 }
 
 async function saveOperationalDataset(record) {
@@ -902,6 +972,8 @@ module.exports = {
   getUserPreferences,
   getAllUserPreferences,
   deleteUserPreferences,
+  registerCalendarSubscription,
+  getCalendarSubscription,
   saveOperationalDataset,
   getOperationalDataset,
   getOperationalDatasets,

@@ -3,11 +3,15 @@ import SwiftUI
 struct ProfileView: View {
     @EnvironmentObject private var preferences: PreferencesStore
     @EnvironmentObject private var fantasyViewModel: FantasyViewModel
+    @Environment(\.openURL) private var openURL
 
     @AppStorage("fantasy.managerEntryID") private var fantasyManagerEntryID = ""
     @AppStorage("fantasy.rivalManagersJSON") private var fantasyRivalsJSON = "[]"
     @AppStorage("fantasy.trackedLeaguesJSON") private var fantasyTrackedLeaguesJSON = "[]"
     @AppStorage("fantasy.initialSetupVersion") private var fantasyInitialSetupVersion = 0
+    @State private var isSubscribingToCalendar = false
+    @State private var calendarSubscriptionErrorMessage = ""
+    @State private var showsCalendarSubscriptionError = false
 
     var body: some View {
         NavigationStack {
@@ -46,6 +50,17 @@ struct ProfileView: View {
                                     )
                                 }
 
+                                Button(action: subscribeToPersonalCalendar) {
+                                    profileRow(
+                                        title: "Match calendar",
+                                        subtitle: isSubscribingToCalendar
+                                            ? "Preparing your personal subscription…"
+                                            : "Subscribe to the matches in your active Scores view.",
+                                        systemImage: "calendar.badge.plus"
+                                    )
+                                }
+                                .disabled(isSubscribingToCalendar)
+
                                 NavigationLink {
                                     FantasyAccountSettingsView(signOut: signOutOfFantasyAccount)
                                 } label: {
@@ -81,6 +96,11 @@ struct ProfileView: View {
             .toolbarColorScheme(.dark, for: .navigationBar)
         }
         .environment(\.colorScheme, .dark)
+        .alert("Unable to subscribe", isPresented: $showsCalendarSubscriptionError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(calendarSubscriptionErrorMessage)
+        }
         .onAppear {
             let openedAt = Date()
             let durationMs = Int(Date().timeIntervalSince(openedAt) * 1000)
@@ -167,6 +187,29 @@ struct ProfileView: View {
         return count == 1
             ? "1 team included in your Scores view."
             : "\(count) teams included in your Scores view."
+    }
+
+    private func subscribeToPersonalCalendar() {
+        guard !isSubscribingToCalendar else { return }
+        isSubscribingToCalendar = true
+        Task { @MainActor in
+            do {
+                let subscriptionURL = try await PersonalCalendarSubscriptionService.provision(
+                    preferences: preferences.snapshot
+                )
+                openURL(subscriptionURL) { accepted in
+                    isSubscribingToCalendar = false
+                    if !accepted {
+                        calendarSubscriptionErrorMessage = "Calendar could not open the subscription link. Please try again."
+                        showsCalendarSubscriptionError = true
+                    }
+                }
+            } catch {
+                isSubscribingToCalendar = false
+                calendarSubscriptionErrorMessage = error.localizedDescription
+                showsCalendarSubscriptionError = true
+            }
+        }
     }
 
     private func signOutOfFantasyAccount() {

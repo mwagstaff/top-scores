@@ -314,6 +314,7 @@ struct MatchesView: View {
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.openURL) private var openURL
     @AppStorage(AppGroupConfig.fantasyManagerEntryIDKey) private var fantasyManagerEntryID = ""
     @State private var predictionIndex = FixturePredictionStore.allPredictions()
     @State private var pendingPredictionDateKeys: Set<String> = []
@@ -334,6 +335,9 @@ struct MatchesView: View {
     @State private var expandedFixtureCompetitionKeys: Set<String> = []
     @State private var isFixtureDatePickerPresented = false
     @State private var fixtureDatePickerSelection = Date()
+    @State private var isSubscribingToCalendar = false
+    @State private var calendarSubscriptionErrorMessage = ""
+    @State private var showsCalendarSubscriptionError = false
     init(
         mode: MatchesViewMode,
         isSelected: Bool = true,
@@ -517,6 +521,11 @@ struct MatchesView: View {
                 .toolbarColorScheme(.dark, for: .navigationBar)
         }
         .environment(\.colorScheme, .dark)
+        .alert("Unable to subscribe", isPresented: $showsCalendarSubscriptionError) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(calendarSubscriptionErrorMessage)
+        }
         .onAppear {
             fixturesCoordinator.isDockEnabled = navigationMatch == nil
             refreshVisibleGroupedDays(from: sourceGroupedDays)
@@ -839,6 +848,30 @@ struct MatchesView: View {
             }
             .padding(.top, 12)
             .padding(.horizontal, 16)
+
+            Button(action: subscribeToPersonalCalendar) {
+                HStack(spacing: 7) {
+                    if isSubscribingToCalendar {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "calendar.badge.plus")
+                    }
+                    Text(
+                        isSubscribingToCalendar
+                            ? "Preparing your calendar…"
+                            : "Subscribe to your match calendar"
+                    )
+                }
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.plain)
+            .disabled(isSubscribingToCalendar)
+            .accessibilityHint("Opens Calendar to subscribe to matches in your active Scores view")
+            .padding(.top, 4)
+            .padding(.horizontal, 16)
         }
         .padding(.vertical, 12)
         .frame(width: 340)
@@ -912,6 +945,34 @@ struct MatchesView: View {
         guard isFixtureTodayAvailable else { return }
         fixtureBrowser.selectDate(Self.fixtureDateKey(from: Date()))
         isFixtureDatePickerPresented = false
+    }
+
+    private func subscribeToPersonalCalendar() {
+        guard !isSubscribingToCalendar else { return }
+        isSubscribingToCalendar = true
+        Task { @MainActor in
+            do {
+                let subscriptionURL = try await PersonalCalendarSubscriptionService.provision(
+                    preferences: preferences.snapshot
+                )
+                // Calendar's webcal handoff can lose its subscription prompt when
+                // another presentation is still being dismissed. Clear the compact
+                // date picker first, then open Calendar once its animation completes.
+                isFixtureDatePickerPresented = false
+                try? await Task.sleep(for: .milliseconds(350))
+                openURL(subscriptionURL) { accepted in
+                    isSubscribingToCalendar = false
+                    if !accepted {
+                        calendarSubscriptionErrorMessage = "Calendar could not open the subscription link. Please try again."
+                        showsCalendarSubscriptionError = true
+                    }
+                }
+            } catch {
+                isSubscribingToCalendar = false
+                calendarSubscriptionErrorMessage = error.localizedDescription
+                showsCalendarSubscriptionError = true
+            }
+        }
     }
 
     private var fixtureRecoveryButtonTransition: AnyTransition {

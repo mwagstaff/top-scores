@@ -236,6 +236,27 @@ struct PreferencesSyncDiagnostics: Sendable {
     let lastSyncFailureReason: String?
 }
 
+private struct CalendarSubscriptionRegistrationResponse: Decodable {
+    let feedPath: String
+}
+
+enum CalendarSubscriptionRegistrationError: LocalizedError {
+    case invalidBaseURL
+    case invalidResponse
+    case rejected(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidBaseURL:
+            return "The calendar subscription address is invalid."
+        case .invalidResponse:
+            return "Top Scores could not create the calendar subscription."
+        case .rejected(let message):
+            return message
+        }
+    }
+}
+
 actor PreferencesSyncService {
     static let shared = PreferencesSyncService()
 
@@ -300,6 +321,59 @@ actor PreferencesSyncService {
         )
     }
 
+    func registerCalendarSubscription(
+        _ snapshot: PreferencesSnapshot,
+        calendarToken: String
+    ) async throws -> URL {
+        guard let baseURL = URL(string: snapshot.apiBaseURL) else {
+            throw CalendarSubscriptionRegistrationError.invalidBaseURL
+        }
+
+        pendingSnapshot = nil
+        pendingSyncDeadline = nil
+        lastIssuedRevision += 1
+        UserDefaults.standard.set(lastIssuedRevision, forKey: revisionDefaultsKey)
+
+        let endpoint = baseURL.appendingPathComponent("calendar-subscriptions")
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request.timeoutInterval = 10
+        DeviceIdentity.applyHeader(to: &request)
+        request.httpBody = try JSONSerialization.data(withJSONObject: [
+            "calendarToken": calendarToken,
+            "preferencesRevision": lastIssuedRevision,
+            "preferences": preferencesPayload(snapshot)
+        ])
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw CalendarSubscriptionRegistrationError.invalidResponse
+        }
+        guard (200...299).contains(http.statusCode) else {
+            let responseObject = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            let message = responseObject?["error"] as? String
+                ?? "Top Scores could not create the calendar subscription."
+            throw CalendarSubscriptionRegistrationError.rejected(message)
+        }
+
+        let registration = try JSONDecoder().decode(
+            CalendarSubscriptionRegistrationResponse.self,
+            from: data
+        )
+        let components = registration.feedPath
+            .split(separator: "/")
+            .map(String.init)
+            .filter { !$0.isEmpty }
+        guard !components.isEmpty else {
+            throw CalendarSubscriptionRegistrationError.invalidResponse
+        }
+        return components.reduce(baseURL) { url, component in
+            url.appendingPathComponent(component)
+        }
+    }
+
     private func performSync(_ snapshot: PreferencesSnapshot) async {
         let signpost = PerformanceSignposter.preferences.beginInterval("PreferencesSync")
         defer { PerformanceSignposter.preferences.endInterval("PreferencesSync", signpost) }
@@ -339,47 +413,7 @@ actor PreferencesSyncService {
             "apnsToken": apnsToken as Any,
             "isDevelopmentBuild": isDevelopmentBuild,
             "fantasy": fantasyState,
-            "preferences": [
-                "selectedLeagues": snapshot.selectedLeagues,
-                "selectedFixtureViewOptionIDs": snapshot.selectedFixtureViewOptionIDs,
-                "favouriteFixtureViewOptionIDs": snapshot.favouriteFixtureViewOptionIDs,
-                "favouriteShowPredictedScores": snapshot.favouriteShowPredictedScores,
-                "selectedNotificationLeagues": snapshot.selectedNotificationLeagues,
-                "selectedNotificationViewOptionIDs": snapshot.selectedNotificationViewOptionIDs,
-                "selectedChannels": snapshot.selectedChannels,
-                "fixtureAllMajorMatchesEnabled": snapshot.fixtureAllMajorMatchesEnabled,
-                "notificationMatchesFixturesEnabled": snapshot.notificationMatchesFixturesEnabled,
-                "notificationAllMajorMatchesEnabled": snapshot.notificationAllMajorMatchesEnabled,
-                "competitionFilterEnabled": snapshot.usesFixtureCompetitionSelection,
-                "channelFilterEnabled": snapshot.channelFilterEnabled,
-                "englishPremierLeagueTeamsOnly": snapshot.englishPremierLeagueTeamsOnly,
-                "majorUEFAClubGamesEnabled": snapshot.majorUEFAClubGamesEnabled,
-                "homeNationsFilterEnabled": snapshot.homeNationsFilterEnabled,
-                "majorTournamentsFilterEnabled": snapshot.majorTournamentsFilterEnabled,
-                "apiBaseURL": snapshot.apiBaseURL,
-                "refreshIntervalMinutes": snapshot.refreshIntervalMinutes,
-                "showAllMatches": snapshot.showAllMatches,
-                "matchGroupSortOrder": snapshot.matchGroupSortOrder.rawValue,
-                "notificationsEnabled": snapshot.notificationsEnabled,
-                "notificationDelayMinutes": snapshot.notificationDelayMinutes,
-                "notificationEventTypes": Array(snapshot.notificationEventTypes),
-                "notificationPremierLeagueTeamsOnly": snapshot.notificationPremierLeagueTeamsOnly,
-                "notificationMajorUEFAClubGamesEnabled": snapshot.notificationMajorUEFAClubGamesEnabled,
-                "notificationHomeNationsFilterEnabled": snapshot.notificationHomeNationsFilterEnabled,
-                "notificationMajorTournamentsFilterEnabled": snapshot.notificationMajorTournamentsFilterEnabled,
-                "fantasyDeadlineRemindersEnabled": snapshot.fantasyDeadlineRemindersEnabled,
-                "showTodayUnfinishedFixturesBadge": snapshot.showTodayUnfinishedFixturesBadge,
-                "fixturesViewDensity": snapshot.fixturesViewDensity.rawValue,
-                "showCompactFixtureTvLogo": snapshot.showCompactFixtureTvLogo,
-                "showCompactFixtureFantasyLogo": snapshot.showCompactFixtureFantasyLogo,
-                "showKickoffTimeDividers": snapshot.showKickoffTimeDividers,
-                "showFantasyFixtureLogos": snapshot.showFantasyFixtureLogos,
-                "showFantasyExpectedPoints": snapshot.showFantasyExpectedPoints,
-                "showFantasyRealTimePoints": snapshot.showFantasyRealTimePoints,
-                "showFantasyMatchPills": snapshot.showsFantasyDataInFixtures,
-                "deviceLocale": Locale.current.identifier,
-                "deviceTimeZone": TimeZone.current.identifier
-            ]
+            "preferences": preferencesPayload(snapshot)
         ]
 
         #if DEBUG
@@ -437,6 +471,51 @@ actor PreferencesSyncService {
 
     private func shortDeviceToken(_ token: String) -> String {
         String(token.prefix(12))
+    }
+
+    private func preferencesPayload(_ snapshot: PreferencesSnapshot) -> [String: Any] {
+        [
+            "selectedLeagues": snapshot.selectedLeagues,
+            "selectedFixtureViewOptionIDs": snapshot.selectedFixtureViewOptionIDs,
+            "favouriteFixtureViewOptionIDs": snapshot.favouriteFixtureViewOptionIDs,
+            "favouriteShowPredictedScores": snapshot.favouriteShowPredictedScores,
+            "selectedNotificationLeagues": snapshot.selectedNotificationLeagues,
+            "selectedNotificationViewOptionIDs": snapshot.selectedNotificationViewOptionIDs,
+            "selectedChannels": snapshot.selectedChannels,
+            "fixtureAllMajorMatchesEnabled": snapshot.fixtureAllMajorMatchesEnabled,
+            "notificationMatchesFixturesEnabled": snapshot.notificationMatchesFixturesEnabled,
+            "notificationAllMajorMatchesEnabled": snapshot.notificationAllMajorMatchesEnabled,
+            "competitionFilterEnabled": snapshot.usesFixtureCompetitionSelection,
+            "channelFilterEnabled": snapshot.channelFilterEnabled,
+            "englishPremierLeagueTeamsOnly": snapshot.englishPremierLeagueTeamsOnly,
+            "majorUEFAClubGamesEnabled": snapshot.majorUEFAClubGamesEnabled,
+            "homeNationsFilterEnabled": snapshot.homeNationsFilterEnabled,
+            "majorTournamentsFilterEnabled": snapshot.majorTournamentsFilterEnabled,
+            "apiBaseURL": snapshot.apiBaseURL,
+            "refreshIntervalMinutes": snapshot.refreshIntervalMinutes,
+            "showAllMatches": snapshot.showAllMatches,
+            "matchGroupSortOrder": snapshot.matchGroupSortOrder.rawValue,
+            "notificationsEnabled": snapshot.notificationsEnabled,
+            "notificationDelayMinutes": snapshot.notificationDelayMinutes,
+            "notificationEventTypes": Array(snapshot.notificationEventTypes),
+            "notificationPremierLeagueTeamsOnly": snapshot.notificationPremierLeagueTeamsOnly,
+            "notificationMajorUEFAClubGamesEnabled": snapshot.notificationMajorUEFAClubGamesEnabled,
+            "notificationHomeNationsFilterEnabled": snapshot.notificationHomeNationsFilterEnabled,
+            "notificationMajorTournamentsFilterEnabled": snapshot.notificationMajorTournamentsFilterEnabled,
+            "fantasyDeadlineRemindersEnabled": snapshot.fantasyDeadlineRemindersEnabled,
+            "showTodayUnfinishedFixturesBadge": snapshot.showTodayUnfinishedFixturesBadge,
+            "fixturesViewDensity": snapshot.fixturesViewDensity.rawValue,
+            "showCompactFixtureTvLogo": snapshot.showCompactFixtureTvLogo,
+            "showCompactFixtureFantasyLogo": snapshot.showCompactFixtureFantasyLogo,
+            "showKickoffTimeDividers": snapshot.showKickoffTimeDividers,
+            "showFantasyFixtureLogos": snapshot.showFantasyFixtureLogos,
+            "showFantasyExpectedPoints": snapshot.showFantasyExpectedPoints,
+            "showFantasyRealTimePoints": snapshot.showFantasyRealTimePoints,
+            "showFantasyMatchPills": snapshot.showsFantasyDataInFixtures,
+            "showPostponedGames": snapshot.showPostponedGames,
+            "deviceLocale": Locale.current.identifier,
+            "deviceTimeZone": TimeZone.current.identifier
+        ]
     }
 
     private func summarizeFantasyPayload(_ fantasyState: Any) -> String {

@@ -56,7 +56,10 @@ const {
   findPlayerCachesByNames,
   getBsdRecords,
   upsertBsdRecords,
+  registerCalendarSubscription,
+  getCalendarSubscription,
 } = require("./mongo_client");
+const { generateICalendar } = require("./ical_feed");
 const {
   matchDetailsWithBsdPlayerImages,
   playerDetailsWithBsdImage,
@@ -841,6 +844,14 @@ const CACHE_STATE_HEADERS_BY_DOMAIN = Object.freeze({
 const eventLoopDelayMonitor = monitorEventLoopDelay({ resolution: 20 });
 eventLoopDelayMonitor.enable();
 
+function redactedRequestUrl(req) {
+  const originalUrl = String(req && req.originalUrl ? req.originalUrl : "");
+  return originalUrl.replace(
+    /(\/calendar-subscriptions\/)[A-Za-z0-9_-]+(?=\.ics(?:\?|$))/g,
+    "$1[redacted]"
+  );
+}
+
 app.use((req, res, next) => {
   const isApiPath = req.path.startsWith(API_PREFIX);
   if (isApiPath) {
@@ -884,7 +895,7 @@ app.use((req, res, next) => {
 
     if (isApiPath) {
       console.log(
-        `[api] id=${requestId} method=${req.method} path=${req.originalUrl} status=${res.statusCode} duration_ms=${durationMs} device_token=${req.deviceToken ? "present" : "missing"}`
+        `[api] id=${requestId} method=${req.method} path=${redactedRequestUrl(req)} status=${res.statusCode} duration_ms=${durationMs} device_token=${req.deviceToken ? "present" : "missing"}`
       );
       if (
         Number.isFinite(DEBUG_SLOW_API_REQUEST_THRESHOLD_MS) &&
@@ -2741,6 +2752,19 @@ function normalizeDeviceToken(value) {
   if (normalized.length > 200) return "";
   if (!/^[A-Za-z0-9._:-]+$/.test(normalized)) return "";
   return normalized;
+}
+
+function normalizeCalendarSubscriptionToken(value) {
+  if (typeof value !== "string") return "";
+  const normalized = value.trim();
+  if (!/^[A-Za-z0-9_-]{43}$/.test(normalized)) return "";
+  return normalized;
+}
+
+function calendarSubscriptionTokenHash(value) {
+  const normalized = normalizeCalendarSubscriptionToken(value);
+  if (!normalized) return "";
+  return crypto.createHash("sha256").update(normalized).digest("hex");
 }
 
 function normalizeLiveActivityToken(value) {
@@ -16015,6 +16039,82 @@ function fixtureViewOptionIDsForPreferences(preferences = {}) {
   return Array.isArray(optionIDs) ? optionIDs : null;
 }
 
+function matchesVisibleForScoresPreferences(matches, preferences = {}, options = {}) {
+  const source = Array.isArray(matches) ? matches : [];
+  const modernSelection =
+    Array.isArray(preferences.selectedFixtureViewOptionIDs) ||
+    Array.isArray(preferences.favouriteFixtureViewOptionIDs);
+  const fixtureViewOptionIDs = fixtureViewOptionIDsForPreferences(preferences);
+  const showAllMatches = preferences.showAllMatches === true;
+  const includePostponed = preferences.showPostponedGames === true;
+  const selectedChannels = preferences.channelFilterEnabled === true &&
+      Array.isArray(preferences.selectedChannels)
+    ? preferences.selectedChannels
+    : [];
+  const selectedLeagues = Array.isArray(preferences.selectedLeagues)
+    ? preferences.selectedLeagues.map(normalizeLeagueName).filter(Boolean)
+    : [];
+  const fixtureViewContext = options.fixtureViewContext || currentFixtureViewFilterContext();
+  const premierLeagueTeams = options.premierLeagueTeams ||
+    currentPremierLeagueTeamsDatasetSnapshot().items;
+  const legacyAllMajor = !modernSelection && (
+    typeof preferences.fixtureAllMajorMatchesEnabled === "boolean"
+      ? preferences.fixtureAllMajorMatchesEnabled
+      : !preferences.competitionFilterEnabled
+  );
+
+  return source.filter((match) => {
+    if (!match || typeof match !== "object") return false;
+    if (!includePostponed && isPostponedMatchStatus(match.score_status || match.match_time)) {
+      return false;
+    }
+    if (
+      selectedChannels.length > 0 &&
+      !matchesFilters(match, {
+        leagues: [],
+        teams: [],
+        channels: selectedChannels,
+        dateFrom: null,
+        dateTo: null,
+        filterMode: "intersection",
+        manualMappings: null,
+      })
+    ) {
+      return false;
+    }
+    if (showAllMatches) return true;
+
+    if (Array.isArray(fixtureViewOptionIDs) && fixtureViewOptionIDs.length > 0) {
+      return matchPassesFixtureViewOptions(match, fixtureViewOptionIDs, fixtureViewContext);
+    }
+
+    if (modernSelection && preferences.fixtureAllMajorMatchesEnabled === true) {
+      return true;
+    }
+
+    if (selectedLeagues.length > 0 && preferences.competitionFilterEnabled !== false) {
+      return matchesFilters(match, {
+        leagues: selectedLeagues,
+        teams: [],
+        channels: [],
+        dateFrom: null,
+        dateTo: null,
+        filterMode: "intersection",
+        manualMappings: null,
+      });
+    }
+
+    if (!legacyAllMajor) return true;
+    return matchPassesCategoryFilters(match, {
+      eplOnly: preferences.englishPremierLeagueTeamsOnly === true,
+      majorUefa: preferences.majorUEFAClubGamesEnabled === true,
+      homeNations: preferences.homeNationsFilterEnabled === true,
+      majorTournaments: preferences.majorTournamentsFilterEnabled === true,
+      premierLeagueTeams,
+    });
+  });
+}
+
 function matchPassesFixtureViewOptions(match, optionIDs, context = {}) {
   let normalizedOptionIDs = Array.isArray(optionIDs)
     ? optionIDs.map((value) => String(value || "").trim()).filter(Boolean)
@@ -26392,6 +26492,120 @@ app.post(`${API_PREFIX}/preferences`, async (req, res) => {
   }
 });
 
+app.post(`${API_PREFIX}/calendar-subscriptions`, async (req, res) => {
+  res.set("Cache-Control", "no-store");
+
+  const deviceToken = req.deviceToken;
+  const calendarToken = normalizeCalendarSubscriptionToken(
+    req.body && req.body.calendarToken
+  );
+  const preferences = req.body && req.body.preferences;
+  const preferencesRevision = req.body && req.body.preferencesRevision;
+
+  if (!deviceToken) {
+    res.status(400).json({ error: "Missing X-Device-Token header." });
+    return;
+  }
+  if (!calendarToken) {
+    res.status(400).json({ error: "Missing or invalid calendar subscription token." });
+    return;
+  }
+  if (!preferences || typeof preferences !== "object" || Array.isArray(preferences)) {
+    res.status(400).json({ error: "Missing calendar preference snapshot." });
+    return;
+  }
+
+  try {
+    const existing = await getUserPreferences(deviceToken);
+    await saveUserPreferences(
+      deviceToken,
+      preferences,
+      existing ? existing.apnsToken : null,
+      existing ? existing.isDevelopmentBuild : false,
+      { preferencesRevision }
+    );
+
+    const registered = await registerCalendarSubscription(
+      calendarSubscriptionTokenHash(calendarToken),
+      deviceToken
+    );
+    if (!registered) {
+      res.status(503).json({ error: "Calendar subscriptions are temporarily unavailable." });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      feedPath: `calendar-subscriptions/${calendarToken}.ics`,
+    });
+  } catch (error) {
+    console.error("[API] Error registering calendar subscription:", error.message || error);
+    res.status(500).json({ error: "Failed to register calendar subscription." });
+  }
+});
+
+app.get(`${API_PREFIX}/calendar-subscriptions/:token.ics`, async (req, res) => {
+  const calendarToken = normalizeCalendarSubscriptionToken(req.params.token);
+  if (!calendarToken) {
+    res.status(404).end();
+    return;
+  }
+
+  try {
+    const subscription = await getCalendarSubscription(
+      calendarSubscriptionTokenHash(calendarToken)
+    );
+    if (!subscription || !subscription.device_token) {
+      res.status(404).end();
+      return;
+    }
+
+    const preferencesRecord = await getUserPreferences(subscription.device_token);
+    if (
+      !preferencesRecord ||
+      !preferencesRecord.preferences ||
+      typeof preferencesRecord.preferences !== "object"
+    ) {
+      res.status(410).end();
+      return;
+    }
+
+    const bsdMatches = filterMatchesByCompetition(await getBsdMatchesForServing());
+    const candidates = bsdMatches.filter((match) => {
+      const matchId = String(match?.match_details_id || match?.id || "").toLowerCase();
+      return !matchId || !cachedDeletedMatchIds.has(matchId);
+    });
+    const visibleMatches = matchesVisibleForScoresPreferences(
+      candidates,
+      preferencesRecord.preferences
+    );
+    const latestUpdated = newestIsoTimestamp([
+      cachedBsdMatchesUpdatedAt,
+      preferencesRecord.updatedAt,
+      subscription.updated_at,
+    ]);
+    const generatedAt = latestUpdated ? new Date(latestUpdated) : new Date(0);
+    const calendar = generateICalendar(visibleMatches, { generatedAt });
+
+    res.set("Content-Type", "text/calendar; charset=utf-8");
+    res.set("Content-Disposition", 'inline; filename="top-scores.ics"');
+    res.set("Cache-Control", "private, no-cache, must-revalidate");
+    res.set("X-Content-Type-Options", "nosniff");
+    res.set("ETag", calendar.etag);
+    if (latestUpdated) {
+      res.set("Last-Modified", new Date(latestUpdated).toUTCString());
+    }
+    if (req.get("If-None-Match") === calendar.etag) {
+      res.status(304).end();
+      return;
+    }
+    res.status(200).send(calendar.body);
+  } catch (error) {
+    console.error("[API] Error serving calendar subscription:", error.message || error);
+    res.status(500).end();
+  }
+});
+
 // Save push-to-start token used to server-trigger Live Activities.
 app.post(`${API_PREFIX}/live-activity/push-to-start-token`, async (req, res) => {
   setCacheOnlyHeaders(res);
@@ -27112,6 +27326,14 @@ app.get(`${API_PREFIX}/preferences/:deviceToken`, async (req, res) => {
     });
     return;
   }
+  if (!req.deviceToken) {
+    res.status(401).json({ error: "Missing X-Device-Token header." });
+    return;
+  }
+  if (normalizeDeviceToken(deviceToken) !== req.deviceToken) {
+    res.status(403).json({ error: "Device token does not match the requested preferences." });
+    return;
+  }
 
   try {
     const data = await getUserPreferences(deviceToken);
@@ -27148,6 +27370,14 @@ app.delete(`${API_PREFIX}/preferences/:deviceToken`, async (req, res) => {
     });
     return;
   }
+  if (!req.deviceToken) {
+    res.status(401).json({ error: "Missing X-Device-Token header." });
+    return;
+  }
+  if (normalizeDeviceToken(deviceToken) !== req.deviceToken) {
+    res.status(403).json({ error: "Device token does not match the requested preferences." });
+    return;
+  }
 
   try {
     const deleted = await deleteUserPreferences(deviceToken);
@@ -27175,22 +27405,9 @@ app.delete(`${API_PREFIX}/preferences/:deviceToken`, async (req, res) => {
 // Get all user preferences (admin endpoint)
 app.get(`${API_PREFIX}/preferences`, async (_req, res) => {
   setCacheOnlyHeaders(res);
-
-  try {
-    const allPreferences = await getAllUserPreferences();
-
-    res.status(200).json({
-      success: true,
-      count: allPreferences.length,
-      data: allPreferences,
-    });
-  } catch (error) {
-    console.error("[API] Error retrieving all preferences:", error);
-    res.status(500).json({
-      error: "Failed to retrieve all preferences",
-      message: error.message,
-    });
-  }
+  res.status(403).json({
+    error: "Bulk preference access is available only through the admin API.",
+  });
 });
 
 function normalizePreferenceFilterText(value) {
@@ -32357,6 +32574,10 @@ module.exports = {
     isChampionsLeagueQualifyingMatch,
     matchPassesTopTeamsPreset,
     matchPassesFixtureViewOptions,
+    matchesVisibleForScoresPreferences,
+    normalizeCalendarSubscriptionToken,
+    calendarSubscriptionTokenHash,
+    redactedRequestUrl,
     isListPayloadVisibleForMode,
     mergeClubEloFixtureMetadata,
     matchDetailsIdFromUrl,
