@@ -31712,6 +31712,30 @@ app.get(`${API_PREFIX}/monitor/status`, async (req, res) => {
 });
 
 // Trigger an immediate Live Activity evaluation cycle.
+function liveActivityForegroundReconcileDecision({
+  trigger = "",
+  reportedActiveCount = null,
+  hasFreshCurrentServerActivity = false,
+  hasFreshPendingStart = false,
+  hasRecentDispatch = false,
+} = {}) {
+  const isForegroundClient = trigger === "app_foreground";
+  const allowForegroundStartFromForegroundClient =
+    isForegroundClient && reportedActiveCount === 0;
+  const shouldSuppressForegroundStart =
+    (!allowForegroundStartFromForegroundClient && hasFreshCurrentServerActivity) ||
+    hasFreshPendingStart ||
+    (!allowForegroundStartFromForegroundClient && hasRecentDispatch && hasFreshCurrentServerActivity);
+
+  return {
+    isForegroundClient,
+    shouldSuppressForegroundStart,
+    shouldPrepareForegroundContent: isForegroundClient || !shouldSuppressForegroundStart,
+    requiresActivityRestart:
+      isForegroundClient && reportedActiveCount > 0 && !shouldSuppressForegroundStart,
+  };
+}
+
 app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
   setCacheOnlyHeaders(res);
   await ensureTeamShortNamesCacheReady();
@@ -31844,6 +31868,8 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
     // Build foreground-start content state so the app can call Activity.request()
     // when it is in the foreground and push-to-start can't reach it.
     let foregroundStart = null;
+    let foregroundUpdate = null;
+    let requiresActivityRestart = false;
     if (userDeviceToken) {
       try {
         const record = await getUserPreferences(userDeviceToken);
@@ -31859,16 +31885,22 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
           const hasRecentDispatch = Number.isFinite(lastDispatchAtMs) &&
             (Date.now() - lastDispatchAtMs) < LIVE_ACTIVITY_RECENT_DISPATCH_WINDOW_MS;
           const hasFreshCurrentServerActivity = liveActivityHasFreshCurrentServerActivity(liveActivity);
-          const allowForegroundStartFromForegroundClient =
-            trigger === "app_foreground" && reportedActiveCount === 0;
-          const shouldSuppressForegroundStart =
-            (!allowForegroundStartFromForegroundClient && hasFreshCurrentServerActivity) ||
-            hasFreshPendingStart ||
-            (!allowForegroundStartFromForegroundClient && hasRecentDispatch && hasFreshCurrentServerActivity);
+          const foregroundDecision = liveActivityForegroundReconcileDecision({
+            trigger,
+            reportedActiveCount,
+            hasFreshCurrentServerActivity,
+            hasFreshPendingStart,
+            hasRecentDispatch,
+          });
+          const {
+            isForegroundClient,
+            shouldSuppressForegroundStart,
+            shouldPrepareForegroundContent,
+          } = foregroundDecision;
 
           const hooks = matchMonitor.__testHooks;
           if (
-            !shouldSuppressForegroundStart &&
+            shouldPrepareForegroundContent &&
             hooks &&
             typeof hooks.monitoredMatchStatesSnapshot === "function" &&
             typeof hooks.buildLiveActivityEntriesForUser === "function" &&
@@ -31920,11 +31952,23 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
                 presentation.fantasyCurrentScore
               );
 
-              foregroundStart = { contentState };
+              if (isForegroundClient) {
+                // Give the app the same canonical state even when APNs accepted the
+                // update. ActivityKit notifications aren't guaranteed to arrive, so
+                // foreground reconciliation also repairs a locally stale activity.
+                foregroundUpdate = { contentState };
+              }
+              if (!shouldSuppressForegroundStart) {
+                foregroundStart = { contentState };
+                requiresActivityRestart = foregroundDecision.requiresActivityRestart;
+              }
               console.log(
-                `[API] Live Activity foregroundStart prepared ${JSON.stringify({
+                `[API] Live Activity foreground content prepared ${JSON.stringify({
                   device: userDeviceToken.slice(0, 12),
                   trigger: trigger || null,
+                  has_update: Boolean(foregroundUpdate),
+                  has_start: Boolean(foregroundStart),
+                  requires_activity_restart: requiresActivityRestart,
                   mode: contentState.mode || null,
                   match_count: Array.isArray(contentState.matches) ? contentState.matches.length : 0,
                   generated_at: contentState.generatedAtEpochSeconds || null,
@@ -31956,6 +32000,8 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
       forceDispatch,
       preserveExistingOnEmpty: forceDispatch && !allowEnd,
       foregroundStart,
+      foregroundUpdate,
+      requiresActivityRestart,
       ...result,
     }, teamShortNameLookup));
   } catch (error) {
@@ -32336,6 +32382,7 @@ module.exports = {
     buildLiveActivityTestContentState,
     buildLiveActivityTestPresets,
     resolveLiveActivityTestPreset,
+    liveActivityForegroundReconcileDecision,
     operationalMatchSortDesc,
     upsertMatchDetailsFromMatch,
     preferencesSaveShouldTriggerLiveActivityReconcile,

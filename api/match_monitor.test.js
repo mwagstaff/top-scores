@@ -3709,6 +3709,58 @@ test("buildLiveActivityPresentationForUser prefers Redis delayed snapshot over s
   assert.equal(presentation.matches[0].away_score, 2);
 });
 
+test("buildLiveActivityPresentationForUser credits an away player's own goal to the delayed home score", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs - 89 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+  const matchId = "chelsea-luton-own-goal";
+  const currentMatch = {
+    match_details_id: matchId,
+    date: kickoff.date,
+    time: kickoff.time,
+    league: "EFL Cup",
+    home_team: "Chelsea",
+    away_team: "Luton Town",
+    home_score: 2,
+    away_score: 0,
+    score_status: "89",
+    home_goal_scorers: [
+      { player: "D. Welbeck", goal_times: ["50'"], own_goal_times: [] },
+    ],
+    away_goal_scorers: [
+      { player: "H. Odoffin", goal_times: [], own_goal_times: ["79'"] },
+    ],
+    updated_at: new Date(nowMs).toISOString(),
+  };
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(2),
+    [
+      {
+        matchId,
+        state: {
+          lastState: currentMatch,
+          history: [
+            { timestampMs: nowMs - 3 * 60 * 1000, match: { ...currentMatch, score_status: "86" } },
+          ],
+        },
+        match: currentMatch,
+      },
+    ],
+    nowMs,
+    {
+      delayedSnapshotsByMatchId: {
+        [matchId]: { ...currentMatch, score_status: "87" },
+      },
+    }
+  );
+
+  assert.equal(presentation.mode, "single_live");
+  assert.equal(presentation.matches[0].score_status, "87");
+  assert.equal(presentation.matches[0].home_score, 2);
+  assert.equal(presentation.matches[0].away_score, 0);
+});
+
 test("buildLiveActivityPresentationForUser uses notification delay when no dedicated live activity delay is configured", () => {
   const nowMs = Date.now();
   const kickoffMs = nowMs - 23 * 60 * 1000;

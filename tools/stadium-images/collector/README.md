@@ -12,7 +12,9 @@ python -m pip install -e '.[test]'
 bw login
 ```
 
-The collector uses `OPENAI_API_KEY` immediately when it is already present in the environment. Otherwise, it reads the key from the `Value` custom field of the Bitwarden item `OPENAI_API_KEY_TOP_SCORES_IMAGE_COLLECTOR`. If the vault is locked, the script prompts for `bw unlock` and syncs the vault before reading the item; the key is never written to a repository file.
+The collector checks `OPENAI_API_KEY`, then the macOS Keychain, then the `Value` custom field of the Bitwarden item `OPENAI_API_KEY_TOP_SCORES_IMAGE_COLLECTOR`. The first successful Bitwarden lookup is saved in the Keychain under the service `dev.skynolimit.top-scores.image-collector`, so later runs do not prompt for the Bitwarden password. The key is never written to a repository file.
+
+Use `--refresh-api-key` on either collection command to ignore and replace the Keychain value from Bitwarden.
 
 To avoid Bitwarden prompts across separate collector commands, export the key once in the current terminal session. A Python process cannot export a variable back into its parent shell:
 
@@ -22,27 +24,55 @@ export OPENAI_API_KEY="$(bw get item OPENAI_API_KEY_TOP_SCORES_IMAGE_COLLECTOR |
 unset BW_SESSION
 ```
 
-After that, `find_images.py` and `collect_all.py` reuse the in-memory environment value without invoking Bitwarden. Closing the terminal discards it.
+After that, `find_images.py` and `collect_all.py` reuse the in-memory environment value without invoking either the Keychain or Bitwarden. Closing the terminal discards the environment value, but the Keychain cache remains available.
 
 The scripts automatically use this `.venv`, so both `python collector/find_images.py ...` and `./collector/find_images.py ...` work after setup.
 
 ## 2. Collect images
 
-Collect every configured 2026/27 Premier League stadium plus every club at or above the same Club Elo threshold used by the app's **Major teams** list:
+The easiest option is the saved interactive launcher. Run it and choose Premier League, Championship, major teams, or everything:
 
 ```bash
-./collector/collect_all.py --dry-run
-./collector/collect_all.py
+./collector/collect_images.zsh
 ```
 
-The wrapper reads the threshold from `api/top_teams_config.json` and the matching scores from `api/club_elo_teams.json`. It stops with an explicit list if a newly qualifying major club has no configured stadium mapping.
+The same launcher also accepts a scope directly, plus any normal collector options:
+
+```bash
+./collector/collect_images.zsh premier-league
+./collector/collect_images.zsh championship
+./collector/collect_images.zsh major
+./collector/collect_images.zsh all
+./collector/collect_images.zsh all --dry-run
+```
+
+`major` uses the current Club Elo threshold from `api/top_teams_config.json`, exactly like the app's **Major teams** view. `all` combines all Premier League and Championship clubs with the qualifying major teams, then removes duplicate stadiums.
+
+Collection runs five stadium pipelines concurrently by default. OpenAI analyses can therefore run five at a time. Wikimedia traffic is controlled independently: at most two requests are in flight, request starts are at least 0.25 seconds apart, and temporary `429`/server failures are retried with backoff. Candidate thumbnails are downloaded through that limiter and sent to OpenAI as resized data rather than as Wikimedia URLs.
+
+Change the OpenAI/pipeline concurrency without increasing Wikimedia traffic:
+
+```bash
+./collector/collect_images.zsh all --workers 3
+./collector/collect_images.zsh all --workers 8
+```
+
+The Wikimedia defaults should normally be left alone. For an especially sensitive or faster connection, they can be adjusted separately:
+
+```bash
+./collector/collect_images.zsh championship --wikimedia-concurrency 1 --wikimedia-min-interval 0.5
+./collector/collect_images.zsh championship --wikimedia-concurrency 3 --wikimedia-min-interval 0.2
+```
+
+The league configurations provide curated club-aware searches—such as `Emirates Stadium Arsenal`—while the saved manifest retains the canonical stadium name (`Emirates Stadium`). The collector stops with an explicit list if a newly qualifying major club has no configured stadium mapping.
 
 Existing stadium staging directories are skipped, making interrupted runs resumable. Use `--replace` only when you intentionally want to discard and recreate existing staged results.
 
 To collect one stadium instead:
 
 ```bash
-./collector/find_images.py "Anfield" --club Liverpool
+./collector/find_images.py "Anfield" --club Liverpool --slug anfield
+./collector/find_images.py "Emirates Stadium" --club Arsenal --slug emirates-stadium
 ```
 
 Suitable originals and a provenance manifest are written under `collector/staging/<stadium>/`.

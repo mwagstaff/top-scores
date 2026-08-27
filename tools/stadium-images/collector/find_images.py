@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
+import threading
+import time
+from contextlib import contextmanager, nullcontext
 from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
 from _runtime import ensure_collector_runtime
 
@@ -19,7 +26,7 @@ ensure_collector_runtime()
 
 import requests
 from openai import OpenAI
-from PIL import Image
+from PIL import Image, ImageOps
 from pydantic import BaseModel, Field
 
 from stadium_images.sources.wikimedia import license_allowed
@@ -28,10 +35,59 @@ COMMONS_API = "https://commons.wikimedia.org/w/api.php"
 MODEL = "gpt-5.6"
 BITWARDEN_ITEM = "OPENAI_API_KEY_TOP_SCORES_IMAGE_COLLECTOR"
 BITWARDEN_FIELD = "Value"
+KEYCHAIN_SERVICE = "dev.skynolimit.top-scores.image-collector"
 COLLECTOR_DIR = Path(__file__).resolve().parent
 DEFAULT_STAGING_ROOT = COLLECTOR_DIR / "staging"
 MAX_DOWNLOAD_BYTES = 30 * 1024 * 1024
+MAX_VISION_DOWNLOAD_BYTES = 10 * 1024 * 1024
+VISION_MAX_SIDE = 1024
+VISION_JPEG_QUALITY = 82
+DEFAULT_WIKIMEDIA_CONCURRENCY = 2
+DEFAULT_WIKIMEDIA_MIN_INTERVAL_SECONDS = 0.25
+WIKIMEDIA_MAX_ATTEMPTS = 5
+OPENAI_MAX_RETRIES = 4
 USER_AGENT = "TopScoresStadiumResearch/1.0 (contact: mike.wagstaff@gmail.com)"
+
+
+class RequestLimiter:
+    def __init__(self, max_concurrency: int, min_interval_seconds: float) -> None:
+        if max_concurrency < 1:
+            raise ValueError("max_concurrency must be at least 1")
+        if min_interval_seconds < 0:
+            raise ValueError("min_interval_seconds cannot be negative")
+        self._semaphore = threading.Semaphore(max_concurrency)
+        self._schedule_lock = threading.Lock()
+        self._next_start = 0.0
+        self._min_interval_seconds = min_interval_seconds
+
+    @contextmanager
+    def slot(self):
+        self._semaphore.acquire()
+        try:
+            with self._schedule_lock:
+                now = time.monotonic()
+                request_start = max(now, self._next_start)
+                self._next_start = request_start + self._min_interval_seconds
+            delay = request_start - now
+            if delay > 0:
+                time.sleep(delay)
+            yield
+        finally:
+            self._semaphore.release()
+
+
+_wikimedia_limiter = RequestLimiter(
+    DEFAULT_WIKIMEDIA_CONCURRENCY,
+    DEFAULT_WIKIMEDIA_MIN_INTERVAL_SECONDS,
+)
+
+
+def configure_wikimedia_requests(
+    max_concurrency: int = DEFAULT_WIKIMEDIA_CONCURRENCY,
+    min_interval_seconds: float = DEFAULT_WIKIMEDIA_MIN_INTERVAL_SECONDS,
+) -> None:
+    global _wikimedia_limiter
+    _wikimedia_limiter = RequestLimiter(max_concurrency, min_interval_seconds)
 
 
 class ImageAssessment(BaseModel):
@@ -54,12 +110,19 @@ class StadiumAssessment(BaseModel):
 def load_openai_api_key(
     item_name: str = BITWARDEN_ITEM,
     field_name: str = BITWARDEN_FIELD,
+    *,
+    use_cached: bool = True,
 ) -> str:
-    """Reuse an environment key or load it from a Bitwarden custom field."""
+    """Reuse an environment or Keychain key, falling back to Bitwarden."""
 
     environment_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if environment_key:
         return environment_key
+    if use_cached:
+        cached_key = _load_api_key_from_keychain(item_name)
+        if cached_key:
+            os.environ["OPENAI_API_KEY"] = cached_key
+            return cached_key
 
     if shutil.which("bw") is None:
         raise RuntimeError("Bitwarden CLI 'bw' is required and was not found in PATH.")
@@ -107,10 +170,58 @@ def load_openai_api_key(
         value = str(field.get("value") or "").strip()
         if value:
             os.environ["OPENAI_API_KEY"] = value
+            _store_api_key_in_keychain(item_name, value)
             return value
     raise RuntimeError(
         f"Bitwarden item '{item_name}' has no non-empty '{field_name}' field."
     )
+
+
+def _load_api_key_from_keychain(item_name: str) -> str | None:
+    if sys.platform != "darwin" or shutil.which("security") is None:
+        return None
+    result = subprocess.run(
+        [
+            "security",
+            "find-generic-password",
+            "-a",
+            item_name,
+            "-s",
+            KEYCHAIN_SERVICE,
+            "-w",
+        ],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    value = result.stdout.strip()
+    return value if result.returncode == 0 and value else None
+
+
+def _store_api_key_in_keychain(item_name: str, value: str) -> None:
+    if sys.platform != "darwin" or shutil.which("security") is None:
+        return
+    result = subprocess.run(
+        [
+            "security",
+            "add-generic-password",
+            "-U",
+            "-a",
+            item_name,
+            "-s",
+            KEYCHAIN_SERVICE,
+            "-w",
+            value,
+        ],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if result.returncode != 0:
+        detail = result.stderr.strip() or "unknown Keychain error"
+        print(f"Warning: could not cache the collector API key: {detail}")
 
 
 def _run_bw(
@@ -153,16 +264,14 @@ def search_commons(query: str, limit: int = 20) -> list[dict]:
         "iiurlwidth": 1600,
         "format": "json",
     }
-    response = requests.get(
+    payload = _get_json(
         COMMONS_API,
         params=params,
-        headers={"User-Agent": USER_AGENT},
         timeout=30,
     )
-    response.raise_for_status()
 
     results = []
-    for page in response.json().get("query", {}).get("pages", {}).values():
+    for page in payload.get("query", {}).get("pages", {}).values():
         info_list = page.get("imageinfo", [])
         if not info_list:
             continue
@@ -186,13 +295,16 @@ def search_commons(query: str, limit: int = 20) -> list[dict]:
     return results
 
 
-def build_queries(stadium: str) -> list[str]:
+def build_queries(stadium: str, club: str | None = None) -> list[str]:
+    context = " ".join(
+        value.strip() for value in (stadium, club or "") if value.strip()
+    )
     return [
-        f"{stadium} football stadium interior",
-        f"{stadium} stadium pitch",
-        f"{stadium} football ground night",
-        f"{stadium} stadium floodlights",
-        f"{stadium} stadium panoramic",
+        f"{context} football stadium interior",
+        f"{context} stadium pitch",
+        f"{context} football ground night",
+        f"{context} stadium floodlights",
+        f"{context} stadium panoramic",
     ]
 
 
@@ -226,6 +338,8 @@ def score_images(
     stadium: str,
     images: list[dict],
     client: OpenAI,
+    *,
+    log_prefix: str = "",
 ) -> StadiumAssessment:
     """Ask GPT-5.6 to inspect every candidate and return structured scores."""
 
@@ -247,13 +361,16 @@ below 60. Return exactly one assessment for every supplied candidate index.
 """.strip(),
         }
     ]
-    for index, image in enumerate(images):
+    prepared_images = _prepare_vision_images(images, log_prefix=log_prefix)
+    if not prepared_images:
+        raise RuntimeError("No candidate thumbnails could be prepared for analysis.")
+    for index, data_url in prepared_images:
         content.extend(
             [
                 {"type": "input_text", "text": f"CANDIDATE {index}"},
                 {
                     "type": "input_image",
-                    "image_url": image["thumbnail_url"],
+                    "image_url": data_url,
                     "detail": "high",
                 },
             ]
@@ -273,18 +390,21 @@ def research_stadium(
     stadium: str,
     client: OpenAI,
     per_query: int = 10,
+    queries: list[str] | None = None,
+    log_prefix: str = "",
 ) -> dict:
-    print(f"Researching: {stadium}")
+    prefix = f"{log_prefix} " if log_prefix else ""
+    print(f"{prefix}Researching: {stadium}")
     all_images = []
-    for query in build_queries(stadium):
-        print(f"  Searching Commons: {query}")
+    for query in queries or build_queries(stadium):
+        print(f"{prefix}  Searching Commons: {query}")
         try:
             all_images.extend(search_commons(query, limit=per_query))
         except requests.RequestException as error:
-            print(f"  Search failed: {error}")
+            print(f"{prefix}  Search failed: {error}")
 
     images = basic_filter(dedupe(all_images))[:30]
-    print(f"  {len(images)} usable candidates found.")
+    print(f"{prefix}  {len(images)} usable candidates found.")
     if not images:
         return {
             "stadium": stadium,
@@ -296,8 +416,8 @@ def research_stadium(
             ).model_dump(),
         }
 
-    print("  Sending candidates to GPT-5.6 for visual analysis...")
-    analysis = score_images(stadium, images, client)
+    print(f"{prefix}  Sending candidates to GPT-5.6 for visual analysis...")
+    analysis = score_images(stadium, images, client, log_prefix=log_prefix)
     return {
         "stadium": stadium,
         "candidate_count": len(images),
@@ -404,31 +524,13 @@ def stage_suitable_images(
 
 
 def _download_image(url: str, session: requests.Session) -> tuple[bytes, str]:
-    response = session.get(
+    data = _download_bytes(
         url,
-        headers={"User-Agent": USER_AGENT},
+        session=session,
         timeout=60,
-        stream=True,
+        max_bytes=MAX_DOWNLOAD_BYTES,
+        size_error="image exceeds the 30 MB staging limit",
     )
-    response.raise_for_status()
-    content_length = int(response.headers.get("Content-Length") or 0)
-    if content_length > MAX_DOWNLOAD_BYTES:
-        raise ValueError("image exceeds the 30 MB staging limit")
-
-    chunks = []
-    byte_count = 0
-    for chunk in response.iter_content(chunk_size=128 * 1024):
-        if not chunk:
-            continue
-        byte_count += len(chunk)
-        if byte_count > MAX_DOWNLOAD_BYTES:
-            raise ValueError("image exceeds the 30 MB staging limit")
-        chunks.append(chunk)
-    data = b"".join(chunks)
-    if not data:
-        raise ValueError("downloaded image is empty")
-
-    from io import BytesIO
 
     try:
         with Image.open(BytesIO(data)) as image:
@@ -445,6 +547,156 @@ def _download_image(url: str, session: requests.Session) -> tuple[bytes, str]:
     if extension is None:
         raise ValueError(f"unsupported image format: {image_format or 'unknown'}")
     return data, extension
+
+
+def _prepare_vision_images(
+    images: list[dict],
+    *,
+    log_prefix: str = "",
+) -> list[tuple[int, str]]:
+    prefix = f"{log_prefix} " if log_prefix else ""
+    session = requests.Session()
+    prepared = []
+    for index, image in enumerate(images):
+        try:
+            prepared.append(
+                (index, _vision_data_url(image["thumbnail_url"], session=session))
+            )
+        except (OSError, ValueError, requests.RequestException) as error:
+            print(f"{prefix}  Candidate {index} thumbnail skipped: {error}")
+    return prepared
+
+
+def _vision_data_url(url: str, *, session: requests.Session) -> str:
+    data = _download_bytes(
+        url,
+        session=session,
+        timeout=45,
+        max_bytes=MAX_VISION_DOWNLOAD_BYTES,
+        size_error="thumbnail exceeds the 10 MB analysis limit",
+    )
+    try:
+        with Image.open(BytesIO(data)) as source:
+            image = ImageOps.exif_transpose(source)
+            image.thumbnail(
+                (VISION_MAX_SIDE, VISION_MAX_SIDE),
+                Image.Resampling.LANCZOS,
+            )
+            if image.mode in {"RGBA", "LA"} or (
+                image.mode == "P" and "transparency" in image.info
+            ):
+                rgba = image.convert("RGBA")
+                rgb = Image.new("RGB", rgba.size, "white")
+                rgb.paste(rgba, mask=rgba.getchannel("A"))
+            else:
+                rgb = image.convert("RGB")
+            output = BytesIO()
+            rgb.save(
+                output,
+                format="JPEG",
+                quality=VISION_JPEG_QUALITY,
+                optimize=True,
+            )
+    except (OSError, ValueError) as error:
+        raise ValueError("thumbnail is not a supported raster image") from error
+    encoded = base64.b64encode(output.getvalue()).decode("ascii")
+    return f"data:image/jpeg;base64,{encoded}"
+
+
+def _get_json(
+    url: str,
+    *,
+    params: dict,
+    timeout: int,
+    session: requests.Session | None = None,
+) -> dict:
+    request_session = session or requests
+    for attempt in range(WIKIMEDIA_MAX_ATTEMPTS):
+        try:
+            with _request_slot(url):
+                response = request_session.get(
+                    url,
+                    params=params,
+                    headers={"User-Agent": USER_AGENT},
+                    timeout=timeout,
+                )
+                response.raise_for_status()
+                return response.json()
+        except requests.RequestException as error:
+            if not _retry_request(error, attempt):
+                raise
+    raise AssertionError("unreachable")
+
+
+def _download_bytes(
+    url: str,
+    *,
+    session: requests.Session,
+    timeout: int,
+    max_bytes: int,
+    size_error: str,
+) -> bytes:
+    for attempt in range(WIKIMEDIA_MAX_ATTEMPTS):
+        response = None
+        try:
+            with _request_slot(url):
+                response = session.get(
+                    url,
+                    headers={"User-Agent": USER_AGENT},
+                    timeout=timeout,
+                    stream=True,
+                )
+                response.raise_for_status()
+                content_length = int(response.headers.get("Content-Length") or 0)
+                if content_length > max_bytes:
+                    raise ValueError(size_error)
+
+                chunks = []
+                byte_count = 0
+                for chunk in response.iter_content(chunk_size=128 * 1024):
+                    if not chunk:
+                        continue
+                    byte_count += len(chunk)
+                    if byte_count > max_bytes:
+                        raise ValueError(size_error)
+                    chunks.append(chunk)
+                data = b"".join(chunks)
+                if not data:
+                    raise ValueError("downloaded image is empty")
+                return data
+        except requests.RequestException as error:
+            if not _retry_request(error, attempt):
+                raise
+        finally:
+            if response is not None:
+                close = getattr(response, "close", None)
+                if close is not None:
+                    close()
+    raise AssertionError("unreachable")
+
+
+def _request_slot(url: str):
+    hostname = (urlparse(url).hostname or "").casefold()
+    if hostname == "wikimedia.org" or hostname.endswith(".wikimedia.org"):
+        return _wikimedia_limiter.slot()
+    return nullcontext()
+
+
+def _retry_request(error: requests.RequestException, attempt: int) -> bool:
+    if attempt >= WIKIMEDIA_MAX_ATTEMPTS - 1:
+        return False
+    response = getattr(error, "response", None)
+    status_code = getattr(response, "status_code", None)
+    if status_code is not None and status_code not in {408, 429, 500, 502, 503, 504}:
+        return False
+    retry_after = 0.0
+    if response is not None:
+        try:
+            retry_after = float(response.headers.get("Retry-After") or 0)
+        except ValueError:
+            retry_after = 0.0
+    time.sleep(max(retry_after, 1.0 * (2**attempt)))
+    return True
 
 
 def _replace_directory(temporary: Path, destination: Path) -> None:
@@ -485,13 +737,48 @@ def main() -> None:
     )
     parser.add_argument("--replace", action="store_true")
     parser.add_argument("--bitwarden-item", default=BITWARDEN_ITEM)
+    parser.add_argument(
+        "--wikimedia-concurrency",
+        type=int,
+        default=DEFAULT_WIKIMEDIA_CONCURRENCY,
+        help=(
+            "Maximum simultaneous Wikimedia requests "
+            f"(default: {DEFAULT_WIKIMEDIA_CONCURRENCY})"
+        ),
+    )
+    parser.add_argument(
+        "--wikimedia-min-interval",
+        type=float,
+        default=DEFAULT_WIKIMEDIA_MIN_INTERVAL_SECONDS,
+        help=(
+            "Minimum seconds between Wikimedia request starts "
+            f"(default: {DEFAULT_WIKIMEDIA_MIN_INTERVAL_SECONDS})"
+        ),
+    )
+    parser.add_argument(
+        "--refresh-api-key",
+        action="store_true",
+        help="Ignore the cached Keychain value and reload it from Bitwarden",
+    )
     args = parser.parse_args()
+    if args.wikimedia_concurrency < 1:
+        parser.error("--wikimedia-concurrency must be at least 1")
+    if args.wikimedia_min_interval < 0:
+        parser.error("--wikimedia-min-interval cannot be negative")
+    configure_wikimedia_requests(
+        args.wikimedia_concurrency,
+        args.wikimedia_min_interval,
+    )
 
-    api_key = load_openai_api_key(args.bitwarden_item)
+    api_key = load_openai_api_key(
+        args.bitwarden_item,
+        use_cached=not args.refresh_api_key,
+    )
     result = research_stadium(
         args.stadium,
-        OpenAI(api_key=api_key),
+        OpenAI(api_key=api_key, max_retries=OPENAI_MAX_RETRIES),
         per_query=args.per_query,
+        queries=build_queries(args.stadium, args.club),
     )
     team_name = args.club or args.stadium
     staging_directory = stage_suitable_images(

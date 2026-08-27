@@ -3080,7 +3080,10 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
     // at the same x-position regardless of row type — while the flexible team
     // name columns on either side absorb the remaining width so the row fills.
     private var scoreColumnWidth: CGFloat {
-        usesDenseRows ? 16 : 18
+        if visibleMatches.contains(where: { $0.hasScore && $0.hasDisplayableAggregateScore }) {
+            return usesDenseRows ? 36 : 40
+        }
+        return usesDenseRows ? 16 : 18
     }
 
     private var tvColumnWidth: CGFloat {
@@ -3239,12 +3242,14 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.white.opacity(0.68))
                         .lineLimit(1)
+                        .minimumScaleFactor(0.75)
                 }
 
                 Text(homeScoreText(for: match))
                     .font(usesDenseRows ? .caption2.weight(.bold) : .caption.weight(.bold))
                     .monospacedDigit()
                     .lineLimit(1)
+                    .minimumScaleFactor(0.75)
             }
         } else {
             Color.clear
@@ -3259,12 +3264,14 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
                     .font(usesDenseRows ? .caption2.weight(.bold) : .caption.weight(.bold))
                     .monospacedDigit()
                     .lineLimit(1)
+                    .minimumScaleFactor(0.75)
 
                 if let aggregateAwayText = aggregateAwayText(for: match) {
                     Text(aggregateAwayText)
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(.white.opacity(0.68))
                         .lineLimit(1)
+                        .minimumScaleFactor(0.75)
                 }
             }
         } else {

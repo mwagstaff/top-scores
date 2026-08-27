@@ -152,6 +152,13 @@ struct TopScoresLiveActivityAttributes: ActivityAttributes {
 }
 
 final class LiveActivitySyncService {
+    @available(iOS 16.1, *)
+    private struct ForegroundReconcileResponse {
+        let updateContentState: TopScoresLiveActivityAttributes.ContentState?
+        let startContentState: TopScoresLiveActivityAttributes.ContentState?
+        let requiresActivityRestart: Bool
+    }
+
     static let shared = LiveActivitySyncService()
     private let maxMatchesPerActivityPayload = 6
     private let foregroundActivityStaleAfter: TimeInterval = 30 * 60
@@ -491,27 +498,41 @@ final class LiveActivitySyncService {
             }
         }
 
-        guard activeActivities.isEmpty else {
-            #if DEBUG
-            await fetchServerDebugState()
-            #endif
-            return
-        }
-
         let reconcileResponse = await requestLiveActivityReconcile()
         guard !Task.isCancelled else { return }
-        // If no active activity and the server has live content, start one directly
-        // so push-to-start (which requires background) is not the only path.
         // Re-check Activity.activities here rather than using the snapshot captured before
         // the HTTP call, in case a push-to-start arrived during the round-trip.
-        let currentActivities = Activity<TopScoresLiveActivityAttributes>.activities
+        let currentActivities = await enforceSingleActiveActivity(
+            among: Activity<TopScoresLiveActivityAttributes>.activities
+        )
         diagnosticLog(
-            "[LiveActivitySync] reconcile response currentActiveCount=%d hasForegroundStart=%d",
+            "[LiveActivitySync] reconcile response currentActiveCount=%d hasForegroundUpdate=%d hasForegroundStart=%d requiresRestart=%d",
             currentActivities.count,
-            reconcileResponse == nil ? 0 : 1
+            reconcileResponse.updateContentState == nil ? 0 : 1,
+            reconcileResponse.startContentState == nil ? 0 : 1,
+            reconcileResponse.requiresActivityRestart ? 1 : 0
         )
         flushSharedWidgetDiagnostics()
-        if currentActivities.isEmpty, let contentState = reconcileResponse {
+
+        if reconcileResponse.requiresActivityRestart, !currentActivities.isEmpty,
+           let contentState = reconcileResponse.startContentState ?? reconcileResponse.updateContentState {
+            diagnosticLog(
+                "[LiveActivitySync] Replacing %d activity(s) after server invalidated the activity push token",
+                currentActivities.count
+            )
+            for activity in currentActivities {
+                stopObserving(activityID: activity.id, cancelStateTask: true)
+                await activity.end(nil, dismissalPolicy: .immediate)
+                await uploadActivityEnded(activityID: activity.id, reason: "token_invalidated")
+            }
+            await startForegroundActivityIfNeeded(contentState: contentState)
+        } else if let contentState = reconcileResponse.updateContentState,
+                  !currentActivities.isEmpty {
+            await updateForegroundActivities(currentActivities, contentState: contentState)
+        } else if currentActivities.isEmpty,
+                  let contentState = reconcileResponse.startContentState ?? reconcileResponse.updateContentState {
+            // If no activity is active and the server has live content, start one directly
+            // so push-to-start (which requires background) is not the only path.
             await startForegroundActivityIfNeeded(contentState: contentState)
         }
         #if DEBUG
@@ -697,8 +718,13 @@ final class LiveActivitySyncService {
     }
 
     @available(iOS 16.1, *)
-    private func requestLiveActivityReconcile() async -> TopScoresLiveActivityAttributes.ContentState? {
-        guard let endpoint = await endpointURL(path: "live-activity/reconcile") else { return nil }
+    private func requestLiveActivityReconcile() async -> ForegroundReconcileResponse {
+        let emptyResponse = ForegroundReconcileResponse(
+            updateContentState: nil,
+            startContentState: nil,
+            requiresActivityRestart: false
+        )
+        guard let endpoint = await endpointURL(path: "live-activity/reconcile") else { return emptyResponse }
         let activeActivities = Activity<TopScoresLiveActivityAttributes>.activities
         let payload: [String: Any] = [
             "deviceToken": DeviceIdentity.currentToken,
@@ -720,39 +746,84 @@ final class LiveActivitySyncService {
         )
         #endif
         guard let responseData = await sendJSONRequestReturningData(url: endpoint, payload: payload, logContext: "live-activity-reconcile") else {
-            return nil
+            return emptyResponse
         }
         diagnosticLog("[LiveActivitySync] Reconcile response bytes=%d", responseData.count)
-        guard
-            let json = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any],
-            let foregroundStart = json["foregroundStart"] as? [String: Any],
-            let rawContentState = foregroundStart["contentState"]
-        else {
-            diagnosticLog("[LiveActivitySync] Reconcile response has no foregroundStart")
-            return nil
+        guard let json = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any] else {
+            diagnosticLog("[LiveActivitySync] Reconcile response JSON decode failed")
+            return emptyResponse
         }
-        guard let contentStateData = try? JSONSerialization.data(withJSONObject: rawContentState),
-              let contentState = try? JSONDecoder().decode(TopScoresLiveActivityAttributes.ContentState.self, from: contentStateData)
-        else {
-            diagnosticLog("[LiveActivitySync] Reconcile foregroundStart decode failed")
-            return nil
+
+        func decodeContentState(key: String) -> TopScoresLiveActivityAttributes.ContentState? {
+            guard let envelope = json[key] as? [String: Any],
+                  let rawContentState = envelope["contentState"],
+                  let contentStateData = try? JSONSerialization.data(withJSONObject: rawContentState),
+                  let contentState = try? JSONDecoder().decode(
+                    TopScoresLiveActivityAttributes.ContentState.self,
+                    from: contentStateData
+                  ) else {
+                return nil
+            }
+            let sanitized = sanitizedContentState(contentState)
+            if sanitized.matches.count != contentState.matches.count {
+                diagnosticLog(
+                    "[LiveActivitySync] Trimmed %@ content state matches from %d to %d",
+                    key,
+                    contentState.matches.count,
+                    sanitized.matches.count
+                )
+            }
+            return sanitized
         }
-        let sanitized = sanitizedContentState(contentState)
+
+        let updateContentState = decodeContentState(key: "foregroundUpdate")
+        let startContentState = decodeContentState(key: "foregroundStart")
+        let requiresActivityRestart = json["requiresActivityRestart"] as? Bool ?? false
         #if DEBUG
-        diagnosticLog(
-            "[LiveActivitySync] Reconcile foregroundStart contentBytes=%d %@",
-            contentStateData.count,
-            Self.contentStateSummary(sanitized)
-        )
+        if let updateContentState {
+            diagnosticLog("[LiveActivitySync] Reconcile foregroundUpdate %@", Self.contentStateSummary(updateContentState))
+        }
+        if let startContentState {
+            diagnosticLog("[LiveActivitySync] Reconcile foregroundStart %@", Self.contentStateSummary(startContentState))
+        }
         #endif
-        if sanitized.matches.count != contentState.matches.count {
+        return ForegroundReconcileResponse(
+            updateContentState: updateContentState,
+            startContentState: startContentState,
+            requiresActivityRestart: requiresActivityRestart
+        )
+    }
+
+    @available(iOS 16.1, *)
+    private func updateForegroundActivities(
+        _ activities: [Activity<TopScoresLiveActivityAttributes>],
+        contentState: TopScoresLiveActivityAttributes.ContentState
+    ) async {
+        let sanitizedState = sanitizedContentState(contentState)
+        let staleDate = Date().addingTimeInterval(staleAfter(for: sanitizedState))
+        for activity in activities {
+            let currentState = Self.currentContentState(for: activity)
+            guard sanitizedState.generatedAtEpochSeconds >= currentState.generatedAtEpochSeconds else {
+                diagnosticLog(
+                    "[LiveActivitySync] Skipped older foreground update activityId=%@ currentGeneratedAt=%d responseGeneratedAt=%d",
+                    activity.id,
+                    currentState.generatedAtEpochSeconds,
+                    sanitizedState.generatedAtEpochSeconds
+                )
+                continue
+            }
+            if #available(iOS 16.2, *) {
+                await activity.update(.init(state: sanitizedState, staleDate: staleDate))
+            } else {
+                await activity.update(using: sanitizedState)
+            }
             diagnosticLog(
-                "[LiveActivitySync] Trimmed foreground content state matches from %d to %d",
-                contentState.matches.count,
-                sanitized.matches.count
+                "[LiveActivitySync] Applied foreground update activityId=%@ staleDate=%@ %@",
+                activity.id,
+                staleDate.description,
+                Self.contentStateSummary(sanitizedState)
             )
         }
-        return sanitized
     }
 
     @available(iOS 16.1, *)

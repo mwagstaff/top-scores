@@ -420,28 +420,70 @@ function parseMatchEventMinute(value) {
   return base + added;
 }
 
-function countGoalsUpToMinute(goalScorers, limitMinute) {
-  if (!Number.isFinite(limitMinute) || !Array.isArray(goalScorers)) return 0;
+function countGoalKindsUpToMinute(goalScorers, limitMinute) {
+  if (!Number.isFinite(limitMinute) || !Array.isArray(goalScorers)) {
+    return { regular: 0, own: 0 };
+  }
 
-  let total = 0;
+  let regular = 0;
+  let own = 0;
   goalScorers.forEach((scorer) => {
     const goalTimes = Array.isArray(scorer && scorer.goal_times) ? scorer.goal_times : [];
     const ownGoalTimes = Array.isArray(scorer && scorer.own_goal_times) ? scorer.own_goal_times : [];
     goalTimes.forEach((goalTime) => {
       const minute = parseMatchEventMinute(goalTime);
       if (Number.isFinite(minute) && minute <= limitMinute) {
-        total += 1;
+        regular += 1;
       }
     });
     ownGoalTimes.forEach((goalTime) => {
       const minute = parseMatchEventMinute(goalTime);
       if (Number.isFinite(minute) && minute <= limitMinute) {
-        total += 1;
+        own += 1;
       }
     });
   });
 
-  return total;
+  return { regular, own };
+}
+
+function delayedScoreFromGoalTimelines(
+  homeGoalScorers,
+  awayGoalScorers,
+  limitMinute,
+  referenceHomeScore = null,
+  referenceAwayScore = null
+) {
+  const home = countGoalKindsUpToMinute(homeGoalScorers, limitMinute);
+  const away = countGoalKindsUpToMinute(awayGoalScorers, limitMinute);
+  const groupedByCreditedTeam = {
+    home_score: home.regular + home.own,
+    away_score: away.regular + away.own,
+  };
+  const groupedByPlayerTeam = {
+    home_score: home.regular + away.own,
+    away_score: away.regular + home.own,
+  };
+
+  // BSD scorer lists normally group an own goal with the player who scored it,
+  // but older/corrected records can group it with the credited team. Use the
+  // authoritative snapshot score to identify which convention this record uses.
+  const referenceHome = toNumericScore(referenceHomeScore);
+  const referenceAway = toNumericScore(referenceAwayScore);
+  const distanceFromReference = (candidate) => {
+    let distance = 0;
+    if (Number.isFinite(referenceHome)) {
+      distance += Math.abs(candidate.home_score - referenceHome);
+    }
+    if (Number.isFinite(referenceAway)) {
+      distance += Math.abs(candidate.away_score - referenceAway);
+    }
+    return distance;
+  };
+
+  return distanceFromReference(groupedByPlayerTeam) <= distanceFromReference(groupedByCreditedTeam)
+    ? groupedByPlayerTeam
+    : groupedByCreditedTeam;
 }
 
 function selectBestGoalTimeline(primaryGoalScorers, fallbackGoalScorers) {
@@ -499,14 +541,28 @@ function buildDelayedLiveState(currentMatch, delayedMatch, delayMinutes) {
     currentMatch.away_goal_scorers,
     delayedMatch && delayedMatch.away_goal_scorers
   );
-  const timelineHomeGoals = countGoalsUpToMinute(homeGoalTimeline, resolvedDelayedMinute);
-  const timelineAwayGoals = countGoalsUpToMinute(awayGoalTimeline, resolvedDelayedMinute);
   const delayedHomeScore = toNumericScore(delayedMatch && delayedMatch.home_score);
   const delayedAwayScore = toNumericScore(delayedMatch && delayedMatch.away_score);
   const currentHomeScore = toNumericScore(currentMatch.home_score);
   const currentAwayScore = toNumericScore(currentMatch.away_score);
-  const timelineHomeGoalCount = countGoals(homeGoalTimeline);
-  const timelineAwayGoalCount = countGoals(awayGoalTimeline);
+  const delayedTimelineScore = delayedScoreFromGoalTimelines(
+    homeGoalTimeline,
+    awayGoalTimeline,
+    resolvedDelayedMinute,
+    delayedHomeScore,
+    delayedAwayScore
+  );
+  const completeTimelineScore = delayedScoreFromGoalTimelines(
+    homeGoalTimeline,
+    awayGoalTimeline,
+    Number.MAX_SAFE_INTEGER,
+    currentHomeScore,
+    currentAwayScore
+  );
+  const timelineHomeGoals = delayedTimelineScore.home_score;
+  const timelineAwayGoals = delayedTimelineScore.away_score;
+  const timelineHomeGoalCount = completeTimelineScore.home_score;
+  const timelineAwayGoalCount = completeTimelineScore.away_score;
   const homeTimelineComplete =
     Number.isFinite(currentHomeScore) && timelineHomeGoalCount >= currentHomeScore;
   const awayTimelineComplete =
@@ -571,8 +627,15 @@ function delayedScoreOverrideFromTimeline(currentMatch, delayedMatch) {
     currentMatch.away_goal_scorers,
     delayedMatch && delayedMatch.away_goal_scorers
   );
-  const homeGoalsByMinute = countGoalsUpToMinute(homeGoalTimeline, delayedMinute);
-  const awayGoalsByMinute = countGoalsUpToMinute(awayGoalTimeline, delayedMinute);
+  const timelineScore = delayedScoreFromGoalTimelines(
+    homeGoalTimeline,
+    awayGoalTimeline,
+    delayedMinute,
+    delayedMatch && delayedMatch.home_score,
+    delayedMatch && delayedMatch.away_score
+  );
+  const homeGoalsByMinute = timelineScore.home_score;
+  const awayGoalsByMinute = timelineScore.away_score;
   const hasTimelineEvidence = homeGoalsByMinute > 0 || awayGoalsByMinute > 0;
   if (!hasTimelineEvidence) return null;
 
