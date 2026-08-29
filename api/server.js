@@ -11496,6 +11496,16 @@ function normalizeMatchRecord(match) {
     record.league_subcategory = String(match.league_subcategory).trim();
   }
 
+  const seasonId = match.season_id != null ? Number(match.season_id) : null;
+  if (Number.isFinite(seasonId)) {
+    record.season_id = seasonId;
+  }
+
+  const roundNumber = match.round_number != null ? Number(match.round_number) : null;
+  if (Number.isFinite(roundNumber)) {
+    record.round_number = roundNumber;
+  }
+
   const homeScore = parseNumericScore(match.home_score);
   const awayScore = parseNumericScore(match.away_score);
   if (homeScore !== null && awayScore !== null) {

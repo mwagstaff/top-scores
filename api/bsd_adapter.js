@@ -47,6 +47,12 @@ const BSD_LEAGUE_NAME_MAP = {
   "63": "World Cup Qualifying OFC",
 };
 
+// BSD serves a tiny placeholder for venues whose source image is missing.
+// Keep verified replacements explicit so clients never render that placeholder.
+const BSD_VENUE_IMAGE_OVERRIDES = {
+  "198": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/ce/Coventry_Building_Society_Arena_november_2025.jpg/1280px-Coventry_Building_Society_Arena_november_2025.jpg",
+};
+
 // BSD's standings endpoint can omit teams until they have played their first
 // match of a new season. For domestic round-robin leagues, complete the table
 // roster from BSD fixtures for the exact same league + season. Keep this list
@@ -640,7 +646,8 @@ function bsdVenueDetails(venueId, venue) {
     built_year: finiteNumber(venue.built_year),
     latitude: finiteNumber(venue.latitude),
     longitude: finiteNumber(venue.longitude),
-    image_url: `https://sports.bzzoiro.com/img/venue/${encodeURIComponent(String(venueId))}/`,
+    image_url: BSD_VENUE_IMAGE_OVERRIDES[String(venueId)]
+      || `https://sports.bzzoiro.com/img/venue/${encodeURIComponent(String(venueId))}/`,
   };
 }
 
@@ -1120,6 +1127,14 @@ function bsdEventToCanonicalMatch(event, options = {}) {
     time: kickoff.time,
     league,
     league_subcategory: leagueSubcategory,
+    season_id:
+      event.season_id != null && Number.isFinite(Number(event.season_id))
+        ? Number(event.season_id)
+        : null,
+    round_number:
+      event.round_number != null && Number.isFinite(Number(event.round_number))
+        ? Number(event.round_number)
+        : null,
     details_url: null,
     has_bsd_source: true,
     // BSD's own freshness timestamp — used e.g. to time finished-match
@@ -1538,6 +1553,7 @@ module.exports = {
     bsdPlayerEntry,
     extractBsdSubstitutions,
     isPlaceholderTeam,
+    bsdVenueDetails,
     bsdMinute,
     bsdPositionCategory,
     bsdBroadcastChannels,

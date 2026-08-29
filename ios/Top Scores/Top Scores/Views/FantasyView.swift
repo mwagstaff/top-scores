@@ -663,14 +663,12 @@ struct FantasyView: View {
                 FootballPitchSegmentOption(
                     value: .current,
                     title: "Current team",
-                    subtitle: "Active squad",
-                    systemImage: "tshirt.fill"
+                    subtitle: "Active squad"
                 ),
                 FootballPitchSegmentOption(
                     value: .previous,
                     title: previousTeamPickerTitle,
-                    subtitle: "Last gameweek",
-                    systemImage: "clock.arrow.circlepath"
+                    subtitle: "Last gameweek"
                 ),
             ],
             accessibilityLabel: "Team view",

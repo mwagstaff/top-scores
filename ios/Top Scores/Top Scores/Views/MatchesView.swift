@@ -3616,7 +3616,7 @@ private struct FixtureDateCarouselTile: View {
     }()
 }
 
-private struct MatchesListRowLabel: View, Equatable {
+struct MatchesListRowLabel: View, Equatable {
     let match: Match
     let isFixtureMode: Bool
     let rowPreferences: MatchRowPreferences

@@ -579,6 +579,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     let league: String
     let leagueId: String?
     let leagueSubcategory: String?
+    let seasonID: Int?
+    let roundNumber: Int?
     let competitionWeight: Double?
     let detailsURL: String?
     let matchDetailsIDValue: String?
@@ -622,6 +624,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         league: String,
         leagueId: String? = nil,
         leagueSubcategory: String? = nil,
+        seasonID: Int? = nil,
+        roundNumber: Int? = nil,
         competitionWeight: Double? = nil,
         detailsURL: String? = nil,
         matchDetailsID: String? = nil,
@@ -664,6 +668,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         self.league = league
         self.leagueId = leagueId
         self.leagueSubcategory = leagueSubcategory
+        self.seasonID = seasonID
+        self.roundNumber = roundNumber
         self.competitionWeight = competitionWeight
         self.detailsURL = detailsURL
         self.matchDetailsIDValue = Self.normalizedMatchDetailsID(matchDetailsID)
@@ -931,6 +937,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             league: league,
             leagueId: leagueId,
             leagueSubcategory: leagueSubcategory,
+            seasonID: seasonID,
+            roundNumber: roundNumber,
             competitionWeight: competitionWeight,
             detailsURL: detailsURL,
             matchDetailsID: matchDetailsIDValue,
@@ -977,6 +985,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             league: league,
             leagueId: leagueId,
             leagueSubcategory: leagueSubcategory,
+            seasonID: seasonID,
+            roundNumber: roundNumber,
             competitionWeight: competitionWeight,
             detailsURL: detailsURL,
             matchDetailsID: matchDetailsIDValue,
@@ -1023,6 +1033,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         league = try container.decode(String.self, forKey: .league)
         leagueId = try container.decodeIfPresent(String.self, forKey: .leagueId)
         leagueSubcategory = try container.decodeIfPresent(String.self, forKey: .leagueSubcategory)
+        seasonID = try container.decodeIfPresent(Int.self, forKey: .seasonID)
+        roundNumber = try container.decodeIfPresent(Int.self, forKey: .roundNumber)
         competitionWeight = try container.decodeIfPresent(Double.self, forKey: .competitionWeight)
         detailsURL = try container.decodeIfPresent(String.self, forKey: .detailsURL)
         matchDetailsIDValue = Self.normalizedMatchDetailsID(
@@ -1070,6 +1082,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         case league
         case leagueId = "league_id"
         case leagueSubcategory = "league_subcategory"
+        case seasonID = "season_id"
+        case roundNumber = "round_number"
         case competitionWeight = "competition_weight"
         case detailsURL = "details_url"
         case matchDetailsIDValue = "match_details_id"
@@ -1115,6 +1129,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         try container.encode(league, forKey: .league)
         try container.encodeIfPresent(leagueId, forKey: .leagueId)
         try container.encodeIfPresent(leagueSubcategory, forKey: .leagueSubcategory)
+        try container.encodeIfPresent(seasonID, forKey: .seasonID)
+        try container.encodeIfPresent(roundNumber, forKey: .roundNumber)
         try container.encodeIfPresent(competitionWeight, forKey: .competitionWeight)
         try container.encodeIfPresent(detailsURL, forKey: .detailsURL)
         try container.encodeIfPresent(matchDetailsIDValue, forKey: .matchDetailsIDValue)
@@ -1157,6 +1173,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         lhs.league == rhs.league &&
         lhs.leagueId == rhs.leagueId &&
         lhs.leagueSubcategory == rhs.leagueSubcategory &&
+        lhs.seasonID == rhs.seasonID &&
+        lhs.roundNumber == rhs.roundNumber &&
         lhs.competitionWeight == rhs.competitionWeight &&
         lhs.detailsURL == rhs.detailsURL &&
         lhs.matchDetailsIDValue == rhs.matchDetailsIDValue &&
@@ -1230,6 +1248,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             league: details.league ?? league,
             leagueId: leagueId,
             leagueSubcategory: leagueSubcategory,
+            seasonID: seasonID,
+            roundNumber: roundNumber,
             competitionWeight: competitionWeight,
             detailsURL: details.detailsURL ?? detailsURL,
             matchDetailsID: details.id,
@@ -1279,6 +1299,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             league: refreshed.league,
             leagueId: refreshed.leagueId,
             leagueSubcategory: refreshed.leagueSubcategory,
+            seasonID: refreshed.seasonID,
+            roundNumber: refreshed.roundNumber,
             competitionWeight: refreshed.competitionWeight,
             detailsURL: refreshed.detailsURL,
             matchDetailsID: refreshed.matchDetailsID,

@@ -224,89 +224,91 @@ struct MatchDetailView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                MatchDetailScoreboardHero(
-                    match: activeMatch,
-                    kickoffText: kickoffText,
-                    predictionDisplay: predictionDisplay,
-                    teamCompetitionEntries: teamCompetitionEntries
-                )
-                .padding(.horizontal)
-
-                MatchTeamLeaguePositionsLink(
-                    entries: teamCompetitionEntries
-                )
-                .padding(.horizontal)
-
-                if let penaltyDetailSummary = activeMatch.penaltyDetailSummaryText {
-                    MatchPenaltyShootoutSummary(text: penaltyDetailSummary)
-                        .padding(.horizontal)
-                }
-
-                if let fantasyMatchContext {
-                    let sections = fantasySquadSections(in: fantasyMatchContext.squad)
-                    if !sections.isEmpty {
-                        FantasyMatchPlayersSection(
-                            context: fantasyMatchContext,
-                            sections: sections,
-                            pointsPhase: fantasyMatchPointsPhase(
-                                isMatchInProgress: activeMatch.isInProgress,
-                                isMatchFinished: activeMatch.isFinished,
-                                squadScorePhase: fantasyMatchContext.squad.scorePhase
-                            )
-                        )
-                        .padding(.horizontal)
-                    }
-                }
-
-                MatchEventsCard(match: activeMatch)
-                    .padding(.horizontal)
-
-                if shouldShowLineupPitch {
-                    MatchLineupPitchSection(
+        GeometryReader { proxy in
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 12) {
+                    MatchDetailScoreboardHero(
                         match: activeMatch,
-                        fantasyHighlightLookup: fantasyHighlightLookup,
-                        fantasyPointsLookup: fantasyPointsLookup
+                        kickoffText: kickoffText,
+                        predictionDisplay: predictionDisplay,
+                        teamCompetitionEntries: teamCompetitionEntries
                     )
-                        .padding(.horizontal)
-                }
-
-                if let detailsErrorMessage {
-                    Text(detailsErrorMessage)
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                        .padding(.horizontal)
-                }
-
-                if !activeMatch.tvChannels.isEmpty {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Label("Follow the action", systemImage: "dot.radiowaves.left.and.right")
-                            .font(.headline)
-                            .foregroundStyle(FootballSectionAccent.action)
-                        tvChannelSection
-                    }
                     .padding(.horizontal)
-                }
 
-                if shouldShowMatchActions {
-                    actionPanel
-                        .padding(.horizontal)
-                }
+                    MatchTeamLeaguePositionsLink(
+                        entries: teamCompetitionEntries
+                    )
+                    .padding(.horizontal)
 
-                if !socialItems.isEmpty {
-                    MatchSocialSection(items: socialItems)
-                        .padding(.horizontal)
-                }
+                    if let penaltyDetailSummary = activeMatch.penaltyDetailSummaryText {
+                        MatchPenaltyShootoutSummary(text: penaltyDetailSummary)
+                            .padding(.horizontal)
+                    }
 
-                if let venue = activeMatch.venueDetails {
-                    MatchVenueSection(venue: venue)
+                    if let fantasyMatchContext {
+                        let sections = fantasySquadSections(in: fantasyMatchContext.squad)
+                        if !sections.isEmpty {
+                            FantasyMatchPlayersSection(
+                                context: fantasyMatchContext,
+                                sections: sections,
+                                pointsPhase: fantasyMatchPointsPhase(
+                                    isMatchInProgress: activeMatch.isInProgress,
+                                    isMatchFinished: activeMatch.isFinished,
+                                    squadScorePhase: fantasyMatchContext.squad.scorePhase
+                                )
+                            )
+                            .padding(.horizontal)
+                        }
+                    }
+
+                    MatchEventsCard(match: activeMatch)
                         .padding(.horizontal)
+
+                    if shouldShowLineupPitch {
+                        MatchLineupPitchSection(
+                            match: activeMatch,
+                            fantasyHighlightLookup: fantasyHighlightLookup,
+                            fantasyPointsLookup: fantasyPointsLookup
+                        )
+                            .padding(.horizontal)
+                    }
+
+                    if let detailsErrorMessage {
+                        Text(detailsErrorMessage)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal)
+                    }
+
+                    if !activeMatch.tvChannels.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Label("Follow the action", systemImage: "dot.radiowaves.left.and.right")
+                                .font(.headline)
+                                .foregroundStyle(FootballSectionAccent.action)
+                            tvChannelSection
+                        }
+                        .padding(.horizontal)
+                    }
+
+                    if shouldShowMatchActions {
+                        actionPanel
+                            .padding(.horizontal)
+                    }
+
+                    if !socialItems.isEmpty {
+                        MatchSocialSection(items: socialItems)
+                            .padding(.horizontal)
+                    }
+
+                    if let venue = activeMatch.venueDetails {
+                        MatchVenueSection(venue: venue)
+                            .padding(.horizontal)
+                    }
                 }
+                // Keep data-heavy child views from widening the vertical scroll content.
+                .frame(width: proxy.size.width, alignment: .leading)
+                .padding(.vertical, 12)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .containerRelativeFrame(.horizontal)
-            .padding(.vertical, 12)
         }
         .task(id: "\(preferences.apiBaseURL)|\(match.matchDetailsID ?? "")") {
             await loadMatchSocial()
@@ -913,13 +915,15 @@ private struct MatchVenueSection: View {
                 AsyncImage(url: imageURL) { phase in
                     switch phase {
                     case .success(let image):
-                        image
-                            .resizable()
-                            .scaledToFill()
-                            .frame(maxWidth: .infinity)
-                            .aspectRatio(16 / 9, contentMode: .fit)
-                            .clipped()
-                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        GeometryReader { proxy in
+                            image
+                                .resizable()
+                                .scaledToFill()
+                                .frame(width: proxy.size.width, height: proxy.size.height)
+                                .clipped()
+                        }
+                        .aspectRatio(16 / 9, contentMode: .fit)
+                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                     case .empty:
                         RoundedRectangle(cornerRadius: 16, style: .continuous)
                             .fill(Color(.tertiarySystemFill))

@@ -280,8 +280,18 @@ async function hydrateMissingTeams(allEvents) {
   await hydrateTeams([...teamIds]);
 }
 
+function usableHydratedVenueIds(venueDocs) {
+  return new Set((Array.isArray(venueDocs) ? venueDocs : []).flatMap((doc) => {
+    const id = doc && doc._id != null ? String(doc._id) : "";
+    const name = String(doc && doc.payload && doc.payload.name || "").trim();
+    return id && name ? [id] : [];
+  }));
+}
+
 async function hydrateMissingVenues(allEvents) {
-  const hydratedVenueIds = new Set((await getBsdRecordIds("bsd_venues")).map(String));
+  // An interrupted or legacy ingest can leave an ID-only/null venue record.
+  // Treat those as missing so the regular poller repairs them automatically.
+  const hydratedVenueIds = usableHydratedVenueIds(await getBsdRecords("bsd_venues"));
   const venueIds = new Set();
   allEvents.forEach((event) => {
     if (event.venue_id != null && !hydratedVenueIds.has(String(event.venue_id))) {
@@ -363,4 +373,5 @@ module.exports = {
   isRecentFinishedEvent,
   needsRecentFinishedDetailRefresh,
   selectIncrementalEvents,
+  usableHydratedVenueIds,
 };

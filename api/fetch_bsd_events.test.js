@@ -13,6 +13,7 @@ const {
   isRecentFinishedEvent,
   needsRecentFinishedDetailRefresh,
   selectIncrementalEvents,
+  usableHydratedVenueIds,
 } = require("./fetch_bsd_events");
 
 test("eventToRecord indexes season and venue ids for current-season Mongo queries", () => {
@@ -29,6 +30,18 @@ test("eventToRecord indexes season and venue ids for current-season Mongo querie
 
 test("EVENT_STATUSES excludes historical started results; live events use /events/live", () => {
   assert.deepEqual(EVENT_STATUSES, ["notstarted", "finished"]);
+});
+
+test("usableHydratedVenueIds excludes incomplete venue cache records", () => {
+  assert.deepEqual(
+    [...usableHydratedVenueIds([
+      { _id: "7", payload: { name: "Stadium of Light" } },
+      { _id: "9", payload: null },
+      { _id: "198", payload: { name: "  " } },
+      { _id: "2", payload: { name: "Vitality Stadium" } },
+    ])],
+    ["7", "2"]
+  );
 });
 
 test("isRecentFinishedEvent retains only finished events inside the incremental window", () => {

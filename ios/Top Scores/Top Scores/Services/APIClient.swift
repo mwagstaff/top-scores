@@ -265,6 +265,33 @@ struct APIClient {
         )
     }
 
+    func fetchCompetitionSeasonMatches(
+        leagueName: String,
+        now: Date = Date()
+    ) async throws -> [Match] {
+        let trimmedLeagueName = leagueName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedLeagueName.isEmpty else { return [] }
+
+        let startDate = Calendar.current.date(byAdding: .month, value: -18, to: now) ?? now
+        let queryItems: [URLQueryItem] = [
+            URLQueryItem(name: "start", value: Self.dateFormatter.string(from: startDate)),
+            URLQueryItem(name: "end", value: Self.openEndedFixtureEndDate),
+            URLQueryItem(name: "league", value: trimmedLeagueName),
+            URLQueryItem(name: "filter_mode", value: "intersection"),
+            URLQueryItem(name: "sort", value: "asc"),
+            URLQueryItem(name: "page_size", value: "2000"),
+            URLQueryItem(name: "time_zone", value: TimeZone.current.identifier),
+        ]
+
+        let request = try buildRequest(path: "matches", queryItems: queryItems)
+        let (data, http) = try await performRequest(
+            request,
+            operation: "competition_season_matches"
+        )
+        try validateSuccess(http, data: data, operation: "competition_season_matches")
+        return try decodeMatches(from: data, operation: "competition_season_matches")
+    }
+
     func fetchTeamResults(
         teamName: String,
         limit: Int = 200,

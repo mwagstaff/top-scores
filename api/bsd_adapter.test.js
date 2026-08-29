@@ -260,6 +260,8 @@ test("bsdEventToCanonicalMatch: canonicalises names, league, zoned date, status"
     away_score: 2,
     status: "finished",
     period: "FT",
+    season_id: 2026,
+    round_number: 3,
     event_date: "2026-06-21T19:00:00Z",
     venue_id: 273,
   };
@@ -270,6 +272,8 @@ test("bsdEventToCanonicalMatch: canonicalises names, league, zoned date, status"
   assert.equal(m.away_team, "Uruguay");
   assert.equal(m.league, "FIFA World Cup 2026"); // matches what BSD emits
   assert.equal(m.score_status, "FT");
+  assert.equal(m.season_id, 2026);
+  assert.equal(m.round_number, 3);
   assert.equal(m.home_score, 1);
   assert.equal(m.away_score, 2);
   assert.equal(m.match_details_id, "8325");
@@ -452,6 +456,30 @@ test("bsdEventToCanonicalMatch: includes cached venue details only in the detail
     longitude: -1.388983,
     image_url: "https://sports.bzzoiro.com/img/venue/7/",
   });
+});
+
+test("bsdEventToCanonicalMatch: replaces BSD's missing Coventry venue image", () => {
+  const details = bsdEventToCanonicalMatch({
+    id: 209548,
+    league_id: 1,
+    home_team: "Coventry City",
+    away_team: "Hull City",
+    status: "finished",
+    event_date: "2026-08-29T14:00:00Z",
+    venue_id: 198,
+  }, {
+    detail: true,
+    venuesById: new Map([["198", {
+      name: "Coventry Building Society Arena",
+      city: "Coventry",
+      country: "England",
+    }]]),
+  });
+
+  assert.equal(
+    details.venue_details.image_url,
+    "https://upload.wikimedia.org/wikipedia/commons/thumb/c/ce/Coventry_Building_Society_Arena_november_2025.jpg/1280px-Coventry_Building_Society_Arena_november_2025.jpg"
+  );
 });
 
 test("bsdEventToCanonicalMatch: maps BSD league 90 to UEFA Super Cup", () => {

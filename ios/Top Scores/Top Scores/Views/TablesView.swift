@@ -16,9 +16,12 @@ struct TablesView: View {
     @State private var highlightedRowID: String?
     @State private var showsStats = false
     @State private var catalogCompetitionWeights: [String: Double] = [:]
+    @State private var matchSectionsByLeagueID: [String: TableMatchesSection] = [:]
+    @State private var loadedMatchSectionLeagueIDs: Set<String> = []
+    @State private var loadingMatchSectionLeagueIDs: Set<String> = []
     @ObservedObject private var navigationCoordinator = TablesNavigationCoordinator.shared
 
-    @ScaledMetric(relativeTo: .caption) private var competitionPickerHeight: CGFloat = 94
+    @ScaledMetric(relativeTo: .caption) private var competitionPickerHeight: CGFloat = 103.4
 
     // While the Tables screen is visible, refresh on a live cadence so
     // in-progress scores flow into the (server-recomputed) standings within
@@ -46,10 +49,22 @@ struct TablesView: View {
 
                     VStack(spacing: 0) {
                         FootballHeroHeader(title: "Tables", subtitle: tablesHeaderSubtitle)
-
-                        if navigationCoordinator.returnTabIndex != nil {
-                            backToOriginButton
-                        }
+                            .overlay(alignment: .topLeading) {
+                                if navigationCoordinator.returnTabIndex != nil {
+                                    Button {
+                                        navigationCoordinator.requestReturn()
+                                    } label: {
+                                        Image(systemName: "chevron.backward")
+                                            .font(.body.weight(.semibold))
+                                            .frame(width: 44, height: 44)
+                                            .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(Color.white.opacity(0.92))
+                                    .accessibilityLabel(navigationCoordinator.returnTitle)
+                                    .padding(.leading, 8)
+                                }
+                            }
                         contentView
                     }
                     .frame(width: proxy.size.width, height: proxy.size.height, alignment: .top)
@@ -80,7 +95,7 @@ struct TablesView: View {
         }
         .onDisappear {
             isVisible = false
-            // Leaving Tables for any reason — tapping "Back to match", or
+            // Leaving Tables for any reason — tapping the return button, or
             // switching to another tab directly — drops the stale return
             // target and the pulsing row highlight, so neither lingers if
             // the user comes back to Tables later for an unrelated reason.
@@ -88,6 +103,9 @@ struct TablesView: View {
             highlightedRowID = nil
         }
         .onChange(of: preferences.apiBaseURL) { _, newValue in
+            matchSectionsByLeagueID.removeAll()
+            loadedMatchSectionLeagueIDs.removeAll()
+            loadingMatchSectionLeagueIDs.removeAll()
             applyCachedTables(for: newValue, clearWhenMissing: true)
             Task {
                 await refreshTeamShortNames(apiBaseURL: newValue)
@@ -96,7 +114,10 @@ struct TablesView: View {
         }
         .onReceive(liveRefreshTimer) { _ in
             guard isVisible, hasLoaded else { return }
-            Task { await liveRefreshTables() }
+            Task {
+                await liveRefreshTables()
+                await refreshSelectedCompetitionMatchesIfLive()
+            }
         }
         .onChange(of: navigationCoordinator.pendingTarget) { _, _ in
             consumePendingNavigationIfNeeded()
@@ -106,6 +127,9 @@ struct TablesView: View {
         }
         .task(id: preferences.apiBaseURL) {
             await loadCompetitionMetadata(apiBaseURL: preferences.apiBaseURL)
+        }
+        .task(id: competitionMatchesTaskID) {
+            await loadSelectedCompetitionMatches(force: false)
         }
     }
 
@@ -118,6 +142,10 @@ struct TablesView: View {
             return nil
         }
         return leagueName
+    }
+
+    private var competitionMatchesTaskID: String {
+        "\(preferences.apiBaseURL)|\(selectedLeagueID)"
     }
 
     // Applies a cross-tab navigation request from MatchDetailView (selects the
@@ -257,7 +285,7 @@ struct TablesView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
             }
-            .frame(height: min(competitionPickerHeight, 120))
+            .frame(height: min(competitionPickerHeight, 132))
             .onAppear {
                 proxy.scrollTo(selectedLeagueID, anchor: .center)
             }
@@ -280,6 +308,12 @@ struct TablesView: View {
                         highlightedRowID: highlightedRowID
                     )
                     .id("\(league.id)-\(shortNameRefreshVersion)")
+
+                    if let section = matchSectionsByLeagueID[league.leagueID] {
+                        TableMatchesSectionView(league: league, section: section)
+                    } else if loadingMatchSectionLeagueIDs.contains(league.leagueID) {
+                        TableMatchesLoadingView()
+                    }
                 }
                 .padding(.horizontal)
                 .padding(.vertical, 12)
@@ -287,6 +321,7 @@ struct TablesView: View {
             .refreshable {
                 let refreshStart = Date()
                 await loadTables(force: true)
+                await loadSelectedCompetitionMatches(force: true)
                 let durationMs = Int(Date().timeIntervalSince(refreshStart) * 1000)
                 AppMetricsService.shared.fireActivity("manual_refresh", screen: "tables", durationMs: durationMs, apiBaseURL: preferences.apiBaseURL)
             }
@@ -317,33 +352,6 @@ struct TablesView: View {
         .overlay {
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .stroke(FootballVisualStyle.border, lineWidth: 1)
-        }
-    }
-
-    // Small, unobtrusive pinned bar (sits between the header and the scroll
-    // content, so it never scrolls away) offering a quick way back to the
-    // screen that initiated the highlighted-table navigation.
-    private var backToOriginButton: some View {
-        Button {
-            navigationCoordinator.requestReturn()
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "chevron.left")
-                    .font(.caption.weight(.semibold))
-                Text(navigationCoordinator.returnTitle)
-                    .font(.subheadline.weight(.medium))
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(Color.white.opacity(0.78))
-        .background(FootballVisualStyle.elevatedSurface.opacity(0.76))
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(FootballVisualStyle.divider)
-                .frame(height: 1)
         }
     }
 
@@ -403,6 +411,49 @@ struct TablesView: View {
         } catch {
             // Keep showing existing data on a transient failure.
         }
+    }
+
+    private func loadSelectedCompetitionMatches(force: Bool) async {
+        guard let league = leagues.first(where: { $0.leagueID == selectedLeagueID }) else {
+            return
+        }
+        guard force || !loadedMatchSectionLeagueIDs.contains(league.leagueID) else {
+            return
+        }
+
+        let apiBaseURL = preferences.apiBaseURL
+        guard let baseURL = URL(string: apiBaseURL) else { return }
+
+        loadingMatchSectionLeagueIDs.insert(league.leagueID)
+        defer { loadingMatchSectionLeagueIDs.remove(league.leagueID) }
+
+        do {
+            let matches = try await APIClient(baseURL: baseURL).fetchCompetitionSeasonMatches(
+                leagueName: league.leagueName
+            )
+            guard !Task.isCancelled, preferences.apiBaseURL == apiBaseURL else { return }
+
+            loadedMatchSectionLeagueIDs.insert(league.leagueID)
+            if let section = TableMatchesSection.resolve(from: matches) {
+                matchSectionsByLeagueID[league.leagueID] = section
+            } else {
+                matchSectionsByLeagueID.removeValue(forKey: league.leagueID)
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            // The table remains useful on its own if companion match data is
+            // temporarily unavailable. Pull-to-refresh will retry the request.
+        }
+    }
+
+    private func refreshSelectedCompetitionMatchesIfLive() async {
+        guard let league = leagues.first(where: { $0.leagueID == selectedLeagueID }) else {
+            return
+        }
+        let sectionIsLive = matchSectionsByLeagueID[league.leagueID]?.kind == .inProgress
+        guard league.hasLiveRows || sectionIsLive else { return }
+        await loadSelectedCompetitionMatches(force: true)
     }
 
     private func refreshTeamShortNames(apiBaseURL: String) async {
@@ -495,6 +546,251 @@ struct TablesView: View {
     }
 }
 
+struct TableMatchesSection: Equatable {
+    enum Kind: Equatable {
+        case inProgress
+        case latestResults
+        case futureFixtures
+
+        var title: String {
+            switch self {
+            case .inProgress:
+                return "Matches in progress"
+            case .latestResults:
+                return "Latest results"
+            case .futureFixtures:
+                return "Future fixtures"
+            }
+        }
+    }
+
+    let kind: Kind
+    let matches: [Match]
+
+    static func resolve(from matches: [Match]) -> TableMatchesSection? {
+        let availableMatches = matches.filter { !$0.isPostponed }
+        let liveMatches = sorted(availableMatches.filter(\.isInProgress))
+        if !liveMatches.isEmpty {
+            return TableMatchesSection(kind: .inProgress, matches: liveMatches)
+        }
+
+        let finishedMatches = availableMatches.filter(\.isFinished)
+        if let latestResult = sorted(finishedMatches).last {
+            let latestRoundResults = matchesInRound(
+                containing: latestResult,
+                from: availableMatches
+            )
+            .filter(\.isFinished)
+            return TableMatchesSection(
+                kind: .latestResults,
+                matches: sorted(latestRoundResults)
+            )
+        }
+
+        let futureMatches = sorted(availableMatches.filter(\.isUpcomingScorelessFixture))
+        guard let nextFixture = futureMatches.first else { return nil }
+        let nextRoundFixtures = matchesInRound(
+            containing: nextFixture,
+            from: availableMatches
+        )
+        .filter(\.isUpcomingScorelessFixture)
+        guard !nextRoundFixtures.isEmpty else { return nil }
+        return TableMatchesSection(
+            kind: .futureFixtures,
+            matches: sorted(nextRoundFixtures)
+        )
+    }
+
+    private static func matchesInRound(containing anchor: Match, from matches: [Match]) -> [Match] {
+        if let roundNumber = anchor.roundNumber {
+            let sameRound = matches.filter { match in
+                guard match.roundNumber == roundNumber else { return false }
+                guard let seasonID = anchor.seasonID else { return true }
+                return match.seasonID == nil || match.seasonID == seasonID
+            }
+            if !sameRound.isEmpty { return sameRound }
+        }
+
+        if let stage = roundSpecificStage(anchor.leagueSubcategory) {
+            let sameStage = matches.filter {
+                $0.leagueSubcategory?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .caseInsensitiveCompare(stage) == .orderedSame
+            }
+            if !sameStage.isEmpty { return sameStage }
+        }
+
+        return inferredRounds(from: matches)
+            .first(where: { round in round.contains(where: { $0.id == anchor.id }) })
+            ?? [anchor]
+    }
+
+    private static func roundSpecificStage(_ value: String?) -> String? {
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty else { return nil }
+        let normalized = trimmed.lowercased()
+        let identifiesRound = normalized.rangeOfCharacter(from: .decimalDigits) != nil ||
+            normalized.contains("round") ||
+            normalized.contains("final") ||
+            normalized.contains("semi") ||
+            normalized.contains("quarter") ||
+            normalized.contains("playoff") ||
+            normalized.contains("play-off")
+        return identifiesRound ? trimmed : nil
+    }
+
+    private static func inferredRounds(from matches: [Match]) -> [[Match]] {
+        var rounds: [[Match]] = []
+        var currentRound: [Match] = []
+        var participatingTeams: Set<String> = []
+
+        for match in sorted(matches) {
+            let homeKey = teamKey(id: match.homeTeamId, name: match.homeTeam)
+            let awayKey = teamKey(id: match.awayTeamId, name: match.awayTeam)
+            if !currentRound.isEmpty,
+               (participatingTeams.contains(homeKey) || participatingTeams.contains(awayKey)) {
+                rounds.append(currentRound)
+                currentRound = []
+                participatingTeams.removeAll(keepingCapacity: true)
+            }
+
+            currentRound.append(match)
+            participatingTeams.insert(homeKey)
+            participatingTeams.insert(awayKey)
+        }
+
+        if !currentRound.isEmpty {
+            rounds.append(currentRound)
+        }
+        return rounds
+    }
+
+    private static func teamKey(id: String?, name: String) -> String {
+        if let id = id?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty {
+            return "id:\(id)"
+        }
+        return "name:" + name
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased()
+            .filter { $0.isLetter || $0.isNumber }
+    }
+
+    private static func sorted(_ matches: [Match]) -> [Match] {
+        matches.sorted {
+            let leftDate = $0.dateTime ?? $0.dateOnly ?? .distantFuture
+            let rightDate = $1.dateTime ?? $1.dateOnly ?? .distantFuture
+            if leftDate != rightDate { return leftDate < rightDate }
+            return $0.id < $1.id
+        }
+    }
+}
+
+private struct TableMatchesSectionView: View {
+    let league: LeagueTable
+    let section: TableMatchesSection
+
+    private var accentColor: Color {
+        if section.kind == .inProgress { return .liveMatch }
+        return CompetitionAccentRole.resolve(
+            competitionID: league.leagueID,
+            competitionName: league.leagueName
+        ).color
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(section.kind.title)
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(Color.white.opacity(0.96))
+
+                if section.kind == .inProgress {
+                    LiveCompetitionDot()
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 4)
+
+            VStack(spacing: 0) {
+                ForEach(Array(section.matches.enumerated()), id: \.element.id) { index, match in
+                    NavigationLink {
+                        MatchDetailView(match: match, showFantasyBadge: false)
+                    } label: {
+                        HStack(spacing: 0) {
+                            MatchesListRowLabel(
+                                match: match,
+                                isFixtureMode: false,
+                                rowPreferences: .disabledFantasy,
+                                fantasyContext: .empty,
+                                predictionDisplay: .hidden
+                            )
+                            .equatable()
+
+                            Image(systemName: "chevron.right")
+                                .font(.caption)
+                                .foregroundStyle(Color(.tertiaryLabel))
+                                .frame(width: 16)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.horizontal, 8)
+
+                    if index < section.matches.count - 1 {
+                        Rectangle()
+                            .fill(FootballVisualStyle.divider)
+                            .frame(height: 0.5)
+                            .padding(.horizontal, 16)
+                    }
+                }
+            }
+            .background {
+                FootballCardSurface(accentColor: accentColor.opacity(0.65))
+            }
+            .clipShape(
+                RoundedRectangle(
+                    cornerRadius: FootballVisualStyle.cardCornerRadius,
+                    style: .continuous
+                )
+            )
+            .overlay {
+                RoundedRectangle(
+                    cornerRadius: FootballVisualStyle.cardCornerRadius,
+                    style: .continuous
+                )
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            accentColor.opacity(0.32),
+                            FootballVisualStyle.border,
+                            FootballVisualStyle.border,
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 0.6
+                )
+            }
+            .shadow(color: .black.opacity(0.24), radius: 16, y: 9)
+        }
+        .accessibilityElement(children: .contain)
+    }
+}
+
+private struct TableMatchesLoadingView: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+                .tint(.accentColor)
+            Text("Loading matches")
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(FootballVisualStyle.mutedText)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 14)
+    }
+}
+
 private struct CompetitionPickerItem: View {
     let league: LeagueTable
     let isSelected: Bool
@@ -530,7 +826,7 @@ private struct CompetitionPickerItem: View {
             .padding(.horizontal, 6)
             .padding(.top, 7)
             .padding(.bottom, 5)
-            .frame(width: min(itemWidth, 115.2), height: 66)
+            .frame(width: min(itemWidth, 115.2), height: 72.6)
             .background(FootballVisualStyle.elevatedSurface.opacity(isSelected ? 0.96 : 0.78))
             .clipShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
             .overlay {
