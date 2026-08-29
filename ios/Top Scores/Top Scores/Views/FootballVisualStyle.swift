@@ -78,9 +78,17 @@ enum FootballVisualStyle {
     static let easeOut = Animation.timingCurve(0.22, 1, 0.36, 1, duration: 0.26)
 }
 
+enum FootballSectionAccent {
+    static let fantasy = Color(red: 0.55, green: 0.38, blue: 0.94)
+    static let action = Color(red: 0.20, green: 0.72, blue: 0.46)
+    static let media = Color(red: 0.24, green: 0.56, blue: 0.94)
+    static let venue = Color(red: 0.94, green: 0.61, blue: 0.20)
+}
+
 struct FootballCardSurface: View {
     let accentColor: Color
     var showsPitchMarkings = false
+    var accentOpacity = 0.18
 
     var body: some View {
         GeometryReader { proxy in
@@ -95,7 +103,7 @@ struct FootballCardSurface: View {
                 )
 
                 RadialGradient(
-                    colors: [accentColor.opacity(0.18), .clear],
+                    colors: [accentColor.opacity(accentOpacity), .clear],
                     center: .topLeading,
                     startRadius: 0,
                     endRadius: proxy.size.width * 0.78
@@ -109,6 +117,279 @@ struct FootballCardSurface: View {
 
                 LinearGradient(
                     colors: [Color.white.opacity(0.055), .clear],
+                    startPoint: .top,
+                    endPoint: .center
+                )
+            }
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+private struct FootballTintedSurfaceModifier: ViewModifier {
+    let accentColor: Color
+    let cornerRadius: CGFloat
+    let showsPitchMarkings: Bool
+    let accentOpacity: Double
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+
+        content
+            .background {
+                FootballCardSurface(
+                    accentColor: accentColor,
+                    showsPitchMarkings: showsPitchMarkings,
+                    accentOpacity: accentOpacity
+                )
+            }
+            .clipShape(shape)
+            .overlay {
+                shape.stroke(
+                    LinearGradient(
+                        colors: [accentColor.opacity(0.34), FootballVisualStyle.border],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1
+                )
+            }
+    }
+}
+
+extension View {
+    func footballTintedSurface(
+        accentColor: Color,
+        cornerRadius: CGFloat,
+        showsPitchMarkings: Bool = false,
+        accentOpacity: Double = 0.18
+    ) -> some View {
+        modifier(
+            FootballTintedSurfaceModifier(
+                accentColor: accentColor,
+                cornerRadius: cornerRadius,
+                showsPitchMarkings: showsPitchMarkings,
+                accentOpacity: accentOpacity
+            )
+        )
+    }
+}
+
+struct LiveInPlayStandingsNote: View {
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(Color.liveMatch)
+                .frame(width: 7, height: 7)
+            Text("Live in-play standings. Provisional, subject to change.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 4)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+struct LiveStandingsRowBackground: View {
+    let isActive: Bool
+
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @State private var pulsing = false
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.liveMatch.opacity(highlightOpacity))
+            .animation(pulseAnimation, value: pulsing)
+            .onAppear { updatePulseState() }
+            .onChange(of: isActive) { _, _ in updatePulseState() }
+            .onChange(of: accessibilityReduceMotion) { _, _ in updatePulseState() }
+            .accessibilityHidden(true)
+    }
+
+    private var highlightOpacity: Double {
+        guard isActive else { return 0 }
+        guard !accessibilityReduceMotion else { return 0.14 }
+        return pulsing ? 0.20 : 0.07
+    }
+
+    private var pulseAnimation: Animation? {
+        guard isActive, !accessibilityReduceMotion else { return .default }
+        return .easeInOut(duration: 1.1).repeatForever(autoreverses: true)
+    }
+
+    private func updatePulseState() {
+        pulsing = isActive && !accessibilityReduceMotion
+    }
+}
+
+struct FootballPitchSegmentOption<Value: Hashable>: Identifiable {
+    let value: Value
+    let title: String
+    var subtitle: String? = nil
+    var systemImage: String? = nil
+
+    var id: Value { value }
+}
+
+struct FootballPitchSegmentedControl<Value: Hashable>: View {
+    @Binding var selection: Value
+    let options: [FootballPitchSegmentOption<Value>]
+    let accessibilityLabel: String
+    var minimumHeight: CGFloat = 64
+
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+
+    var body: some View {
+        HStack(spacing: 0) {
+            ForEach(options) { option in
+                optionButton(option)
+            }
+        }
+        .frame(minHeight: minimumHeight)
+        .background {
+            FootballPitchSegmentedBackground(
+                selectedIndex: selectedIndex,
+                segmentCount: options.count
+            )
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.white.opacity(0.20), lineWidth: 1)
+        }
+        .shadow(color: Color.black.opacity(0.22), radius: 8, x: 0, y: 4)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(accessibilityLabel)
+    }
+
+    private var selectedIndex: Int {
+        options.firstIndex(where: { $0.value == selection }) ?? 0
+    }
+
+    private func optionButton(_ option: FootballPitchSegmentOption<Value>) -> some View {
+        let isSelected = selection == option.value
+
+        return Button {
+            withAnimation(accessibilityReduceMotion ? nil : FootballVisualStyle.easeOut) {
+                selection = option.value
+            }
+        } label: {
+            HStack(spacing: 10) {
+                if let systemImage = option.systemImage {
+                    ZStack {
+                        Circle()
+                            .fill(Color.white.opacity(isSelected ? 0.14 : 0.055))
+                        Circle()
+                            .stroke(Color.white.opacity(isSelected ? 0.52 : 0.18), lineWidth: 1)
+                        Image(systemName: systemImage)
+                            .font(.system(size: 17, weight: .bold))
+                    }
+                    .frame(width: 38, height: 38)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(option.title)
+                        .font(.subheadline.weight(.heavy))
+                        .textCase(.uppercase)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.72)
+
+                    if let subtitle = option.subtitle {
+                        Text(subtitle)
+                            .font(.caption)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.82)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .foregroundStyle(Color.white.opacity(isSelected ? 0.98 : 0.58))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, minHeight: minimumHeight, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(option.title)
+        .accessibilityValue(isSelected ? "Selected" : "Not selected")
+        .accessibilityHint(option.subtitle ?? "")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+private struct FootballPitchSegmentedBackground: View {
+    let selectedIndex: Int
+    let segmentCount: Int
+
+    var body: some View {
+        GeometryReader { proxy in
+            let safeSegmentCount = max(segmentCount, 1)
+            let segmentWidth = proxy.size.width / CGFloat(safeSegmentCount)
+            let lineColor = Color.white.opacity(0.20)
+
+            ZStack(alignment: .leading) {
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.025, green: 0.095, blue: 0.075),
+                        Color(red: 0.018, green: 0.045, blue: 0.050),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+
+                LinearGradient(
+                    colors: [
+                        Color(red: 0.04, green: 0.48, blue: 0.16),
+                        Color(red: 0.015, green: 0.28, blue: 0.10),
+                    ],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+                .frame(width: segmentWidth)
+                .offset(x: segmentWidth * CGFloat(min(max(selectedIndex, 0), safeSegmentCount - 1)))
+
+                HStack(spacing: 0) {
+                    ForEach(0..<10, id: \.self) { index in
+                        Rectangle()
+                            .fill(Color.white.opacity(index.isMultiple(of: 2) ? 0.026 : 0))
+                    }
+                }
+
+                RoundedRectangle(cornerRadius: 13, style: .continuous)
+                    .stroke(lineColor.opacity(0.76), lineWidth: 1)
+                    .padding(6)
+
+                ForEach(Array(1..<safeSegmentCount), id: \.self) { index in
+                    Rectangle()
+                        .fill(lineColor)
+                        .frame(width: 1, height: proxy.size.height - 12)
+                        .position(
+                            x: segmentWidth * CGFloat(index),
+                            y: proxy.size.height / 2
+                        )
+                }
+
+                Circle()
+                    .stroke(lineColor, lineWidth: 1)
+                    .frame(width: 46, height: 46)
+                    .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
+
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .stroke(lineColor.opacity(0.72), lineWidth: 1)
+                    .frame(width: 30, height: 38)
+                    .position(x: 5, y: proxy.size.height / 2)
+
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .stroke(lineColor.opacity(0.72), lineWidth: 1)
+                    .frame(width: 30, height: 38)
+                    .position(x: proxy.size.width - 5, y: proxy.size.height / 2)
+
+                LinearGradient(
+                    colors: [Color.white.opacity(0.07), .clear],
                     startPoint: .top,
                     endPoint: .center
                 )

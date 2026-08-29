@@ -412,12 +412,25 @@ struct PreferencesView: View {
                                 .font(.subheadline)
                                 .fontWeight(.semibold)
 
-                            Picker("Environment", selection: apiEnvironmentBinding) {
-                                ForEach(APIEnvironment.allCases) { environment in
-                                    Text(environment.title).tag(environment)
-                                }
-                            }
-                            .pickerStyle(.segmented)
+                            FootballPitchSegmentedControl(
+                                selection: apiEnvironmentBinding,
+                                options: [
+                                    FootballPitchSegmentOption(
+                                        value: APIEnvironment.production,
+                                        title: "Production",
+                                        subtitle: "Live service",
+                                        systemImage: "server.rack"
+                                    ),
+                                    FootballPitchSegmentOption(
+                                        value: APIEnvironment.development,
+                                        title: "Development",
+                                        subtitle: "Development service",
+                                        systemImage: "hammer.fill"
+                                    ),
+                                ],
+                                accessibilityLabel: "API environment",
+                                minimumHeight: 68
+                            )
 
                             Text("Base URL: \(preferences.apiBaseURL)")
                                 .font(.footnote)

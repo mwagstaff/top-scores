@@ -29,6 +29,8 @@ final class FantasyViewModel: ObservableObject {
     @Published private(set) var previousTeamData: FantasySquadDisplayData?
     @Published private(set) var rivalSquads: [FantasyRivalSquad] = []
     @Published private(set) var trackedLeagueStandings: [FantasyTrackedLeagueStanding] = []
+    @Published private(set) var leagueWildcardStatusByEntryID: [Int: Bool] = [:]
+    @Published private(set) var leagueInPlayStatusByEntryID: [Int: Bool] = [:]
     @Published private(set) var myProfile: FantasyEntryProfile?
     @Published private(set) var lastUpdated: Date?
     // Whether the Premier League season is currently active, per the server's daily
@@ -77,6 +79,8 @@ final class FantasyViewModel: ObservableObject {
     private var previousSquadSnapshot: FantasySquadSnapshot?
     private var currentSquadBootstrap: FantasyBootstrapLookup?
     private var currentSquadSeasonFixtures: [FantasyFixture] = []
+    private var leagueEntryStatusGameweekID: Int?
+    private var leagueSelectedElementIDsByEntryID: [Int: Set<Int>] = [:]
     private var historicalMatchRecordsByKey: [String: FantasyMatchHistoryRecord] = [:]
     private var preparedHistoricalMatchContexts: [String: FantasyMatchFixtureContext] = [:]
     private var preparedHistoricalRecordDates: [String: Date] = [:]
@@ -185,6 +189,8 @@ final class FantasyViewModel: ObservableObject {
         previousTeamData = nil
         rivalSquads = []
         trackedLeagueStandings = []
+        leagueWildcardStatusByEntryID = [:]
+        leagueInPlayStatusByEntryID = [:]
         myProfile = nil
         lastUpdated = nil
         requiresAuthentication = false
@@ -204,6 +210,8 @@ final class FantasyViewModel: ObservableObject {
         previousSquadSnapshot = nil
         currentSquadBootstrap = nil
         currentSquadSeasonFixtures = []
+        leagueEntryStatusGameweekID = nil
+        leagueSelectedElementIDsByEntryID = [:]
         historicalMatchRecordsByKey = [:]
         preparedHistoricalMatchContexts = [:]
         preparedHistoricalRecordDates = [:]
@@ -267,9 +275,159 @@ final class FantasyViewModel: ObservableObject {
         data?.detailedExpectedPointsThisGameweek
     }
 
+    var hasLiveCurrentGameweekFixtures: Bool {
+        currentSquadSnapshot?.fixtures.contains { fixture in
+            fixture.started == true
+                && fixture.finished != true
+                && fixture.finishedProvisional != true
+        } == true
+    }
+
+    var hasStartedCurrentGameweekFixtures: Bool {
+        currentSquadSnapshot?.fixtures.contains { fixture in
+            fixture.started == true
+                || fixture.finished == true
+                || fixture.finishedProvisional == true
+        } == true
+    }
+
+    var leagueEntryStatusRefreshKey: String {
+        let gameweekID = currentSquadSnapshot?.gameweek.id
+            ?? previousSquadSnapshot?.gameweek.id
+            ?? 0
+        let liveTeams = currentLiveFixtureTeamIDs
+            .sorted()
+            .map(String.init)
+            .joined(separator: ",")
+        return "\(gameweekID)|\(liveTeams)"
+    }
+
+    private var currentLiveFixtureTeamIDs: Set<Int> {
+        Set(currentSquadSnapshot?.fixtures.flatMap { fixture -> [Int] in
+            guard fixture.started == true,
+                  fixture.finished != true,
+                  fixture.finishedProvisional != true else {
+                return []
+            }
+            return [fixture.teamH, fixture.teamA]
+        } ?? [])
+    }
+
+    func populateLeagueEntryStatuses(
+        for standings: [FantasyClassicLeagueStandingEntry]
+    ) async {
+        let bootstrap = currentSquadBootstrap ?? cachedBootstrapLookup
+        let events = bootstrap?.events ?? []
+        let gameweekID = FantasyTeamGameweekResolver.latestPublicTeamGameweek(from: events)?.id
+            ?? currentSquadSnapshot?.gameweek.id
+            ?? previousSquadSnapshot?.gameweek.id
+        guard let gameweekID else { return }
+
+        if leagueEntryStatusGameweekID != gameweekID {
+            leagueEntryStatusGameweekID = gameweekID
+            leagueWildcardStatusByEntryID = [:]
+            leagueInPlayStatusByEntryID = [:]
+            leagueSelectedElementIDsByEntryID = [:]
+        }
+
+        if let authenticatedEntryID {
+            let ownSquad = data?.gameweekID == gameweekID ? data : previousTeamData
+            if let ownSquad, ownSquad.gameweekID == gameweekID {
+                leagueWildcardStatusByEntryID[authenticatedEntryID] = ownSquad.hasWildcardActive
+                leagueSelectedElementIDsByEntryID[authenticatedEntryID] = Set(
+                    ownSquad.allPlayers.map(\.elementID)
+                )
+            }
+        }
+        for rival in rivalSquads where rival.squad.gameweekID == gameweekID {
+            leagueWildcardStatusByEntryID[rival.entryID] = rival.squad.hasWildcardActive
+            leagueSelectedElementIDsByEntryID[rival.entryID] = Set(
+                rival.squad.allPlayers.map(\.elementID)
+            )
+        }
+
+        let unresolvedEntryIDs = standings
+            .map(\.entry)
+            .filter {
+                leagueWildcardStatusByEntryID[$0] == nil
+                    || leagueSelectedElementIDsByEntryID[$0] == nil
+            }
+
+        if !unresolvedEntryIDs.isEmpty {
+            let publicClient = fantasyPublicClient
+            await withTaskGroup(of: (Int, Bool?, Set<Int>?).self) { group in
+                let maximumConcurrentRequests = 6
+                let initialRequestCount = min(maximumConcurrentRequests, unresolvedEntryIDs.count)
+                for entryID in unresolvedEntryIDs.prefix(initialRequestCount) {
+                    group.addTask {
+                        let picks = try? await publicClient.fetchPicks(
+                            entryID: entryID,
+                            eventID: gameweekID
+                        )
+                        return (
+                            entryID,
+                            picks?.activeChips.contains(where: \.isWildcard),
+                            picks.map { Set($0.picks.map(\.element)) }
+                        )
+                    }
+                }
+
+                var nextEntryIndex = initialRequestCount
+                while let (entryID, hasWildcard, selectedElementIDs) = await group.next() {
+                    guard !Task.isCancelled else {
+                        group.cancelAll()
+                        return
+                    }
+                    if let hasWildcard {
+                        leagueWildcardStatusByEntryID[entryID] = hasWildcard
+                    }
+                    if let selectedElementIDs {
+                        leagueSelectedElementIDsByEntryID[entryID] = selectedElementIDs
+                    }
+                    if nextEntryIndex < unresolvedEntryIDs.count {
+                        let nextEntryID = unresolvedEntryIDs[nextEntryIndex]
+                        nextEntryIndex += 1
+                        group.addTask {
+                            let picks = try? await publicClient.fetchPicks(
+                                entryID: nextEntryID,
+                                eventID: gameweekID
+                            )
+                            return (
+                                nextEntryID,
+                                picks?.activeChips.contains(where: \.isWildcard),
+                                picks.map { Set($0.picks.map(\.element)) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        let teamIDByElementID = Dictionary(
+            uniqueKeysWithValues: (bootstrap?.elements ?? []).map { ($0.id, $0.team) }
+        )
+        let liveTeamIDs = currentLiveFixtureTeamIDs
+        for standing in standings {
+            guard let selectedElementIDs = leagueSelectedElementIDsByEntryID[standing.entry] else {
+                leagueInPlayStatusByEntryID[standing.entry] = false
+                continue
+            }
+            leagueInPlayStatusByEntryID[standing.entry] = FantasyEntryLiveStatusResolver.hasInPlaySelection(
+                selectedElementIDs: selectedElementIDs,
+                teamIDByElementID: teamIDByElementID,
+                liveTeamIDs: liveTeamIDs
+            )
+        }
+    }
+
     var automaticScoreRefreshMinimumInterval: TimeInterval {
         guard let data, let snapshot = currentSquadSnapshot else { return 15 * 60 }
-        if data.hasActiveFixtures { return 30 }
+        let hasAnyLiveFixture = snapshot.fixtures.contains { fixture in
+            fixture.started == true
+                && fixture.finished != true
+                && fixture.finishedProvisional != true
+        }
+        if data.hasActiveFixtures || (!rivalSquads.isEmpty && hasAnyLiveFixture) { return 30 }
         if data.scorePhase == .provisional {
             let hasUpcomingRelevantFixture = snapshot.fixtures.contains { fixture in
                 guard fixture.started != true,
@@ -373,6 +531,17 @@ final class FantasyViewModel: ObservableObject {
             cachedBootstrapFetchedAt = Date()
             cachedSeasonFixtures = mergedSeasonFixtures
             cachedSeasonFixturesFetchedAt = Date()
+            if refreshedGameweek.isCurrent == true,
+               refreshedGameweek.dataChecked != true,
+               !rivalSquads.isEmpty {
+                await refreshRivalScores(
+                    gameweek: refreshedGameweek,
+                    liveResponse: refreshedLive,
+                    fixtures: refreshedFixtures,
+                    seasonFixtures: mergedSeasonFixtures,
+                    bootstrapLookup: refreshedBootstrap
+                )
+            }
             data = refreshedData
             lastUpdated = Date()
             await persistHistoricalSnapshot(
@@ -959,18 +1128,23 @@ final class FantasyViewModel: ObservableObject {
                 rivalManagers: rivalManagers,
                 excludingEntryID: activeEntryID
             )
-            if normalizedRivals.isEmpty || previousSnapshot == nil {
+            let shouldUseCurrentRivalStandings = currentSnapshot.gameweek.isCurrent == true
+                && currentSnapshot.gameweek.dataChecked != true
+            let rivalStandingsSnapshot = shouldUseCurrentRivalStandings
+                ? currentSnapshot
+                : previousSnapshot
+            if normalizedRivals.isEmpty || rivalStandingsSnapshot == nil {
                 rivalSquads = []
-            } else if let previousSnapshot {
+            } else if let rivalStandingsSnapshot {
                 let refreshToken = UUID()
                 rivalRefreshToken = refreshToken
                 rivalRefreshTask = Task(priority: .utility) { [weak self] in
                     guard let self else { return }
                     let refreshedRivals = await self.fetchRivalSquads(
                         rivals: normalizedRivals,
-                        gameweek: previousSnapshot.gameweek,
-                        liveResponse: previousSnapshot.liveResponse,
-                        fixtures: previousSnapshot.fixtures,
+                        gameweek: rivalStandingsSnapshot.gameweek,
+                        liveResponse: rivalStandingsSnapshot.liveResponse,
+                        fixtures: rivalStandingsSnapshot.fixtures,
                         seasonFixtures: mergedSeasonFixtures,
                         bootstrapLookup: bootstrapLookup
                     )
@@ -1535,6 +1709,88 @@ final class FantasyViewModel: ObservableObject {
             }
             return lhs.entryID < rhs.entryID
         }
+    }
+
+    private func refreshRivalScores(
+        gameweek: FantasyGameweek,
+        liveResponse: FantasyEventLiveResponse,
+        fixtures: [FantasyFixture],
+        seasonFixtures: [FantasyFixture],
+        bootstrapLookup: FantasyBootstrapLookup
+    ) async {
+        let existingRivals = rivalSquads
+        let publicClient = fantasyPublicClient
+        let picksByEntryID = await withTaskGroup(
+            of: (Int, FantasyPicksResponse?).self,
+            returning: [Int: FantasyPicksResponse].self
+        ) { group in
+            let maximumConcurrentRequests = 6
+            let initialRequestCount = min(maximumConcurrentRequests, existingRivals.count)
+            for rival in existingRivals.prefix(initialRequestCount) {
+                group.addTask {
+                    let picks = try? await publicClient.fetchPicks(
+                        entryID: rival.entryID,
+                        eventID: gameweek.id
+                    )
+                    return (rival.entryID, picks)
+                }
+            }
+
+            var results: [Int: FantasyPicksResponse] = [:]
+            var nextRivalIndex = initialRequestCount
+            while let (entryID, picks) = await group.next() {
+                if let picks {
+                    results[entryID] = picks
+                }
+                if nextRivalIndex < existingRivals.count {
+                    let rival = existingRivals[nextRivalIndex]
+                    nextRivalIndex += 1
+                    group.addTask {
+                        let picks = try? await publicClient.fetchPicks(
+                            entryID: rival.entryID,
+                            eventID: gameweek.id
+                        )
+                        return (rival.entryID, picks)
+                    }
+                }
+            }
+            return results
+        }
+        if Task.isCancelled { return }
+
+        var refreshedRivals: [FantasyRivalSquad] = []
+        refreshedRivals.reserveCapacity(existingRivals.count)
+
+        for rival in existingRivals {
+            if Task.isCancelled { return }
+            if let picks = picksByEntryID[rival.entryID] {
+                let squad = await buildSquadDisplayData(
+                    gameweek: gameweek,
+                    picksResponse: picks,
+                    liveResponse: liveResponse,
+                    fixtures: fixtures,
+                    seasonFixtures: seasonFixtures,
+                    bootstrap: bootstrapLookup
+                )
+                refreshedRivals.append(
+                    FantasyRivalSquad(
+                        entryID: rival.entryID,
+                        teamName: rival.teamName,
+                        managerName: rival.managerName,
+                        clubBadgeSrc: rival.clubBadgeSrc,
+                        squad: squad,
+                        allGameweeksPoints: rival.allGameweeksPoints,
+                        projectedGameweekPoints: rival.projectedGameweekPoints,
+                        expectedPointsSection: rival.expectedPointsSection,
+                        isExpectedPointsLoading: rival.isExpectedPointsLoading
+                    )
+                )
+            } else {
+                refreshedRivals.append(rival)
+            }
+        }
+
+        rivalSquads = refreshedRivals
     }
 
     private func populateRivalExpectedPoints(

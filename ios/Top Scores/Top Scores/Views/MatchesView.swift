@@ -75,7 +75,7 @@ enum CompetitionAccentRole: Equatable, Sendable {
     var color: Color {
         switch self {
         case .premierLeague:
-            Color(red: 0.55, green: 0.38, blue: 0.94)
+            FootballSectionAccent.fantasy
         case .laLiga, .bundesliga:
             Color(red: 0.91, green: 0.20, blue: 0.28)
         case .serieA:

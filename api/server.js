@@ -26749,6 +26749,8 @@ app.post(`${API_PREFIX}/live-activity/activity-started`, async (req, res) => {
         lastMode,
         lastPayloadHash,
         lastScoreHash,
+        invalidatedActivityId: null,
+        invalidatedAt: null,
       },
       {
         isDevelopmentBuild:
@@ -26895,6 +26897,8 @@ app.post(`${API_PREFIX}/live-activity/activity-token`, async (req, res) => {
         currentActivityGeneratedAtEpochSeconds: normalizedActivityGeneratedAtEpochSeconds,
         pendingStartAt: null,
         pushToStartAttempts: 0,
+        invalidatedActivityId: null,
+        invalidatedAt: null,
       },
       {
         isDevelopmentBuild:
@@ -31937,14 +31941,29 @@ app.get(`${API_PREFIX}/monitor/status`, async (req, res) => {
 function liveActivityForegroundReconcileDecision({
   trigger = "",
   reportedActiveCount = null,
+  reportedActiveActivityIds = [],
+  invalidatedActivityId = null,
   hasFreshCurrentServerActivity = false,
   hasFreshPendingStart = false,
   hasRecentDispatch = false,
 } = {}) {
   const isForegroundClient = trigger === "app_foreground";
+  const normalizedInvalidatedActivityId = normalizeDeviceToken(invalidatedActivityId);
+  const normalizedReportedActivityIds = Array.isArray(reportedActiveActivityIds)
+    ? reportedActiveActivityIds.map((activityId) => normalizeDeviceToken(activityId)).filter(Boolean)
+    : [];
+  const requiresActivityRestart = Boolean(
+    isForegroundClient &&
+    reportedActiveCount > 0 &&
+    normalizedInvalidatedActivityId &&
+    normalizedReportedActivityIds.includes(normalizedInvalidatedActivityId)
+  );
+  const hasHealthyReportedLocalActivity =
+    isForegroundClient && reportedActiveCount > 0 && !requiresActivityRestart;
   const allowForegroundStartFromForegroundClient =
     isForegroundClient && reportedActiveCount === 0;
   const shouldSuppressForegroundStart =
+    hasHealthyReportedLocalActivity ||
     (!allowForegroundStartFromForegroundClient && hasFreshCurrentServerActivity) ||
     hasFreshPendingStart ||
     (!allowForegroundStartFromForegroundClient && hasRecentDispatch && hasFreshCurrentServerActivity);
@@ -31953,8 +31972,7 @@ function liveActivityForegroundReconcileDecision({
     isForegroundClient,
     shouldSuppressForegroundStart,
     shouldPrepareForegroundContent: isForegroundClient || !shouldSuppressForegroundStart,
-    requiresActivityRestart:
-      isForegroundClient && reportedActiveCount > 0 && !shouldSuppressForegroundStart,
+    requiresActivityRestart,
   };
 }
 
@@ -32013,6 +32031,11 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
     // can be shown.
     const reportedActiveCount = typeof _req.body?.activeActivityCount === "number"
       ? _req.body.activeActivityCount : null;
+    const reportedActiveActivityIds = Array.isArray(_req.body?.activeActivityIds)
+      ? _req.body.activeActivityIds
+          .map((activityId) => normalizeDeviceToken(activityId))
+          .filter(Boolean)
+      : [];
     if (reportedActiveCount === 0 && userDeviceToken) {
       try {
         const record = await getUserPreferences(userDeviceToken);
@@ -32031,15 +32054,10 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
         const currentActivityId = liveActivity.currentActivityId
           ? String(liveActivity.currentActivityId)
           : null;
-        const reportedActivityIds = Array.isArray(_req.body?.activeActivityIds)
-          ? _req.body.activeActivityIds
-              .map((activityId) => normalizeDeviceToken(activityId))
-              .filter(Boolean)
-          : [];
         const serverActivityMissingOnClient =
           hasCurrentServerActivity &&
           reportedActiveCount === 0 &&
-          (!currentActivityId || !reportedActivityIds.includes(currentActivityId));
+          (!currentActivityId || !reportedActiveActivityIds.includes(currentActivityId));
         if (pendingStartAt) {
           if (!pendingStartIsFresh && !hasRecentDispatch) {
             await updateUserLiveActivityState(userDeviceToken, { pendingStartAt: null });
@@ -32060,7 +32078,7 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
               device: userDeviceToken.slice(0, 12),
               previous_activity_id: currentActivityId,
               reported_active_count: reportedActiveCount,
-              reported_activity_ids: reportedActivityIds,
+              reported_activity_ids: reportedActiveActivityIds,
               pending_start_fresh: pendingStartIsFresh,
               recent_dispatch: hasRecentDispatch,
             })}`
@@ -32110,6 +32128,8 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
           const foregroundDecision = liveActivityForegroundReconcileDecision({
             trigger,
             reportedActiveCount,
+            reportedActiveActivityIds,
+            invalidatedActivityId: liveActivity.invalidatedActivityId,
             hasFreshCurrentServerActivity,
             hasFreshPendingStart,
             hasRecentDispatch,

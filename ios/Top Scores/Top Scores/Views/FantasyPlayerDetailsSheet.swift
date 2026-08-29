@@ -251,8 +251,16 @@ struct FantasyPlayerDetailsSheet: View {
                     .stroke(accent.opacity(0.62), lineWidth: 1)
             )
 
-            compactMetric(title: "Form", value: metricValue(details, title: "Form"), accent: .green)
-            compactMetric(title: "Pts / match", value: metricValue(details, title: "Pts / Match"), accent: .white)
+            compactMetric(
+                title: "Form",
+                value: metricValue(details, title: "Form"),
+                accent: FootballSectionAccent.action
+            )
+            compactMetric(
+                title: "Pts / match",
+                value: metricValue(details, title: "Pts / Match"),
+                accent: FootballSectionAccent.media
+            )
         }
     }
 
@@ -275,7 +283,11 @@ struct FantasyPlayerDetailsSheet: View {
                 .foregroundStyle(accent)
         }
         .frame(width: 86, height: 80)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .footballTintedSurface(
+            accentColor: accent,
+            cornerRadius: 18,
+            accentOpacity: 0.20
+        )
     }
 
     private var detailsTabBar: some View {
@@ -293,7 +305,7 @@ struct FantasyPlayerDetailsSheet: View {
                             .font(.caption2.weight(.semibold))
                             .lineLimit(1)
                     }
-                    .foregroundStyle(selectedTab == tab ? Color.green : Color.secondary)
+                    .foregroundStyle(selectedTab == tab ? FootballSectionAccent.action : Color.secondary)
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 11)
                     .background(
@@ -305,7 +317,11 @@ struct FantasyPlayerDetailsSheet: View {
             }
         }
         .padding(4)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+        .footballTintedSurface(
+            accentColor: FootballSectionAccent.action,
+            cornerRadius: 17,
+            accentOpacity: 0.14
+        )
     }
 
     @ViewBuilder
@@ -356,7 +372,10 @@ struct FantasyPlayerDetailsSheet: View {
     private func overviewTab(_ details: FantasyPlayerDetailsData) -> some View {
         VStack(alignment: .leading, spacing: 14) {
             HStack(alignment: .top, spacing: 10) {
-                sectionContainer(title: "This season") {
+                sectionContainer(
+                    title: "This season",
+                    accentColor: FootballSectionAccent.fantasy
+                ) {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 4), count: 3), spacing: 14) {
                         overviewMetric("Total points", metricValue(details, title: "Total Pts"))
                         overviewMetric("Clean sheets", "\(details.seasonTotals.cleanSheets)")
@@ -377,6 +396,7 @@ struct FantasyPlayerDetailsSheet: View {
 
     private func sectionContainer<Content: View>(
         title: String,
+        accentColor: Color = FootballSectionAccent.fantasy,
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -386,10 +406,10 @@ struct FantasyPlayerDetailsSheet: View {
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.white.opacity(0.055), lineWidth: 1)
+        .footballTintedSurface(
+            accentColor: accentColor,
+            cornerRadius: 18,
+            accentOpacity: 0.18
         )
     }
 
@@ -416,7 +436,7 @@ struct FantasyPlayerDetailsSheet: View {
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.white.opacity(0.11))
                     Capsule()
-                        .fill(Color.purple)
+                        .fill(FootballSectionAccent.fantasy)
                         .frame(width: proxy.size.width * min(max(details.ownershipPercent / 100, 0), 1))
                 }
             }
@@ -428,22 +448,25 @@ struct FantasyPlayerDetailsSheet: View {
             }
             Text(ownershipDescription(details.ownershipPercent))
                 .font(.caption2.weight(.semibold))
-                .foregroundStyle(Color.purple.opacity(0.95))
+                .foregroundStyle(FootballSectionAccent.fantasy.opacity(0.95))
                 .padding(.horizontal, 8)
                 .padding(.vertical, 5)
-                .background(Color.purple.opacity(0.13), in: Capsule())
+                .background(FootballSectionAccent.fantasy.opacity(0.13), in: Capsule())
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.white.opacity(0.055), lineWidth: 1)
+        .footballTintedSurface(
+            accentColor: FootballSectionAccent.fantasy,
+            cornerRadius: 18,
+            accentOpacity: 0.20
         )
     }
 
     private func recentMatchesSection(_ details: FantasyPlayerDetailsData) -> some View {
-        sectionContainer(title: "Recent matches") {
+        sectionContainer(
+            title: "Recent matches",
+            accentColor: FootballSectionAccent.action
+        ) {
             if hasPlayedMatches(details) {
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 10) {
@@ -468,10 +491,10 @@ struct FantasyPlayerDetailsSheet: View {
                             }
                             .padding(12)
                             .frame(width: 154, alignment: .leading)
-                            .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .stroke(pointsHeatmapColor(row.points).opacity(0.28), lineWidth: 1)
+                            .footballTintedSurface(
+                                accentColor: pointsHeatmapColor(row.points),
+                                cornerRadius: 14,
+                                accentOpacity: 0.18
                             )
                         }
                     }
@@ -515,13 +538,16 @@ struct FantasyPlayerDetailsSheet: View {
         let rows = Array(details.historyRows.reversed())
         let maximum = max(rows.map(\.points).max() ?? 1, 1)
 
-        return sectionContainer(title: "Points timeline") {
+        return sectionContainer(
+            title: "Points timeline",
+            accentColor: FootballSectionAccent.fantasy
+        ) {
             if hasPlayedMatches(details) {
                 HStack(alignment: .bottom, spacing: 8) {
                     ForEach(rows) { row in
                         VStack(spacing: 6) {
                             RoundedRectangle(cornerRadius: 4, style: .continuous)
-                                .fill(Color.purple)
+                                .fill(FootballSectionAccent.fantasy)
                                 .frame(height: max(5, 88 * CGFloat(row.points) / CGFloat(maximum)))
                             Text("\(row.gameweek)")
                                 .font(.caption2.monospacedDigit())
@@ -541,7 +567,10 @@ struct FantasyPlayerDetailsSheet: View {
         let minutes = max(details.seasonTotals.minutes, 1)
 
         return VStack(spacing: 14) {
-            sectionContainer(title: "Key stats") {
+            sectionContainer(
+                title: "Key stats",
+                accentColor: FootballSectionAccent.action
+            ) {
                 LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
                     premiumStat("Points / match", metricValue(details, title: "Pts / Match"), rank: nil)
                     premiumStat("Form", metricValue(details, title: "Form"), rank: nil)
@@ -552,7 +581,10 @@ struct FantasyPlayerDetailsSheet: View {
                 }
             }
 
-            sectionContainer(title: "Season breakdown") {
+            sectionContainer(
+                title: "Season breakdown",
+                accentColor: FootballSectionAccent.media
+            ) {
                 VStack(spacing: 12) {
                     statBreakdownRow("Minutes", value: details.seasonTotals.minutes, maximum: max(details.seasonTotals.minutes, 1))
                     statBreakdownRow("Clean sheets", value: details.seasonTotals.cleanSheets, maximum: max(10, details.seasonTotals.cleanSheets))
@@ -584,7 +616,11 @@ struct FantasyPlayerDetailsSheet: View {
             }
         }
         .frame(maxWidth: .infinity, minHeight: 82)
-        .background(Color.white.opacity(0.035), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .footballTintedSurface(
+            accentColor: FootballSectionAccent.action,
+            cornerRadius: 13,
+            accentOpacity: 0.12
+        )
     }
 
     private func statBreakdownRow(_ title: String, value: Int, maximum: Int) -> some View {
@@ -596,7 +632,7 @@ struct FantasyPlayerDetailsSheet: View {
                 ZStack(alignment: .leading) {
                     Capsule().fill(Color.white.opacity(0.09))
                     Capsule()
-                        .fill(Color.purple.opacity(0.86))
+                        .fill(FootballSectionAccent.fantasy.opacity(0.86))
                         .frame(width: proxy.size.width * CGFloat(value) / CGFloat(max(maximum, 1)))
                 }
             }
@@ -609,7 +645,10 @@ struct FantasyPlayerDetailsSheet: View {
 
     private func comparisonTab(_ details: FantasyPlayerDetailsData) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            sectionContainer(title: "Compare players") {
+            sectionContainer(
+                title: "Compare players",
+                accentColor: FootballSectionAccent.media
+            ) {
                 Text("Select up to three recommended replacements.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
@@ -646,7 +685,7 @@ struct FantasyPlayerDetailsSheet: View {
                         .padding(.vertical, 11)
                 }
                 .buttonStyle(.bordered)
-                .tint(.purple)
+                .tint(FootballSectionAccent.fantasy)
             }
 
             comparisonMetrics(details)
@@ -688,10 +727,10 @@ struct FantasyPlayerDetailsSheet: View {
         }
         .padding(10)
         .frame(width: 106)
-        .background(Color.green.opacity(0.06), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.green.opacity(0.30), lineWidth: 1)
+        .footballTintedSurface(
+            accentColor: FootballSectionAccent.action,
+            cornerRadius: 14,
+            accentOpacity: 0.18
         )
     }
 
@@ -699,7 +738,10 @@ struct FantasyPlayerDetailsSheet: View {
         let selectedDetails = comparisonRecommendations.compactMap { recommendationDetailsByElementID[$0.elementID] }
         let columns = [details] + selectedDetails
 
-        return sectionContainer(title: "Key stats") {
+        return sectionContainer(
+            title: "Key stats",
+            accentColor: FootballSectionAccent.fantasy
+        ) {
             if columns.count == 1 && !comparisonElementIDs.isEmpty {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
@@ -778,7 +820,10 @@ struct FantasyPlayerDetailsSheet: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(18)
-                    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .footballTintedSurface(
+                        accentColor: FootballSectionAccent.fantasy,
+                        cornerRadius: 18
+                    )
                 } else if let transferRecommendationsErrorMessage {
                     VStack(alignment: .leading, spacing: 12) {
                         Text(transferRecommendationsErrorMessage)
@@ -792,7 +837,10 @@ struct FantasyPlayerDetailsSheet: View {
                     }
                     .padding(18)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                    .footballTintedSurface(
+                        accentColor: FootballSectionAccent.venue,
+                        cornerRadius: 18
+                    )
                 } else if let transferRecommendations {
                     premiumRecommendationGroup(
                         title: "Similar value",
@@ -823,7 +871,7 @@ struct FantasyPlayerDetailsSheet: View {
                             .padding(.vertical, 14)
                     }
                     .buttonStyle(.borderedProminent)
-                    .tint(.purple)
+                    .tint(FootballSectionAccent.fantasy)
                 }
             }
             .padding(16)
@@ -889,7 +937,7 @@ struct FantasyPlayerDetailsSheet: View {
                     .lineLimit(1)
                 HStack(spacing: 8) {
                     Text("\(item.epNext.formatted(.number.precision(.fractionLength(1)))) xP")
-                        .foregroundStyle(Color.purple)
+                        .foregroundStyle(FootballSectionAccent.fantasy)
                     Text("Form \(item.form.formatted(.number.precision(.fractionLength(1))))")
                     if let ownership = item.selectedByPercent {
                         Text("\(ownership.formatted(.number.precision(.fractionLength(1))))%")
@@ -908,10 +956,15 @@ struct FantasyPlayerDetailsSheet: View {
                 } label: {
                     Image(systemName: isSelected ? "checkmark" : "plus")
                         .font(.caption.weight(.bold))
-                        .foregroundStyle(isSelected ? Color.white : Color.purple)
+                        .foregroundStyle(isSelected ? Color.white : FootballSectionAccent.fantasy)
                         .frame(width: 30, height: 30)
-                        .background(isSelected ? Color.purple : Color.purple.opacity(0.12), in: Circle())
-                        .overlay(Circle().stroke(Color.purple.opacity(0.72), lineWidth: 1))
+                        .background(
+                            isSelected
+                                ? FootballSectionAccent.fantasy
+                                : FootballSectionAccent.fantasy.opacity(0.12),
+                            in: Circle()
+                        )
+                        .overlay(Circle().stroke(FootballSectionAccent.fantasy.opacity(0.72), lineWidth: 1))
                 }
                 .buttonStyle(.plain)
                 .disabled(!isSelected && comparisonElementIDs.count >= 3)
@@ -1016,15 +1069,10 @@ struct FantasyPlayerDetailsSheet: View {
             Spacer(minLength: 0)
         }
         .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [Color.cyan.opacity(0.72), Color.purple.opacity(0.72)],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
+        .footballTintedSurface(
+            accentColor: FootballSectionAccent.fantasy,
+            cornerRadius: 14,
+            accentOpacity: 0.22
         )
     }
 
@@ -1047,9 +1095,10 @@ struct FantasyPlayerDetailsSheet: View {
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
+        .footballTintedSurface(
+            accentColor: FootballSectionAccent.venue,
+            cornerRadius: 14,
+            accentOpacity: 0.18
         )
     }
 
@@ -1076,17 +1125,19 @@ struct FantasyPlayerDetailsSheet: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 8)
                     .padding(.horizontal, 4)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(Color(.tertiarySystemGroupedBackground))
+                    .footballTintedSurface(
+                        accentColor: FootballSectionAccent.action,
+                        cornerRadius: 10,
+                        accentOpacity: 0.10
                     )
                 }
             }
         }
         .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
+        .footballTintedSurface(
+            accentColor: FootballSectionAccent.action,
+            cornerRadius: 14,
+            accentOpacity: 0.18
         )
     }
 
@@ -1108,9 +1159,10 @@ struct FantasyPlayerDetailsSheet: View {
             }
         }
         .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
+        .footballTintedSurface(
+            accentColor: FootballSectionAccent.fantasy,
+            cornerRadius: 14,
+            accentOpacity: 0.18
         )
     }
 
@@ -1155,9 +1207,10 @@ struct FantasyPlayerDetailsSheet: View {
         }
         .padding(.vertical, 8)
         .padding(.horizontal, 10)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(.tertiarySystemGroupedBackground))
+        .footballTintedSurface(
+            accentColor: isNegative ? Color.red : FootballSectionAccent.action,
+            cornerRadius: 10,
+            accentOpacity: 0.14
         )
     }
 
@@ -1232,9 +1285,11 @@ struct FantasyPlayerDetailsSheet: View {
             }
         }
         .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
+        .footballTintedSurface(
+            accentColor: FootballSectionAccent.media,
+            cornerRadius: 14,
+            showsPitchMarkings: true,
+            accentOpacity: 0.20
         )
     }
 
@@ -1256,16 +1311,17 @@ struct FantasyPlayerDetailsSheet: View {
                 }
                 .background(
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Color(.tertiarySystemGroupedBackground))
+                        .fill(FootballSectionAccent.venue.opacity(0.055))
                 )
             } else {
                 matchHistoryEmptyState
             }
         }
         .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
+        .footballTintedSurface(
+            accentColor: FootballSectionAccent.venue,
+            cornerRadius: 14,
+            accentOpacity: 0.20
         )
     }
 
@@ -1283,7 +1339,7 @@ struct FantasyPlayerDetailsSheet: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(Color(.secondarySystemGroupedBackground))
+        .background(FootballSectionAccent.venue.opacity(0.09))
     }
 
     private func historyRow(_ row: FantasyPlayerDetailsData.HistoryRow) -> some View {
@@ -1472,9 +1528,10 @@ struct FantasyPlayerDetailsSheet: View {
             }
         }
         .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
+        .footballTintedSurface(
+            accentColor: FootballSectionAccent.fantasy,
+            cornerRadius: 14,
+            accentOpacity: 0.18
         )
     }
 
@@ -1523,9 +1580,10 @@ struct FantasyPlayerDetailsSheet: View {
             }
         }
         .padding(10)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(.tertiarySystemGroupedBackground))
+        .footballTintedSurface(
+            accentColor: FootballSectionAccent.media,
+            cornerRadius: 10,
+            accentOpacity: 0.12
         )
     }
 

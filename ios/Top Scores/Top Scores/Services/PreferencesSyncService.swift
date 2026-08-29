@@ -226,6 +226,11 @@ enum FantasySyncStore {
         }
         return try? JSONSerialization.jsonObject(with: data)
     }
+
+    nonisolated static var hasPersistedSquad: Bool {
+        guard let payload = jsonObject() as? [String: Any] else { return false }
+        return payload["squad"] is [String: Any]
+    }
 }
 
 struct PreferencesSyncDiagnostics: Sendable {

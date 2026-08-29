@@ -4353,6 +4353,85 @@ test("buildLiveActivityPresentationForUser uses delayed snapshot goal timeline w
   assert.equal(presentation.matches[0].away_score, 1);
 });
 
+test("buildLiveActivityPresentationForUser removes a VAR-disallowed goal from a delayed snapshot timeline", () => {
+  const nowMs = Date.now();
+  const kickoffMs = nowMs - 50 * 60 * 1000;
+  const kickoff = formatLocalDateTimeParts(kickoffMs);
+  const staleHomeGoal = {
+    player: "F. Wirtz",
+    id_player: "330",
+    goal_times: ["32'"],
+  };
+  const awayGoal = {
+    player: "D. Ndoye",
+    id_player: "551",
+    goal_times: ["24'"],
+  };
+
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUser(2),
+    [
+      {
+        matchId: "209551",
+        state: {
+          history: [
+            {
+              timestampMs: nowMs - 3 * 60 * 1000,
+              match: {
+                match_details_id: "209551",
+                home_score: 0,
+                away_score: 1,
+                score_status: "45+2",
+              },
+            },
+          ],
+        },
+        match: {
+          match_details_id: "209551",
+          date: kickoff.date,
+          time: kickoff.time,
+          league: "Premier League",
+          home_team: "Liverpool",
+          away_team: "Nottingham Forest",
+          home_score: 0,
+          away_score: 1,
+          score_status: "HT",
+          home_goal_scorers: [staleHomeGoal],
+          away_goal_scorers: [awayGoal],
+          home_var_events: [
+            {
+              player: "F. Wirtz",
+              id_player: "330",
+              minute: "32'",
+              detail: "VAR: Goal disallowed",
+            },
+          ],
+          away_var_events: [],
+          updated_at: new Date(nowMs).toISOString(),
+        },
+      },
+    ],
+    nowMs,
+    {
+      delayedSnapshotsByMatchId: {
+        "209551": {
+          home_score: 0,
+          away_score: 1,
+          score_status: "45+2",
+          home_goal_scorers: [staleHomeGoal],
+          away_goal_scorers: [awayGoal],
+        },
+      },
+    }
+  );
+
+  assert.equal(presentation.mode, "single_live");
+  assert.equal(presentation.matches.length, 1);
+  assert.equal(presentation.matches[0].score_status, "45+2");
+  assert.equal(presentation.matches[0].home_score, 0);
+  assert.equal(presentation.matches[0].away_score, 1);
+});
+
 test("buildLiveActivityPresentationForUser trusts the latest eligible delayed snapshot's own score as-is", () => {
   const nowMs = Date.now();
   const kickoffMs = nowMs - 95 * 60 * 1000;

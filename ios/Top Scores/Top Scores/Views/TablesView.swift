@@ -15,7 +15,10 @@ struct TablesView: View {
     @State private var scrollTargetRowID: String?
     @State private var highlightedRowID: String?
     @State private var showsStats = false
+    @State private var catalogCompetitionWeights: [String: Double] = [:]
     @ObservedObject private var navigationCoordinator = TablesNavigationCoordinator.shared
+
+    @ScaledMetric(relativeTo: .caption) private var competitionPickerHeight: CGFloat = 94
 
     // While the Tables screen is visible, refresh on a live cadence so
     // in-progress scores flow into the (server-recomputed) standings within
@@ -100,6 +103,9 @@ struct TablesView: View {
         }
         .onChange(of: leagues) { _, _ in
             consumePendingNavigationIfNeeded()
+        }
+        .task(id: preferences.apiBaseURL) {
+            await loadCompetitionMetadata(apiBaseURL: preferences.apiBaseURL)
         }
     }
 
@@ -186,7 +192,7 @@ struct TablesView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 
-    private static let competitionWeights: [String: Int] = [
+    private static let fallbackCompetitionWeights: [String: Double] = [
         "Premier League": 100,
         "UEFA Champions League": 90,
         "FIFA World Cup 2026": 85,
@@ -196,11 +202,13 @@ struct TablesView: View {
         "UEFA Super Cup": 68,
         "FA Cup": 65,
         "English League Cup": 60,
-        "Copa del Rey": 58,
+        "Copa del Rey": 49,
         "La Liga": 50,
         "Bundesliga": 48,
-        "Serie A": 48,
+        "Serie A": 45,
+        "Ligue 1": 44,
         "Championship": 40,
+        "EFL Cup": 60,
         "Scottish Premiership": 30,
         "Scottish Championship": 25,
         "Scottish League One": 20,
@@ -212,8 +220,11 @@ struct TablesView: View {
 
     private var sortedLeagues: [LeagueTable] {
         leagues.sorted {
-            let weightA = Self.competitionWeights[$0.leagueName] ?? 0
-            let weightB = Self.competitionWeights[$1.leagueName] ?? 0
+            if $0.hasLiveRows != $1.hasLiveRows {
+                return $0.hasLiveRows
+            }
+            let weightA = competitionWeight(for: $0)
+            let weightB = competitionWeight(for: $1)
             if weightA != weightB { return weightA > weightB }
             return $0.leagueName.localizedCaseInsensitiveCompare($1.leagueName) == .orderedAscending
         }
@@ -222,56 +233,31 @@ struct TablesView: View {
     private var competitionCarousel: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
-                LazyHStack(spacing: 8) {
+                LazyHStack(spacing: 4) {
                     ForEach(sortedLeagues) { league in
                         Button {
                             withAnimation(.snappy) {
                                 selectedLeagueID = league.leagueID
                             }
                         } label: {
-                            Text(league.leagueName)
-                                .font(.subheadline.weight(.semibold))
-                                .lineLimit(1)
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 9)
-                                .foregroundStyle(
-                                    selectedLeagueID == league.leagueID
-                                        ? Color.white
-                                        : Color.white.opacity(0.78)
-                                )
-                                .background(
-                                    selectedLeagueID == league.leagueID
-                                        ? Color.accentColor
-                                        : FootballVisualStyle.elevatedSurface.opacity(0.88),
-                                    in: Capsule()
-                                )
-                                .overlay {
-                                    Capsule()
-                                        .stroke(
-                                            selectedLeagueID == league.leagueID
-                                                ? Color.accentColor.opacity(0.95)
-                                                : FootballVisualStyle.border,
-                                            lineWidth: 1
-                                        )
-                                }
+                            CompetitionPickerItem(
+                                league: league,
+                                isSelected: selectedLeagueID == league.leagueID
+                            )
                         }
                         .buttonStyle(.plain)
                         .id(league.leagueID)
+                        .accessibilityLabel(league.leagueName)
+                        .accessibilityValue(competitionAccessibilityValue(for: league))
                         .accessibilityAddTraits(
                             selectedLeagueID == league.leagueID ? .isSelected : []
                         )
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.vertical, 10)
+                .padding(.vertical, 8)
             }
-            .frame(height: 56)
-            .background(FootballVisualStyle.elevatedSurface.opacity(0.66))
-            .overlay(alignment: .bottom) {
-                Rectangle()
-                    .fill(FootballVisualStyle.divider)
-                    .frame(height: 1)
-            }
+            .frame(height: min(competitionPickerHeight, 120))
             .onAppear {
                 proxy.scrollTo(selectedLeagueID, anchor: .center)
             }
@@ -426,6 +412,43 @@ struct TablesView: View {
         }
     }
 
+    private func loadCompetitionMetadata(apiBaseURL: String) async {
+        guard let baseURL = URL(string: apiBaseURL) else { return }
+        guard let catalog = try? await APIClient(baseURL: baseURL).fetchCompetitionCatalog() else {
+            return
+        }
+        guard !Task.isCancelled else { return }
+
+        CompetitionBadgeCache.shared.warmIfNeeded(entries: catalog.competitions)
+        var weights: [String: Double] = [:]
+        for competition in catalog.competitions {
+            weights[Self.normalizedCompetitionKey(competition.stableID)] = competition.weight
+            for name in competition.allNames {
+                weights[Self.normalizedCompetitionKey(name)] = competition.weight
+            }
+        }
+        catalogCompetitionWeights = weights
+    }
+
+    private func competitionWeight(for league: LeagueTable) -> Double {
+        catalogCompetitionWeights[Self.normalizedCompetitionKey(league.leagueID)]
+            ?? catalogCompetitionWeights[Self.normalizedCompetitionKey(league.leagueName)]
+            ?? Self.fallbackCompetitionWeights[league.leagueName]
+            ?? 0
+    }
+
+    private func competitionAccessibilityValue(for league: LeagueTable) -> String {
+        let selection = selectedLeagueID == league.leagueID ? "Selected" : "Not selected"
+        return league.hasLiveRows ? "\(selection), matches currently in play" : selection
+    }
+
+    private static func normalizedCompetitionKey(_ value: String) -> String {
+        value
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased()
+            .filter { $0.isLetter || $0.isNumber }
+    }
+
     private func applyCachedTables(for apiBaseURL: String, clearWhenMissing: Bool) {
         guard let cachedResponse = LeagueTablesCache.load(for: apiBaseURL)?.response else {
             guard clearWhenMissing else { return }
@@ -459,13 +482,267 @@ struct TablesView: View {
         }
         return leagues
             .sorted {
-                let weightA = competitionWeights[$0.leagueName] ?? 0
-                let weightB = competitionWeights[$1.leagueName] ?? 0
+                if $0.hasLiveRows != $1.hasLiveRows {
+                    return $0.hasLiveRows
+                }
+                let weightA = fallbackCompetitionWeights[$0.leagueName] ?? 0
+                let weightB = fallbackCompetitionWeights[$1.leagueName] ?? 0
                 if weightA != weightB { return weightA > weightB }
                 return $0.leagueName.localizedCaseInsensitiveCompare($1.leagueName) == .orderedAscending
             }
             .first?
             .leagueID ?? "premier-league"
+    }
+}
+
+private struct CompetitionPickerItem: View {
+    let league: LeagueTable
+    let isSelected: Bool
+
+    @ScaledMetric(relativeTo: .caption) private var iconSize: CGFloat = 30
+    @ScaledMetric(relativeTo: .caption) private var itemWidth: CGFloat = 91.2
+
+    var body: some View {
+        VStack(spacing: 6) {
+            VStack(spacing: 5) {
+                ZStack(alignment: .topTrailing) {
+                    TableCompetitionBadge(
+                        competitionID: league.leagueID,
+                        competitionName: league.leagueName,
+                        size: min(iconSize, 38)
+                    )
+
+                    if league.hasLiveRows {
+                        LiveCompetitionDot()
+                            .offset(x: 5, y: -4)
+                    }
+                }
+
+                Text(shortLabel)
+                    .font(.caption2.weight(isSelected ? .semibold : .medium))
+                    .foregroundStyle(isSelected ? Color.white : Color.white.opacity(0.78))
+                    .lineLimit(shortLabel.contains(" ") ? 2 : 1)
+                    .minimumScaleFactor(0.68)
+                    .allowsTightening(true)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity, minHeight: 24, alignment: .top)
+            }
+            .padding(.horizontal, 6)
+            .padding(.top, 7)
+            .padding(.bottom, 5)
+            .frame(width: min(itemWidth, 115.2), height: 66)
+            .background(FootballVisualStyle.elevatedSurface.opacity(isSelected ? 0.96 : 0.78))
+            .clipShape(RoundedRectangle(cornerRadius: 17, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 17, style: .continuous)
+                    .stroke(
+                        isSelected ? Color.accentColor.opacity(0.78) : FootballVisualStyle.border,
+                        lineWidth: isSelected ? 1.25 : 1
+                    )
+            }
+
+            Capsule()
+                .fill(isSelected ? Color.accentColor : Color.clear)
+                .frame(width: 40, height: 3)
+                .shadow(color: isSelected ? Color.accentColor.opacity(0.45) : .clear, radius: 3)
+        }
+        .frame(width: min(itemWidth, 115.2))
+        .contentShape(Rectangle())
+    }
+
+    private var shortLabel: String {
+        let name = league.leagueName
+        if name.localizedCaseInsensitiveContains("Champions League") { return "UCL" }
+        if name.localizedCaseInsensitiveContains("Europa League") { return "Europa" }
+        if name.localizedCaseInsensitiveContains("Conference League") { return "Conference" }
+        if name.localizedCaseInsensitiveContains("World Cup 2026") { return "World Cup" }
+        if name.localizedCaseInsensitiveContains("World Cup Qualifying") { return "World Cup Qual." }
+        if name.localizedCaseInsensitiveContains("International Friendly") { return "Friendlies" }
+        if name.localizedCaseInsensitiveContains("English League Cup") { return "EFL Cup" }
+        return name
+    }
+}
+
+private struct TableCompetitionBadge: View {
+    let competitionID: String
+    let competitionName: String
+    let size: CGFloat
+
+    @State private var badgeCacheVersion = 0
+
+    private var accentColor: Color {
+        CompetitionAccentRole.resolve(
+            competitionID: competitionID,
+            competitionName: competitionName
+        ).color
+    }
+
+    var body: some View {
+        let _ = badgeCacheVersion
+        Group {
+            if let assetName = BundledCompetitionLogo.assetName(
+                competitionID: competitionID,
+                competitionName: competitionName
+            ) {
+                if assetName == "CompetitionLogo7" {
+                    Image(assetName)
+                        .resizable()
+                        .renderingMode(.template)
+                        .foregroundStyle(Color.white.opacity(0.94))
+                        .scaledToFit()
+                } else {
+                    Image(assetName)
+                        .resizable()
+                        .scaledToFit()
+                }
+            } else if let image = CompetitionBadgeCache.shared.image(
+                competitionID: competitionID,
+                competitionName: competitionName
+            ) {
+                Image(uiImage: image)
+                    .resizable()
+                    .interpolation(.high)
+                    .scaledToFit()
+            } else {
+                ZStack {
+                    Circle()
+                        .fill(accentColor.opacity(0.16))
+                    Image(systemName: fallbackSymbolName)
+                        .font(.system(size: size * 0.54, weight: .semibold))
+                        .foregroundStyle(accentColor)
+                }
+            }
+        }
+        .frame(width: size, height: size)
+        .onReceive(NotificationCenter.default.publisher(for: CompetitionBadgeCache.badgesUpdatedNotification)) { _ in
+            badgeCacheVersion &+= 1
+        }
+        .accessibilityHidden(true)
+    }
+
+    private var fallbackSymbolName: String {
+        let key = competitionName.lowercased()
+        if key.contains("world cup") || key.contains("nations league") || key.contains("friendly") {
+            return "globe.europe.africa.fill"
+        }
+        if key.contains("cup") {
+            return "trophy.fill"
+        }
+        if key.contains("champions league") {
+            return "star.circle.fill"
+        }
+        return "shield.fill"
+    }
+}
+
+private enum BundledCompetitionLogo {
+    private static let assetNamesByLeagueID: [String: String] = [
+        "1": "FantasyPremierLeagueLion",
+        "3": "CompetitionLogo3",
+        "4": "CompetitionLogo4",
+        "5": "CompetitionLogo5",
+        "6": "CompetitionLogo6",
+        "7": "CompetitionLogo7",
+        "8": "CompetitionLogo8",
+        "10": "CompetitionLogo10",
+        "12": "CompetitionLogo12",
+        "13": "CompetitionLogo13",
+        "27": "CompetitionLogo27",
+        "39": "CompetitionLogo39",
+        "40": "CompetitionLogo40",
+        "41": "CompetitionLogo41",
+        "42": "CompetitionLogo42",
+        "43": "CompetitionLogo43",
+        "44": "CompetitionLogo44",
+        "58": "CompetitionLogo27",
+        "59": "CompetitionLogo27",
+        "62": "CompetitionLogo27",
+        "63": "CompetitionLogo27",
+        "64": "CompetitionLogo64",
+        "83": "CompetitionLogo83",
+        "86": "CompetitionLogo86",
+        "87": "CompetitionLogo87",
+        "90": "CompetitionLogo90"
+    ]
+
+    private static let assetNamesByCompetitionName: [String: String] = [
+        "bundesliga": "CompetitionLogo5",
+        "championship": "CompetitionLogo12",
+        "copa del rey": "CompetitionLogo41",
+        "coppa italia": "CompetitionLogo42",
+        "coupe de france": "CompetitionLogo44",
+        "dfb pokal": "CompetitionLogo43",
+        "dutch eredivisie": "CompetitionLogo10",
+        "efl cup": "CompetitionLogo40",
+        "fa cup": "CompetitionLogo39",
+        "fifa world cup 2026": "CompetitionLogo27",
+        "la liga": "CompetitionLogo3",
+        "league one": "CompetitionLogo86",
+        "league two": "CompetitionLogo87",
+        "ligue 1": "CompetitionLogo6",
+        "premier league": "FantasyPremierLeagueLion",
+        "scottish premiership": "CompetitionLogo13",
+        "serie a": "CompetitionLogo4",
+        "uefa champions league": "CompetitionLogo7",
+        "uefa conference league": "CompetitionLogo83",
+        "uefa europa league": "CompetitionLogo8",
+        "uefa nations league": "CompetitionLogo64",
+        "uefa super cup": "CompetitionLogo90",
+        "world cup qualifying concacaf": "CompetitionLogo27",
+        "world cup qualifying conmebol": "CompetitionLogo27",
+        "world cup qualifying ofc": "CompetitionLogo27",
+        "world cup qualifying uefa": "CompetitionLogo27"
+    ]
+
+    static func assetName(competitionID: String, competitionName: String) -> String? {
+        assetNamesByLeagueID[competitionID]
+            ?? assetNamesByCompetitionName[normalizedName(competitionName)]
+    }
+
+    private static func normalizedName(_ value: String) -> String {
+        value
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased()
+            .replacingOccurrences(of: "-", with: " ")
+            .split(whereSeparator: \Character.isWhitespace)
+            .joined(separator: " ")
+    }
+}
+
+private struct LiveCompetitionDot: View {
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+    @State private var isPulsing = false
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .fill(Color.liveMatch.opacity(accessibilityReduceMotion ? 0 : 0.34))
+                .frame(width: 14, height: 14)
+                .scaleEffect(isPulsing ? 1.45 : 0.75)
+                .opacity(isPulsing ? 0 : 1)
+
+            Circle()
+                .fill(Color.liveMatch)
+                .frame(width: 7, height: 7)
+                .overlay {
+                    Circle()
+                        .stroke(Color.black.opacity(0.48), lineWidth: 1)
+                }
+        }
+        .frame(width: 14, height: 14)
+        .animation(
+            accessibilityReduceMotion
+                ? nil
+                : .easeOut(duration: 1.1).repeatForever(autoreverses: false),
+            value: isPulsing
+        )
+        .onAppear {
+            isPulsing = !accessibilityReduceMotion
+        }
+        .onChange(of: accessibilityReduceMotion) { _, reduceMotion in
+            isPulsing = !reduceMotion
+        }
+        .accessibilityHidden(true)
     }
 }
 
@@ -484,7 +761,7 @@ private struct LeagueTableCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if league.hasLiveRows {
-                liveProvisionalNote
+                LiveInPlayStandingsNote()
             }
             if league.hasRows {
                 VStack(spacing: 0) {
@@ -561,20 +838,6 @@ private struct LeagueTableCard: View {
             return nil
         }
         return stage
-    }
-
-    private var liveProvisionalNote: some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(Color.liveMatch)
-                .frame(width: 7, height: 7)
-            Text("Positions update live from in-progress scores and are provisional.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 4)
     }
 
     private var headingRow: some View {
@@ -667,7 +930,7 @@ private struct LeagueTableCard: View {
         }
         .buttonStyle(.plain)
         .background(HighlightedTableRowBackground(isActive: highlightedRowID == row.id))
-        .background(LiveTableRowBackground(isActive: row.live))
+        .background(LiveStandingsRowBackground(isActive: row.live))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(row.team)
         .accessibilityValue(accessibilityStats(for: row))
@@ -957,25 +1220,6 @@ private struct ZoneDashedLine: View {
         .frame(maxWidth: .infinity)
         .frame(height: 1)
         .accessibilityHidden(true)
-    }
-}
-
-// Pulsing green highlight for a table row whose team is in an in-progress
-// match, mirroring the live treatment used for matches on the fixtures screen.
-private struct LiveTableRowBackground: View {
-    let isActive: Bool
-
-    @State private var pulsing = false
-
-    var body: some View {
-        Rectangle()
-            .fill(Color.liveMatch.opacity(isActive ? (pulsing ? 0.20 : 0.07) : 0))
-            .animation(
-                isActive ? .easeInOut(duration: 1.1).repeatForever(autoreverses: true) : .default,
-                value: pulsing
-            )
-            .onAppear { pulsing = isActive }
-            .onChange(of: isActive) { _, newValue in pulsing = newValue }
     }
 }
 

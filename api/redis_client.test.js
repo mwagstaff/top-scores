@@ -77,3 +77,16 @@ test("mergedLiveActivityState persists attempt counter with other live activity 
   assert.equal(merged.pendingStartAt, null);
   assert.equal(merged.pushToStartAttempts, 5);
 });
+
+test("normalizeLiveActivityStatePatch preserves explicit ActivityKit invalidation state", () => {
+  assert.deepEqual(
+    normalizeLiveActivityStatePatch({
+      invalidatedActivityId: "activity-1",
+      invalidatedAt: "2026-08-29T10:00:00.000Z",
+    }),
+    {
+      invalidatedActivityId: "activity-1",
+      invalidatedAt: "2026-08-29T10:00:00.000Z",
+    }
+  );
+});

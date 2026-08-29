@@ -11,6 +11,30 @@ import Testing
 
 struct Top_ScoresTests {
 
+    @Test func fantasyEntryInPlaySelection_matchesSelectedPlayerTeamToLiveFixture() {
+        let vanDijkElementID = 350
+        let salahElementID = 351
+        let liverpoolTeamID = 10
+        let nottinghamForestTeamID = 15
+
+        let hasLiveSelection = FantasyEntryLiveStatusResolver.hasInPlaySelection(
+            selectedElementIDs: [vanDijkElementID],
+            teamIDByElementID: [
+                vanDijkElementID: liverpoolTeamID,
+                salahElementID: liverpoolTeamID,
+            ],
+            liveTeamIDs: [liverpoolTeamID, nottinghamForestTeamID]
+        )
+        let hasLiveSelectionAfterFullTime = FantasyEntryLiveStatusResolver.hasInPlaySelection(
+            selectedElementIDs: [vanDijkElementID],
+            teamIDByElementID: [vanDijkElementID: liverpoolTeamID],
+            liveTeamIDs: []
+        )
+
+        #expect(hasLiveSelection)
+        #expect(!hasLiveSelectionAfterFullTime)
+    }
+
     @Test @MainActor func stadiumBackdrop_rotatesAtLaunchAndAfterOneHour() {
         let suiteName = #function
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -3778,6 +3802,81 @@ struct Top_ScoresTests {
         )
     }
 
+    @Test func fantasySquadBuilder_usesLivePointsOnceAnyGameweekFixtureStarts() {
+        let gameweek = FantasyGameweek(
+            id: 2,
+            name: "Gameweek 2",
+            isCurrent: true,
+            isNext: false,
+            finished: false,
+            dataChecked: false,
+            deadlineTime: "2026-08-28T17:30:00Z"
+        )
+        let bootstrap = FantasyBootstrapLookup(
+            updatedAt: nil,
+            elements: [
+                makeFantasyBootstrapElement(
+                    id: 101,
+                    team: 3,
+                    elementType: 3,
+                    webName: "Live Player"
+                )
+            ],
+            teams: [
+                FantasyBootstrapTeam(id: 1, name: "Arsenal", shortName: "ARS"),
+                FantasyBootstrapTeam(id: 2, name: "Everton", shortName: "EVE"),
+                FantasyBootstrapTeam(id: 3, name: "Liverpool", shortName: "LIV")
+            ],
+            elementTypes: [
+                FantasyBootstrapElementType(
+                    id: 3,
+                    singularName: "Midfielder",
+                    singularNameShort: "MID"
+                )
+            ],
+            events: [gameweek]
+        )
+        let picks = FantasyPicksResponse(
+            picks: [makeFantasyPick(element: 101, position: 1, elementType: 3)],
+            entryHistory: FantasyEntryHistory(
+                event: 2,
+                points: 0,
+                rank: nil,
+                overallRank: nil,
+                eventTransfersCost: nil,
+                pointsOnBench: nil
+            )
+        )
+        let fixtures = [
+            FantasyFixture(
+                id: 11,
+                event: 2,
+                teamH: 1,
+                teamA: 2,
+                kickoffTime: "2026-08-28T18:30:00Z",
+                started: true,
+                finished: false,
+                finishedProvisional: false
+            )
+        ]
+
+        let squad = FantasySquadBuilder.build(
+            gameweek: gameweek,
+            picksResponse: picks,
+            liveResponse: FantasyEventLiveResponse(
+                elements: [makeLiveElement(id: 101, points: 6)]
+            ),
+            fixtures: fixtures,
+            seasonFixtures: fixtures,
+            bootstrap: bootstrap
+        )
+
+        #expect(squad.isEstimatedScore)
+        #expect(squad.scorePhase == .provisional)
+        #expect(squad.totalPoints == 0)
+        #expect(squad.resolvedCurrentScore == 6)
+    }
+
     @Test func fantasySquadDisplayData_sumsOfficialExpectedPointsForStartersOnly() async throws {
         let squad = FantasySquadDisplayData(
             gameweekID: 1,
@@ -4017,10 +4116,17 @@ struct Top_ScoresTests {
         )
 
         #expect(squad.hasActiveChip)
+        #expect(!squad.hasWildcardActive)
         #expect(squad.resolvedCurrentScore == 52)
         #expect(squad.resolvedCurrentScoreDisplay == "52*")
         #expect(squad.detailedExpectedPointsThisGameweek == 52)
         #expect(squad.activeChipSummaryText == "Active chip: Free Hit")
+    }
+
+    @Test func fantasyChip_recognizesWildcardCodes() {
+        #expect(FantasyChip(code: "wildcard").isWildcard)
+        #expect(FantasyChip(code: "wildcard_2").isWildcard)
+        #expect(!FantasyChip(code: "freehit").isWildcard)
     }
 
     @Test func fantasyTeamGameweekResolver_usesNextEventForCurrentTeamBeforeSeasonStarts() async throws {

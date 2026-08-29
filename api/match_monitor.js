@@ -502,6 +502,37 @@ function selectBestGoalTimeline(primaryGoalScorers, fallbackGoalScorers) {
   return fallback;
 }
 
+function goalTimelineWithoutDisallowedVarGoals(goalScorers, varEvents) {
+  if (!Array.isArray(goalScorers)) return goalScorers;
+  const disallowedVarEvents = (Array.isArray(varEvents) ? varEvents : []).filter((event) => {
+    const detail = String(event && event.detail ? event.detail : "");
+    return /goal/i.test(detail) && /(disallow|overturn|not awarded|no goal)/i.test(detail);
+  });
+  if (disallowedVarEvents.length === 0) return goalScorers;
+
+  const goalTimeMatchesDisallowedEvent = (goalTime, scorer) => {
+    const goalMinute = parseMatchEventMinute(goalTime);
+    if (!Number.isFinite(goalMinute)) return false;
+    return disallowedVarEvents.some((event) => {
+      const eventMinute = parseMatchEventMinute(event && event.minute);
+      if (!Number.isFinite(eventMinute) || eventMinute !== goalMinute) return false;
+      const scorerId = String(scorer && scorer.id_player ? scorer.id_player : "").trim();
+      const eventPlayerId = String(event && event.id_player ? event.id_player : "").trim();
+      return !scorerId || !eventPlayerId || scorerId === eventPlayerId;
+    });
+  };
+
+  return goalScorers.map((scorer) => ({
+    ...scorer,
+    goal_times: Array.isArray(scorer && scorer.goal_times)
+      ? scorer.goal_times.filter((goalTime) => !goalTimeMatchesDisallowedEvent(goalTime, scorer))
+      : [],
+    own_goal_times: Array.isArray(scorer && scorer.own_goal_times)
+      ? scorer.own_goal_times.filter((goalTime) => !goalTimeMatchesDisallowedEvent(goalTime, scorer))
+      : [],
+  }));
+}
+
 function buildDelayedLiveState(currentMatch, delayedMatch, delayMinutes) {
   if (!currentMatch || typeof currentMatch !== "object") return null;
   const currentMinute = parseStatusMinute(currentMatch.score_status);
@@ -534,12 +565,24 @@ function buildDelayedLiveState(currentMatch, delayedMatch, delayMinutes) {
     return null;
   }
   const homeGoalTimeline = selectBestGoalTimeline(
-    currentMatch.home_goal_scorers,
-    delayedMatch && delayedMatch.home_goal_scorers
+    goalTimelineWithoutDisallowedVarGoals(
+      currentMatch.home_goal_scorers,
+      currentMatch.home_var_events
+    ),
+    goalTimelineWithoutDisallowedVarGoals(
+      delayedMatch && delayedMatch.home_goal_scorers,
+      currentMatch.home_var_events
+    )
   );
   const awayGoalTimeline = selectBestGoalTimeline(
-    currentMatch.away_goal_scorers,
-    delayedMatch && delayedMatch.away_goal_scorers
+    goalTimelineWithoutDisallowedVarGoals(
+      currentMatch.away_goal_scorers,
+      currentMatch.away_var_events
+    ),
+    goalTimelineWithoutDisallowedVarGoals(
+      delayedMatch && delayedMatch.away_goal_scorers,
+      currentMatch.away_var_events
+    )
   );
   const delayedHomeScore = toNumericScore(delayedMatch && delayedMatch.home_score);
   const delayedAwayScore = toNumericScore(delayedMatch && delayedMatch.away_score);
@@ -620,12 +663,24 @@ function delayedScoreOverrideFromTimeline(currentMatch, delayedMatch) {
   if (!currentMatch || typeof currentMatch !== "object") return null;
 
   const homeGoalTimeline = selectBestGoalTimeline(
-    currentMatch.home_goal_scorers,
-    delayedMatch && delayedMatch.home_goal_scorers
+    goalTimelineWithoutDisallowedVarGoals(
+      currentMatch.home_goal_scorers,
+      currentMatch.home_var_events
+    ),
+    goalTimelineWithoutDisallowedVarGoals(
+      delayedMatch && delayedMatch.home_goal_scorers,
+      currentMatch.home_var_events
+    )
   );
   const awayGoalTimeline = selectBestGoalTimeline(
-    currentMatch.away_goal_scorers,
-    delayedMatch && delayedMatch.away_goal_scorers
+    goalTimelineWithoutDisallowedVarGoals(
+      currentMatch.away_goal_scorers,
+      currentMatch.away_var_events
+    ),
+    goalTimelineWithoutDisallowedVarGoals(
+      delayedMatch && delayedMatch.away_goal_scorers,
+      currentMatch.away_var_events
+    )
   );
   const timelineScore = delayedScoreFromGoalTimelines(
     homeGoalTimeline,
@@ -6729,6 +6784,9 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
       return;
     }
     if (isTerminalLiveActivityError(updateResult)) {
+      const invalidatedActivityId = state && state.currentActivityId
+        ? String(state.currentActivityId).trim()
+        : null;
       if (liveActivityMetrics.markActivityInactive({ deviceToken: user.deviceToken })) {
         liveActivityMetrics.recordEnd({
           isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
@@ -6742,6 +6800,8 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
         lastPayloadHash: null,
         lastScoreHash: null,
         lastMode: null,
+        invalidatedActivityId,
+        invalidatedAt: new Date(nowMs).toISOString(),
       });
     }
     return;

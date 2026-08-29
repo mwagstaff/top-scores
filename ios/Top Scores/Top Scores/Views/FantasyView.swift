@@ -88,6 +88,11 @@ struct FantasyView: View {
     @State private var rivalTeamNamePendingDeletion = ""
     @State private var rivalsScoreMode: RivalsScoreMode = .currentGameweek
     @State private var teamViewMode: FantasyTeamViewMode = .current
+    @State private var rivalToastMessage: String?
+    @State private var rivalToastTask: Task<Void, Never>?
+    @State private var currentRivalRanks: [Int: Int] = [:]
+    @State private var previousRivalRanks: [Int: Int] = [:]
+    @State private var rivalRankUpdateTask: Task<Void, Never>?
     @State private var showFantasySignIn = false
     @State private var shouldPresentFantasySignInAfterDisconnect = false
     @State private var fantasyPitchDetailMode: FantasyPitchPlayerDetailMode = .opponent
@@ -193,24 +198,28 @@ struct FantasyView: View {
                 scoreBreakdownSheet(breakdown)
                     .presentationDragIndicator(.visible)
             }
-            .alert("Delete rival?", isPresented: $showDeleteRivalConfirmation) {
+            .alert("Remove rival?", isPresented: $showDeleteRivalConfirmation) {
                 Button("Cancel", role: .cancel) {
                     rivalEntryIDPendingDeletion = nil
                     rivalTeamNamePendingDeletion = ""
                 }
-                Button("Delete", role: .destructive) {
+                Button("Remove", role: .destructive) {
                     guard let entryID = rivalEntryIDPendingDeletion else { return }
+                    let teamName = rivalTeamNamePendingDeletion
                     removeRival(entryID: entryID)
-                    selectedRivalSquad = nil
                     rivalEntryIDPendingDeletion = nil
                     rivalTeamNamePendingDeletion = ""
-                    setShareImportStatus("Rival removed from table.", isError: false)
+                    showRivalToast(
+                        teamName.isEmpty
+                            ? "Removed rival"
+                            : "Removed \(teamName) as a rival"
+                    )
                 }
             } message: {
                 if rivalTeamNamePendingDeletion.isEmpty {
-                    Text("This rival will be removed from your table.")
+                    Text("This team will be removed from Your rivals.")
                 } else {
-                    Text("Remove \(rivalTeamNamePendingDeletion) from your rivals table?")
+                    Text("Remove \(rivalTeamNamePendingDeletion) from Your rivals?")
                 }
             }
             .sheet(item: $selectedPlayerSelection) { selection in
@@ -244,7 +253,7 @@ struct FantasyView: View {
             }
     }
 
-    private var lifecycleBoundView: some View {
+    private var primaryLifecycleBoundView: some View {
         modalPresentationView
             .onAppear {
                 let storedRivals = loadRivalManagersFromStorage()
@@ -367,6 +376,21 @@ struct FantasyView: View {
                 let resolvedValue = String(newEntryID)
                 guard managerEntryID != resolvedValue else { return }
                 managerEntryID = resolvedValue
+            }
+    }
+
+    private var lifecycleBoundView: some View {
+        primaryLifecycleBoundView
+            .onChange(of: rivalRankSnapshot) { _, _ in
+                scheduleRivalRankUpdate()
+            }
+            .onChange(of: fantasyViewModel.lastUpdated) { _, _ in
+                scheduleRivalRankUpdate()
+            }
+            .onChange(of: rivalsScoreMode) { _, _ in
+                currentRivalRanks = [:]
+                previousRivalRanks = [:]
+                scheduleRivalRankUpdate()
             }
             .onChange(of: selectedRivalSquad) { _, newValue in
                 guard newValue == nil else { return }
@@ -587,12 +611,13 @@ struct FantasyView: View {
                             if data.isEstimatedScore {
                                 scoreCalculationSection(data)
                             }
-                            rivalsSection
                             summaryStatsSection(data)
                         } else {
                             noPreviousTeamCard
                         }
                     }
+
+                    rivalsSection
 
                     if !playerCreatedLeagues.isEmpty {
                         yourLeaguesSection
@@ -632,12 +657,25 @@ struct FantasyView: View {
     }
 
     private var teamModePicker: some View {
-        Picker("Team view", selection: $teamViewMode) {
-            Text("Current team").tag(FantasyTeamViewMode.current)
-            Text(previousTeamPickerTitle).tag(FantasyTeamViewMode.previous)
-        }
-        .pickerStyle(.segmented)
-        .accessibilityHint("Switch between your latest squad and your most recently completed gameweek.")
+        FootballPitchSegmentedControl(
+            selection: $teamViewMode,
+            options: [
+                FootballPitchSegmentOption(
+                    value: .current,
+                    title: "Current team",
+                    subtitle: "Active squad",
+                    systemImage: "tshirt.fill"
+                ),
+                FootballPitchSegmentOption(
+                    value: .previous,
+                    title: previousTeamPickerTitle,
+                    subtitle: "Last gameweek",
+                    systemImage: "clock.arrow.circlepath"
+                ),
+            ],
+            accessibilityLabel: "Team view",
+            minimumHeight: 72
+        )
     }
 
     private var previousTeamPickerTitle: String {
@@ -749,14 +787,7 @@ struct FantasyView: View {
             }
         }
         .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(Color.accentColor.opacity(0.14), lineWidth: 1)
-        )
+        .fantasyPurpleSurface(cornerRadius: 20)
     }
 
     private func playerLeagueRow(_ league: FantasyEntryClassicLeague) -> some View {
@@ -1536,7 +1567,7 @@ struct FantasyView: View {
     }
 
     private var leagueTableEntries: [FantasyLeagueTableEntry] {
-        guard let mySquad = fantasyViewModel.previousTeamData else { return [] }
+        guard let mySquad = rivalsStandingsSquad else { return [] }
 
         let entryID = Int(managerEntryID.trimmingCharacters(in: .whitespacesAndNewlines)) ?? -1
         let profile = fantasyViewModel.myProfile
@@ -1565,6 +1596,8 @@ struct FantasyView: View {
                 projectedGameweekPoints: fantasyViewModel.currentSquadProjectedGameweekPoints,
                 isExpectedPointsLoading: false,
                 hasActiveChipInCurrentGameweek: mySquad.hasActiveChip,
+                hasWildcardInCurrentGameweek: mySquad.hasWildcardActive,
+                hasPlayerInPlay: mySquad.hasPlayerInPlay,
                 squad: mySquad,
                 clubBadgeSrc: profile?.clubBadgeSrc,
                 isUser: true
@@ -1585,6 +1618,8 @@ struct FantasyView: View {
                 projectedGameweekPoints: rivalSquad?.projectedGameweekPoints,
                 isExpectedPointsLoading: rivalSquad?.isExpectedPointsLoading ?? false,
                 hasActiveChipInCurrentGameweek: rivalSquad?.squad.hasActiveChip ?? false,
+                hasWildcardInCurrentGameweek: rivalSquad?.squad.hasWildcardActive ?? false,
+                hasPlayerInPlay: rivalSquad?.squad.hasPlayerInPlay ?? false,
                 squad: rivalSquad?.squad,
                 clubBadgeSrc: rivalSquad?.clubBadgeSrc ?? rival.clubBadgeSrc,
                 isUser: false
@@ -1606,6 +1641,51 @@ struct FantasyView: View {
         }
     }
 
+    private var rivalsStandingsSquad: FantasySquadDisplayData? {
+        if let current = fantasyViewModel.data {
+            let rivalsUseCurrentGameweek = fantasyViewModel.rivalSquads.contains {
+                $0.squad.gameweekID == current.gameweekID
+            }
+            if current.scorePhase == .provisional
+                || fantasyViewModel.hasStartedCurrentGameweekFixtures
+                || rivalsUseCurrentGameweek {
+                return current
+            }
+        }
+        return fantasyViewModel.previousTeamData
+    }
+
+    private var rivalsStandingsStatus: String {
+        guard rivalsScoreMode == .currentGameweek else { return "Season standings" }
+        guard let squad = rivalsStandingsSquad else { return "Current standings" }
+
+        let status: String
+        switch squad.scorePhase {
+        case .expected:
+            if fantasyViewModel.hasLiveCurrentGameweekFixtures {
+                status = "Live, provisional"
+            } else if fantasyViewModel.hasStartedCurrentGameweekFixtures {
+                status = "Provisional"
+            } else {
+                status = "Not started"
+            }
+        case .provisional:
+            status = squad.hasActiveFixtures ? "Live, provisional" : "Provisional"
+        case .final:
+            status = "Final"
+        }
+        return "\(squad.gameweekTitle) • \(status)"
+    }
+
+    private var rivalRankSnapshot: [FantasyRivalRankSnapshot] {
+        leagueTableEntries.map { entry in
+            FantasyRivalRankSnapshot(
+                entryID: entry.entryID,
+                score: entry.scoreValue(for: rivalsScoreMode)
+            )
+        }
+    }
+
     private var reviewShareEntries: [FantasyLeagueTableEntry] {
         leagueTableEntries.filter { !shareRemovedEntryIDs.contains($0.entryID) }
     }
@@ -1616,22 +1696,39 @@ struct FantasyView: View {
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Rivals")
+                Text("Your rivals")
                     .font(.headline)
                 Spacer(minLength: 0)
             }
 
-            Text("Share one or more rival's Fantasy Points page to Top Scores from Safari/Chrome to add them to your Rivals list.")
+            Text(rivalsStandingsStatus)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-            Picker("Score scope", selection: $rivalsScoreMode) {
-                ForEach(RivalsScoreMode.allCases, id: \.self) { mode in
-                    Text(mode.title).tag(mode)
-                }
+            FootballPitchSegmentedControl(
+                selection: $rivalsScoreMode,
+                options: [
+                    FootballPitchSegmentOption(
+                        value: .currentGameweek,
+                        title: "Current gameweek",
+                        subtitle: "This round",
+                        systemImage: "calendar"
+                    ),
+                    FootballPitchSegmentOption(
+                        value: .allGameweeks,
+                        title: "All gameweeks",
+                        subtitle: "Season total",
+                        systemImage: "chart.bar.fill"
+                    ),
+                ],
+                accessibilityLabel: "Rivals score scope",
+                minimumHeight: 68
+            )
+
+            if rankedEntries.contains(where: \.hasPlayerInPlay) {
+                LiveInPlayStandingsNote()
             }
-            .pickerStyle(.segmented)
 
             if rankedEntries.count <= 1 {
                 Text("Add rival manager IDs to compare live scores.")
@@ -1649,14 +1746,13 @@ struct FantasyView: View {
                     Text("Team")
                         .font(.subheadline.weight(.semibold))
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    Text("xP")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(width: 48, alignment: .trailing)
-                    Text(rivalsScoreMode == .currentGameweek ? "GW" : "Total")
-                        .font(.subheadline.weight(.semibold))
-                        .frame(width: 44, alignment: .trailing)
                     Color.clear
-                        .frame(width: 16)
+                        .frame(width: 24)
+                    Text(rivalsScoreMode == .currentGameweek ? "Points" : "Total")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(width: 52, alignment: .trailing)
+                    Color.clear
+                        .frame(width: 44)
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
@@ -1703,7 +1799,7 @@ struct FantasyView: View {
                     }
                 }
             }
-            .background(.thinMaterial)
+            .background(Color.black.opacity(0.16))
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
 
             if hasRivals {
@@ -1736,10 +1832,7 @@ struct FantasyView: View {
             }
         }
         .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
+        .fantasyPurpleSurface(cornerRadius: 14, showsPitchMarkings: true)
     }
 
     private var playerLeaguesSection: some View {
@@ -1896,6 +1989,7 @@ struct FantasyView: View {
     ) -> some View {
         let isLoadingDetails = entry.isLoadingDetails
         let showsChevron = entry.canOpenDetails
+        let previousRank = previousRivalRanks[entry.entryID]
 
         return HStack(spacing: 8) {
             Text("\(rank)")
@@ -1904,7 +1998,7 @@ struct FantasyView: View {
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 8) {
-                managerBadgeImage(urlString: entry.clubBadgeSrc, fallbackTeamName: entry.teamName)
+                leagueBadgeImage(urlString: entry.clubBadgeSrc, teamName: entry.teamName)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(entry.teamName)
                         .font(.body.weight(.semibold))
@@ -1919,20 +2013,13 @@ struct FantasyView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             Group {
-                if entry.showsExpectedPointsLoadingIndicator {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
+                if entry.showsWildcardBadge(for: scoreMode) {
+                    FantasyWildcardBadgeImage(width: 22)
                 } else {
-                    fantasyExpectedPointsPill(
-                        text: entry.projectedGameweekPointsDisplay,
-                        value: entry.projectedGameweekPoints
-                    )
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    Color.clear
                 }
             }
-            .frame(width: 48, alignment: .trailing)
+            .frame(width: 24)
 
             Group {
                 if entry.showsScoreLoadingIndicator(for: scoreMode) {
@@ -1947,9 +2034,12 @@ struct FantasyView: View {
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             }
-            .frame(width: 44, alignment: .trailing)
+            .frame(width: 52, alignment: .trailing)
 
-            Group {
+            HStack(spacing: 4) {
+                leagueTrendIcon(currentRank: rank, lastRank: previousRank)
+                    .frame(width: 20, alignment: .trailing)
+
                 if showsChevron {
                     Image(systemName: "chevron.right")
                         .font(.system(size: 14, weight: .semibold))
@@ -1958,7 +2048,7 @@ struct FantasyView: View {
                     Color.clear
                 }
             }
-            .frame(width: 16, alignment: .center)
+            .frame(width: 44, alignment: .trailing)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 10)
@@ -1967,49 +2057,23 @@ struct FantasyView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(entry.isUser ? Color.accentColor.opacity(0.15) : Color.clear)
         )
+        .background(LiveStandingsRowBackground(isActive: entry.hasPlayerInPlay))
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(entry.isUser ? Color.accentColor.opacity(0.45) : Color.clear, lineWidth: 1)
         )
         .contentShape(Rectangle())
         .animation(.easeInOut(duration: 0.2), value: isLoadingDetails)
-    }
-
-    private func fantasyExpectedPointsPill(text: String, value: Double?) -> some View {
-        let color = fantasyExpectedPointsPillColor(value)
-
-        return Text(text)
-            .font(.caption2.monospacedDigit().weight(.semibold))
-            .foregroundStyle(value == nil ? Color.secondary : fantasyExpectedPointsPillForegroundColor(value))
-            .frame(minWidth: 40, alignment: .center)
-            .padding(.vertical, 4)
-            .background(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(color.opacity(value == nil ? 0.20 : 0.92))
-            )
-    }
-
-    private func fantasyExpectedPointsPillColor(_ value: Double?) -> Color {
-        guard let value else { return Color.gray }
-        switch value {
-        case ..<2.0:
-            return Color.red
-        case ..<4.0:
-            return Color.orange
-        case ..<6.0:
-            return Color.yellow
-        default:
-            return Color.green
-        }
-    }
-
-    private func fantasyExpectedPointsPillForegroundColor(_ value: Double?) -> Color {
-        guard let value else { return Color.secondary }
-        return value >= 4.0 ? Color.black.opacity(0.82) : Color.white
+        .accessibilityElement(children: .combine)
+        .accessibilityValue(entry.hasPlayerInPlay ? "Currently in play" : "")
     }
 
     private func leagueDetailSheet(_ league: FantasyTrackedLeagueStanding) -> some View {
-        NavigationStack {
+        let hasLiveEntries = league.standings.contains {
+            fantasyViewModel.leagueInPlayStatusByEntryID[$0.entry] == true
+        }
+
+        return NavigationStack {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 10) {
@@ -2027,11 +2091,12 @@ struct FantasyView: View {
                                 .foregroundStyle(.secondary)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                                 .padding(12)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .fill(Color(.secondarySystemGroupedBackground))
-                                )
+                                .fantasyPurpleSurface(cornerRadius: 12)
                         } else {
+                            if hasLiveEntries {
+                                LiveInPlayStandingsNote()
+                            }
+
                             LazyVStack(spacing: 0) {
                                 HStack(spacing: 8) {
                                     Text("#")
@@ -2040,6 +2105,8 @@ struct FantasyView: View {
                                     Text("Team")
                                         .font(.subheadline.weight(.semibold))
                                         .frame(maxWidth: .infinity, alignment: .leading)
+                                    Color.clear
+                                        .frame(width: 24)
                                     Text("GW")
                                         .font(.subheadline.weight(.semibold))
                                         .frame(width: 44, alignment: .trailing)
@@ -2065,6 +2132,7 @@ struct FantasyView: View {
                                         leagueStandingRow(
                                             row,
                                             isCurrentUser: row.entry == league.myEntryID,
+                                            isInPlay: fantasyViewModel.leagueInPlayStatusByEntryID[row.entry] == true,
                                             isLoading: leagueMemberEntryIDLoading == row.entry
                                         )
                                     }
@@ -2079,8 +2147,10 @@ struct FantasyView: View {
                                     }
                                 }
                             }
-                            .background(.thinMaterial)
-                            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            .fantasyPurpleSurface(
+                                cornerRadius: 12,
+                                showsPitchMarkings: true
+                            )
                         }
                     }
                     .padding(14)
@@ -2089,7 +2159,7 @@ struct FantasyView: View {
                     scrollToCurrentLeagueEntry(proxy: proxy, league: league)
                 }
             }
-            .background(Color(.systemGroupedBackground))
+            .background(FantasyLeagueScreenBackground())
             .navigationTitle(league.leagueName)
             .toolbarTitleDisplayMode(.inline)
             .toolbar {
@@ -2106,10 +2176,14 @@ struct FantasyView: View {
             .navigationDestination(item: $selectedLeagueMemberSquad) { rival in
                 rivalSquadDetailView(
                     rival,
-                    showsDeleteButton: false,
                     closeAction: nil
                 )
             }
+        }
+        .task(id: "\(league.id)|\(fantasyViewModel.leagueEntryStatusRefreshKey)") {
+            await fantasyViewModel.populateLeagueEntryStatuses(
+                for: league.standings
+            )
         }
         .alert("Team unavailable", isPresented: $showLeagueMemberLoadError) {
             Button("OK", role: .cancel) {}
@@ -2155,6 +2229,7 @@ struct FantasyView: View {
     private func leagueStandingRow(
         _ row: FantasyClassicLeagueStandingEntry,
         isCurrentUser: Bool,
+        isInPlay: Bool,
         isLoading: Bool
     ) -> some View {
         HStack(spacing: 8) {
@@ -2188,6 +2263,15 @@ struct FantasyView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
+            Group {
+                if fantasyViewModel.leagueWildcardStatusByEntryID[row.entry] == true {
+                    FantasyWildcardBadgeImage(width: 22)
+                } else {
+                    Color.clear
+                }
+            }
+            .frame(width: 24)
+
             Text("\(row.eventTotal)")
                 .font(.body.monospacedDigit().weight(.semibold))
                 .frame(width: 44, alignment: .trailing)
@@ -2219,11 +2303,13 @@ struct FantasyView: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(isCurrentUser ? Color.accentColor.opacity(0.22) : Color.clear)
         )
+        .background(LiveStandingsRowBackground(isActive: isInPlay))
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(isCurrentUser ? Color.accentColor.opacity(0.65) : Color.clear, lineWidth: 1)
         )
         .accessibilityElement(children: .combine)
+        .accessibilityValue(isInPlay ? "Currently in play" : "")
     }
 
     @ViewBuilder
@@ -2430,6 +2516,15 @@ struct FantasyView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .opacity(isIncluded ? 1.0 : 0.5)
 
+            Group {
+                if entry.showsWildcardBadge(for: rivalsScoreMode) {
+                    FantasyWildcardBadgeImage(width: 20)
+                } else {
+                    Color.clear
+                }
+            }
+            .frame(width: 24)
+
             Text(entry.scoreDisplay(for: rivalsScoreMode))
                 .font(.body.monospacedDigit().weight(.semibold))
                 .frame(width: 44, alignment: .trailing)
@@ -2468,18 +2563,14 @@ struct FantasyView: View {
                     Text(addSheetMode.tipText)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
-
-                    Button {
-                        openFantasyWebsiteInBrowser()
-                    } label: {
-                        Label("Open fantasy.premierleague.com", systemImage: "globe")
-                    }
+                        .listRowBackground(FantasyPurpleFormRowBackground())
                 }
 
                 Section(addSheetMode.idSectionTitle) {
                     Text(addSheetMode.manualEntryHelpText)
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                        .listRowBackground(FantasyPurpleFormRowBackground())
 
                     TextField(addSheetMode.idPlaceholder, text: $rivalEntryInput)
                         .keyboardType(.numberPad)
@@ -2492,6 +2583,7 @@ struct FantasyView: View {
                                 rivalEntryInput = digitsOnly
                             }
                         }
+                        .listRowBackground(FantasyPurpleFormRowBackground())
 
                     Button {
                         Task {
@@ -2516,6 +2608,7 @@ struct FantasyView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(!isAddSheetSubmitEnabled)
+                    .listRowBackground(FantasyPurpleFormRowBackground())
                 }
 
                 if let validationErrorMessage = activeAddSheetErrorMessage {
@@ -2552,6 +2645,8 @@ struct FantasyView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(FantasyLeagueScreenBackground())
             .navigationTitle(addSheetMode.sheetTitle)
             .toolbarTitleDisplayMode(.inline)
             .toolbar {
@@ -2577,7 +2672,6 @@ struct FantasyView: View {
         NavigationStack {
             rivalSquadDetailView(
                 rival,
-                showsDeleteButton: true,
                 closeAction: { selectedRivalSquad = nil }
             )
         }
@@ -2585,10 +2679,11 @@ struct FantasyView: View {
 
     private func rivalSquadDetailView(
         _ rival: FantasyRivalSquad,
-        showsDeleteButton: Bool,
         closeAction: (() -> Void)?
     ) -> some View {
         let displayData = rival.squad.applyingExpectedPoints(rival.expectedPointsSection)
+        let isOwnTeam = rival.entryID == currentManagerEntryID
+        let isSavedRival = rivalManagers.contains(where: { $0.entryID == rival.entryID })
 
         return ScrollView {
             VStack(spacing: 12) {
@@ -2598,6 +2693,11 @@ struct FantasyView: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+
+                if displayData.hasWildcardActive {
+                    FantasyWildcardBadgeImage(width: 92)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                }
 
                 pitchSection(
                     displayData,
@@ -2620,17 +2720,21 @@ struct FantasyView: View {
         .navigationTitle(rival.teamName)
         .toolbarTitleDisplayMode(.inline)
         .toolbar {
-            if showsDeleteButton {
+            if !isOwnTeam {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button(role: .destructive) {
-                        rivalEntryIDPendingDeletion = rival.entryID
-                        rivalTeamNamePendingDeletion = rival.teamName
-                        showDeleteRivalConfirmation = true
+                    Button {
+                        if isSavedRival {
+                            rivalEntryIDPendingDeletion = rival.entryID
+                            rivalTeamNamePendingDeletion = rival.teamName
+                            showDeleteRivalConfirmation = true
+                        } else {
+                            addRival(rival)
+                        }
                     } label: {
-                        Image(systemName: "trash")
+                        Image(systemName: isSavedRival ? "star.fill" : "star")
                             .font(.body.weight(.semibold))
                     }
-                    .accessibilityLabel("Delete rival")
+                    .accessibilityLabel(isSavedRival ? "Remove rival" : "Add as rival")
                 }
             }
             if let closeAction {
@@ -2643,6 +2747,13 @@ struct FantasyView: View {
                     }
                     .accessibilityLabel("Close")
                 }
+            }
+        }
+        .overlay(alignment: .top) {
+            if let rivalToastMessage {
+                FantasyRivalToastView(message: rivalToastMessage)
+                    .padding(.top, 8)
+                    .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
     }
@@ -3745,6 +3856,87 @@ struct FantasyView: View {
         triggerFantasyRefresh(force: true, rivalManagers: updatedRivals)
     }
 
+    private func addRival(_ squad: FantasyRivalSquad) {
+        guard squad.entryID != currentManagerEntryID,
+              !rivalManagers.contains(where: { $0.entryID == squad.entryID }) else {
+            return
+        }
+
+        let managerName = splitManagerName(squad.managerName)
+        let rival = FantasyRivalManager(
+            entryID: squad.entryID,
+            teamName: squad.teamName,
+            managerFirstName: managerName.firstName,
+            managerLastName: managerName.lastName,
+            overallPoints: squad.allGameweeksPoints,
+            clubBadgeSrc: squad.clubBadgeSrc
+        )
+        var updatedRivals = rivalManagers
+        updatedRivals.append(rival)
+        updatedRivals.sort { lhs, rhs in
+            let left = lhs.teamName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let right = rhs.teamName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if left.localizedCaseInsensitiveCompare(right) != .orderedSame {
+                return left.localizedCaseInsensitiveCompare(right) == .orderedAscending
+            }
+            return lhs.entryID < rhs.entryID
+        }
+
+        rivalManagers = updatedRivals
+        persistRivalManagersToStorage(updatedRivals)
+        showRivalToast("Added \(squad.teamName) as a rival")
+        triggerFantasyRefresh(force: true, rivalManagers: updatedRivals)
+    }
+
+    private func showRivalToast(_ message: String) {
+        rivalToastTask?.cancel()
+        withAnimation(.easeInOut(duration: 0.18)) {
+            rivalToastMessage = message
+        }
+        rivalToastTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2.2))
+            guard !Task.isCancelled else { return }
+            withAnimation(.easeInOut(duration: 0.18)) {
+                rivalToastMessage = nil
+            }
+        }
+    }
+
+    private func scheduleRivalRankUpdate() {
+        rivalRankUpdateTask?.cancel()
+        rivalRankUpdateTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            updateRivalRanks()
+        }
+    }
+
+    private func updateRivalRanks() {
+        let entries = leagueTableEntries
+        guard entries.count == rivalManagers.count + 1,
+              entries.allSatisfy({ $0.scoreValue(for: rivalsScoreMode) != nil }) else {
+            return
+        }
+
+        let nextRanks = Dictionary(
+            uniqueKeysWithValues: entries.enumerated().map { index, entry in
+                (entry.entryID, index + 1)
+            }
+        )
+        guard Set(nextRanks.keys) == Set(currentRivalRanks.keys) || currentRivalRanks.isEmpty else {
+            currentRivalRanks = nextRanks
+            previousRivalRanks = [:]
+            return
+        }
+        if currentRivalRanks.isEmpty {
+            currentRivalRanks = nextRanks
+            previousRivalRanks = [:]
+        } else {
+            previousRivalRanks = currentRivalRanks
+            currentRivalRanks = nextRanks
+        }
+    }
+
     private func openLeagueSummary(_ league: FantasyTrackedLeagueStanding) {
         if league.canOpenDetails {
             selectedLeagueStanding = league
@@ -3945,12 +4137,6 @@ struct FantasyView: View {
             Text(text)
         }
         .font(.subheadline)
-    }
-
-    private func openFantasyWebsiteInBrowser() {
-        guard let url = URL(string: "https://fantasy.premierleague.com/") else { return }
-        armSharedEntryPolling()
-        openURL(url)
     }
 
     private func completeFantasySignIn(_ entryID: Int?) {
@@ -5233,6 +5419,11 @@ private enum FantasyTeamViewMode: Hashable {
     case previous
 }
 
+private struct FantasyRivalRankSnapshot: Equatable {
+    let entryID: Int
+    let score: Int?
+}
+
 private enum RivalsScoreMode: String, CaseIterable {
     case currentGameweek
     case allGameweeks
@@ -5311,7 +5502,7 @@ private enum FantasyIDAddMode {
     var tipText: String {
         switch self {
         case .rival:
-            return "For the fastest flow, open a rival's Points page in Safari/Chrome and share it to Top Scores. It will auto-validate when you return to the app."
+            return "The fastest way to add a rival is to select their team from one of your leagues, then tap the star button."
         case .league:
             return "For the fastest flow, open a Fantasy league page in Safari/Chrome and share it to Top Scores. It will auto-validate when you return to the app."
         }
@@ -5327,6 +5518,8 @@ private struct FantasyLeagueTableEntry: Identifiable, Hashable {
     let projectedGameweekPoints: Double?
     let isExpectedPointsLoading: Bool
     let hasActiveChipInCurrentGameweek: Bool
+    let hasWildcardInCurrentGameweek: Bool
+    let hasPlayerInPlay: Bool
     let squad: FantasySquadDisplayData?
     let clubBadgeSrc: String?
     let isUser: Bool
@@ -5336,11 +5529,11 @@ private struct FantasyLeagueTableEntry: Identifiable, Hashable {
     }
 
     var canOpenDetails: Bool {
-        !isUser && squad != nil
+        squad != nil
     }
 
     var isLoadingDetails: Bool {
-        !isUser && squad == nil
+        squad == nil
     }
 
     func scoreValue(for mode: RivalsScoreMode) -> Int? {
@@ -5354,23 +5547,20 @@ private struct FantasyLeagueTableEntry: Identifiable, Hashable {
 
     func scoreDisplay(for mode: RivalsScoreMode) -> String {
         guard let score = scoreValue(for: mode) else { return "-" }
-        if mode == .currentGameweek, hasActiveChipInCurrentGameweek {
+        if mode == .currentGameweek,
+           hasActiveChipInCurrentGameweek,
+           !hasWildcardInCurrentGameweek {
             return "\(score)*"
         }
         return "\(score)"
     }
 
-    var projectedGameweekPointsDisplay: String {
-        guard let projectedGameweekPoints else { return "-" }
-        return fantasyExpectedPointsText(projectedGameweekPoints)
+    func showsWildcardBadge(for mode: RivalsScoreMode) -> Bool {
+        mode == .currentGameweek && hasWildcardInCurrentGameweek
     }
 
     func showsScoreLoadingIndicator(for mode: RivalsScoreMode) -> Bool {
         isLoadingDetails && scoreValue(for: mode) == nil
-    }
-
-    var showsExpectedPointsLoadingIndicator: Bool {
-        isExpectedPointsLoading || (isLoadingDetails && projectedGameweekPoints == nil)
     }
 }
 
@@ -6022,6 +6212,124 @@ private struct FantasySharePayload: Identifiable {
     let items: [Any]
 }
 
+private struct FantasyRivalToastView: View {
+    let message: String
+
+    var body: some View {
+        Label(message, systemImage: "star.fill")
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(Color.black.opacity(0.84), in: Capsule())
+            .shadow(color: .black.opacity(0.24), radius: 8, x: 0, y: 4)
+            .accessibilityAddTraits(.isStaticText)
+    }
+}
+
+private struct FantasyWildcardBadgeImage: View {
+    let width: CGFloat
+
+    var body: some View {
+        Image("FPLWildcardBadge")
+            .resizable()
+            .scaledToFit()
+            .frame(width: width)
+            .accessibilityLabel("Wildcard active this gameweek")
+    }
+}
+
+private struct FantasyPurpleSurfaceModifier: ViewModifier {
+    let cornerRadius: CGFloat
+    let showsPitchMarkings: Bool
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+
+        content
+            .background {
+                ZStack {
+                    Rectangle()
+                        .fill(.ultraThinMaterial)
+
+                    FootballCardSurface(
+                        accentColor: CompetitionAccentRole.premierLeague.color,
+                        showsPitchMarkings: showsPitchMarkings
+                    )
+                    .opacity(0.88)
+                }
+            }
+            .clipShape(shape)
+            .overlay {
+                shape.stroke(FootballVisualStyle.border, lineWidth: 1)
+            }
+    }
+}
+
+private struct FantasyPurpleFormRowBackground: View {
+    var body: some View {
+        ZStack {
+            LinearGradient(
+                colors: [
+                    FootballVisualStyle.cardTop.opacity(0.94),
+                    FootballVisualStyle.cardBottom.opacity(0.90),
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            )
+
+            RadialGradient(
+                colors: [
+                    CompetitionAccentRole.premierLeague.color.opacity(0.22),
+                    .clear,
+                ],
+                center: .topLeading,
+                startRadius: 0,
+                endRadius: 240
+            )
+
+            LinearGradient(
+                colors: [Color.white.opacity(0.045), .clear],
+                startPoint: .top,
+                endPoint: .center
+            )
+        }
+    }
+}
+
+private struct FantasyLeagueScreenBackground: View {
+    var body: some View {
+        ZStack {
+            FootballVisualStyle.pageBackground
+
+            RadialGradient(
+                colors: [
+                    CompetitionAccentRole.premierLeague.color.opacity(0.18),
+                    .clear,
+                ],
+                center: .topLeading,
+                startRadius: 0,
+                endRadius: 440
+            )
+        }
+        .ignoresSafeArea()
+    }
+}
+
+private extension View {
+    func fantasyPurpleSurface(
+        cornerRadius: CGFloat,
+        showsPitchMarkings: Bool = false
+    ) -> some View {
+        modifier(
+            FantasyPurpleSurfaceModifier(
+                cornerRadius: cornerRadius,
+                showsPitchMarkings: showsPitchMarkings
+            )
+        )
+    }
+}
+
 private struct FantasyShareSheet: UIViewControllerRepresentable {
     let activityItems: [Any]
 
@@ -6160,6 +6468,8 @@ private struct FantasyLeagueShareSnapshotView: View {
                             .frame(width: 26, alignment: .trailing)
                         Text("Team")
                             .frame(maxWidth: .infinity, alignment: .leading)
+                        Color.clear
+                            .frame(width: 24)
                         Text(scoreMode == .currentGameweek ? "GW" : "Total")
                             .frame(width: 44, alignment: .trailing)
                     }
@@ -6190,6 +6500,15 @@ private struct FantasyLeagueShareSnapshotView: View {
                                     .lineLimit(1)
                             }
                             .frame(maxWidth: .infinity, alignment: .leading)
+
+                            Group {
+                                if row.showsWildcardBadge(for: scoreMode) {
+                                    FantasyWildcardBadgeImage(width: 20)
+                                } else {
+                                    Color.clear
+                                }
+                            }
+                            .frame(width: 24)
 
                             Text(row.scoreDisplay(for: scoreMode))
                                 .font(.body.monospacedDigit().weight(.bold))

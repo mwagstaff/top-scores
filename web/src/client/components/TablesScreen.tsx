@@ -154,7 +154,7 @@ export function TablesScreen() {
               {leagueHasLiveRows(selectedLeague) ? (
                 <div className="tables-live-note">
                   <span className="tables-live-dot" aria-hidden="true" />
-                  Positions update live from in-progress scores and are provisional.
+                  Live in-play standings. Provisional, subject to change.
                 </div>
               ) : null}
               <LeagueTableCard league={selectedLeague} highlightedRowId={highlightedRowId} />

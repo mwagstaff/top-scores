@@ -1057,6 +1057,7 @@ struct TeamDetailsView: View {
     private var upcomingFixturesSection: some View {
         matchListSection(
             title: "Upcoming Fixtures",
+            accentColor: FootballSectionAccent.media,
             matches: viewModel.upcomingFixtures,
             showsAll: showsAllUpcomingFixtures,
             loadingLabel: "Loading upcoming fixtures",
@@ -1074,6 +1075,7 @@ struct TeamDetailsView: View {
         VStack(alignment: .leading, spacing: 8) {
             matchListSection(
                 title: "Previous Matches",
+                accentColor: FootballSectionAccent.venue,
                 matches: viewModel.previousMatches,
                 showsAll: showsAllPreviousMatches,
                 loadingLabel: "Loading previous matches",
@@ -1096,6 +1098,7 @@ struct TeamDetailsView: View {
     @ViewBuilder
     private func matchListSection(
         title: String,
+        accentColor: Color,
         matches: [Match],
         showsAll: Bool,
         loadingLabel: String,
@@ -1105,21 +1108,23 @@ struct TeamDetailsView: View {
         onToggle: @escaping () -> Void
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            sectionHeading(title)
+            sectionHeading(title, accentColor: accentColor)
 
             if matches.isEmpty && viewModel.isLoadingMatches {
-                loadingCard(label: loadingLabel)
+                loadingCard(label: loadingLabel, accentColor: accentColor)
             } else if matches.isEmpty {
                 unavailableCard(
                     title: emptyTitle,
                     message: emptyMessage,
-                    systemImage: emptySystemImage
+                    systemImage: emptySystemImage,
+                    accentColor: accentColor
                 )
             } else {
                 LazyVStack(alignment: .leading, spacing: 12) {
                     ForEach(TeamDetailsPagination.visibleMatches(matches, showsAll: showsAll)) { match in
                         TeamDetailsMatchRow(
                             match: match,
+                            accentColor: accentColor,
                             tablesResponse: viewModel.tablesResponse,
                             viewedTeamName: context.teamName,
                             viewedTeamForm: currentTeamForm,
@@ -1150,12 +1155,15 @@ struct TeamDetailsView: View {
         }
     }
 
-    private func sectionHeading(_ title: String) -> some View {
+    private func sectionHeading(
+        _ title: String,
+        accentColor: Color = Color.accentColor
+    ) -> some View {
         HStack(spacing: 10) {
             Capsule()
-                .fill(Color.accentColor)
+                .fill(accentColor)
                 .frame(width: 3, height: 24)
-                .shadow(color: Color.accentColor.opacity(0.42), radius: 5)
+                .shadow(color: accentColor.opacity(0.42), radius: 5)
 
             Text(title)
                 .font(.title3.weight(.bold))
@@ -1164,29 +1172,33 @@ struct TeamDetailsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func loadingCard(label: String) -> some View {
+    private func loadingCard(
+        label: String,
+        accentColor: Color = Color.accentColor
+    ) -> some View {
         HStack(spacing: 10) {
             ProgressView()
-                .tint(Color.accentColor)
+                .tint(accentColor)
             Text(label)
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.66))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .background(FootballVisualStyle.elevatedSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.white.opacity(0.06), lineWidth: 0.5)
-        }
+        .footballTintedSurface(accentColor: accentColor, cornerRadius: 18)
         .accessibilityElement(children: .combine)
     }
 
-    private func unavailableCard(title: String, message: String, systemImage: String) -> some View {
+    private func unavailableCard(
+        title: String,
+        message: String,
+        systemImage: String,
+        accentColor: Color = Color.accentColor
+    ) -> some View {
         VStack(spacing: 10) {
             Image(systemName: systemImage)
                 .font(.title2)
-                .foregroundStyle(Color.accentColor)
+                .foregroundStyle(accentColor)
             Text(title)
                 .font(.headline)
                 .foregroundStyle(.white)
@@ -1207,11 +1219,7 @@ struct TeamDetailsView: View {
         }
         .frame(maxWidth: .infinity)
         .padding(18)
-        .background(FootballVisualStyle.elevatedSurface, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.white.opacity(0.06), lineWidth: 0.5)
-        }
+        .footballTintedSurface(accentColor: accentColor, cornerRadius: 18)
     }
 
     private func inlineError(_ message: String) -> some View {
@@ -1243,6 +1251,7 @@ private struct TeamDetailsMatchRow: View {
     @EnvironmentObject private var preferences: PreferencesStore
 
     let match: Match
+    let accentColor: Color
     let tablesResponse: LeagueTablesResponse?
     let viewedTeamName: String
     let viewedTeamForm: [String]?
@@ -1323,6 +1332,7 @@ private struct TeamDetailsMatchRow: View {
                         teamLogoScale: 1.518,
                         showsFinishedInlineAggregateBrackets: true,
                         layoutStyle: .compactFixture,
+                        presentationStyle: .embedded,
                         rowPreferences: MatchRowPreferences(
                             preferences: preferences,
                             hasFantasyManagerEntry: false
@@ -1339,6 +1349,11 @@ private struct TeamDetailsMatchRow: View {
                         .frame(minHeight: 60)
                         .contentShape(Rectangle())
                 }
+                .footballTintedSurface(
+                    accentColor: accentColor,
+                    cornerRadius: 18,
+                    accentOpacity: 0.20
+                )
             }
             .buttonStyle(.plain)
             .accessibilityElement(children: .combine)

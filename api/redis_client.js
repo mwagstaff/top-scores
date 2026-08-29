@@ -779,6 +779,12 @@ function normalizeLiveActivityStatePatch(patch = {}) {
   if (Object.prototype.hasOwnProperty.call(patch, "lastEndedAt")) {
     normalized.lastEndedAt = normalizeOptionalToken(patch.lastEndedAt);
   }
+  if (Object.prototype.hasOwnProperty.call(patch, "invalidatedActivityId")) {
+    normalized.invalidatedActivityId = normalizeOptionalToken(patch.invalidatedActivityId);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "invalidatedAt")) {
+    normalized.invalidatedAt = normalizeOptionalToken(patch.invalidatedAt);
+  }
   if (Object.prototype.hasOwnProperty.call(patch, "testHoldUntil")) {
     normalized.testHoldUntil = normalizeOptionalToken(patch.testHoldUntil);
   }

@@ -215,14 +215,12 @@ struct MatchDetailView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
+        .footballTintedSurface(
+            accentColor: FootballSectionAccent.action,
+            cornerRadius: 18,
+            showsPitchMarkings: true,
+            accentOpacity: 0.22
         )
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.primary.opacity(0.07), lineWidth: 1)
-        }
     }
 
     var body: some View {
@@ -283,9 +281,9 @@ struct MatchDetailView: View {
 
                 if !activeMatch.tvChannels.isEmpty {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Follow the action")
+                        Label("Follow the action", systemImage: "dot.radiowaves.left.and.right")
                             .font(.headline)
-                            .foregroundStyle(.primary)
+                            .foregroundStyle(FootballSectionAccent.action)
                         tvChannelSection
                     }
                     .padding(.horizontal)
@@ -903,9 +901,13 @@ private struct MatchVenueSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(venue.name)
-                .font(.title3.weight(.bold))
-                .foregroundStyle(.primary)
+            HStack(spacing: 9) {
+                Image(systemName: "sportscourt.fill")
+                    .foregroundStyle(FootballSectionAccent.venue)
+                Text(venue.name)
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(.primary)
+            }
 
             if let imageURL = venue.imageURL.flatMap(URL.init(string:)) {
                 AsyncImage(url: imageURL) { phase in
@@ -950,20 +952,18 @@ private struct MatchVenueSection: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
+                .tint(FootballSectionAccent.venue)
                 .controlSize(.large)
                 .accessibilityHint("Opens the stadium location in Apple Maps")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
+        .footballTintedSurface(
+            accentColor: FootballSectionAccent.venue,
+            cornerRadius: 20,
+            accentOpacity: 0.24
         )
-        .overlay {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(Color.primary.opacity(0.07), lineWidth: 1)
-        }
     }
 
     @ViewBuilder
@@ -999,7 +999,7 @@ private struct MatchVenueFact: View {
         HStack(spacing: 8) {
             Image(systemName: icon)
                 .font(.subheadline.weight(.semibold))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(FootballSectionAccent.venue)
                 .frame(width: 20)
 
             VStack(alignment: .leading, spacing: 2) {
@@ -1118,12 +1118,20 @@ private struct MatchDetailScoreboardHero: View {
                         .minimumScaleFactor(0.65)
                         .lineLimit(1)
 
-                    Text(statusText)
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(.white.opacity(0.82))
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(Color.white.opacity(0.14), in: Capsule())
+                    if match.isInProgress {
+                        MatchTimeStatusView(
+                            text: statusText,
+                            isLive: true,
+                            isFinal: match.isFinalRound
+                        )
+                    } else {
+                        Text(statusText)
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.white.opacity(0.82))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Color.white.opacity(0.14), in: Capsule())
+                    }
                 }
                 .frame(maxWidth: 134)
 
@@ -2551,14 +2559,12 @@ private struct FantasyMatchPlayersSection: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(16)
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
+        .footballTintedSurface(
+            accentColor: FootballSectionAccent.fantasy,
+            cornerRadius: 18,
+            showsPitchMarkings: true,
+            accentOpacity: 0.24
         )
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .stroke(Color.primary.opacity(0.07), lineWidth: 1)
-        }
         .sheet(item: $selectedPlayer) { selection in
             FantasyPlayerDetailsSheet(
                 selection: selection,
@@ -2747,9 +2753,9 @@ private struct MatchSocialSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Highlights & Social")
+            Label("Highlights & Social", systemImage: "play.rectangle.fill")
                 .font(.headline)
-                .foregroundStyle(.primary)
+                .foregroundStyle(FootballSectionAccent.media)
 
             VStack(spacing: 8) {
                 ForEach(items) { item in
@@ -2805,14 +2811,11 @@ private struct MatchSocialRow: View {
                 .foregroundStyle(.secondary)
         }
         .padding(11)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(.secondarySystemBackground))
+        .footballTintedSurface(
+            accentColor: FootballSectionAccent.media,
+            cornerRadius: 14,
+            accentOpacity: 0.20
         )
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(Color.primary.opacity(0.07), lineWidth: 1)
-        }
     }
 
     private var sourceText: String? {
@@ -2929,7 +2932,11 @@ private struct TvChannelRow: View {
         }
         .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
         .padding(.horizontal, 10)
-        .background(Color(.tertiarySystemBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .footballTintedSurface(
+            accentColor: FootballSectionAccent.action,
+            cornerRadius: 12,
+            accentOpacity: 0.14
+        )
         .accessibilityElement(children: .combine)
     }
 }

@@ -270,6 +270,10 @@ struct FantasyChip: Hashable, Sendable {
     nonisolated var isBenchBoost: Bool {
         normalizedCode == "bboost"
     }
+
+    nonisolated var isWildcard: Bool {
+        normalizedCode.hasPrefix("wildcard")
+    }
 }
 
 nonisolated struct FantasyPicksResponse: Codable, Hashable {
@@ -1908,6 +1912,10 @@ struct FantasySquadDisplayData: Hashable, Sendable {
         (starters + bench).sorted { $0.pickPosition < $1.pickPosition }
     }
 
+    nonisolated var hasPlayerInPlay: Bool {
+        allPlayers.contains(where: \.isPlayingNow)
+    }
+
     nonisolated var currentTeamValueMillions: Double {
         reportedTeamValueMillions ?? allPlayers.reduce(0) { $0 + $1.nowCostMillions }
     }
@@ -1929,6 +1937,10 @@ struct FantasySquadDisplayData: Hashable, Sendable {
 
     nonisolated var hasBenchBoostActive: Bool {
         activeChips.contains(where: \.isBenchBoost)
+    }
+
+    nonisolated var hasWildcardActive: Bool {
+        activeChips.contains(where: \.isWildcard)
     }
 
     nonisolated var activeChipDisplayNames: [String] {
@@ -3023,6 +3035,19 @@ enum FantasyPlayerDetailsBuilder {
     }
 }
 
+enum FantasyEntryLiveStatusResolver {
+    nonisolated static func hasInPlaySelection(
+        selectedElementIDs: Set<Int>,
+        teamIDByElementID: [Int: Int],
+        liveTeamIDs: Set<Int>
+    ) -> Bool {
+        selectedElementIDs.contains { elementID in
+            guard let teamID = teamIDByElementID[elementID] else { return false }
+            return liveTeamIDs.contains(teamID)
+        }
+    }
+}
+
 enum FantasySquadBuilder {
     nonisolated static func build(
         gameweek: FantasyGameweek,
@@ -3093,10 +3118,15 @@ enum FantasySquadBuilder {
             }
         )
         let hasActiveFixtures = !activeTeamIDs.isDisjoint(with: squadTeamIDs)
-        let hasStartedFixturesInGameweek = fixtures.contains { fixture in
-            fixtureHasStarted(fixture) &&
-                (squadTeamIDs.contains(fixture.teamH) || squadTeamIDs.contains(fixture.teamA))
-        }
+        // `entry/{id}/event/{event}/picks/` can continue reporting the
+        // pre-live `entry_history.points` value while a gameweek is under way.
+        // Once any fixture has started, calculate every manager's score from
+        // the shared `event/{event}/live/` payload instead, even when none of
+        // that manager's players are involved in the first fixture.
+        let hasStartedFixturesInGameweek = fixtures.contains(where: fixtureHasStarted)
+            || liveResponse.elements.contains { element in
+                element.stats.totalPoints != 0 || (element.stats.minutes ?? 0) > 0
+            }
         let hasFixturesPlayedToday = {
             let calendar = Calendar.current
             let startOfToday = calendar.startOfDay(for: now)

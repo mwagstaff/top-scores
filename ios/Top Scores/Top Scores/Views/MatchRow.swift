@@ -1654,7 +1654,7 @@ private struct MatchCardChrome: ViewModifier {
     }
 }
 
-private struct MatchTimeStatusView: View {
+struct MatchTimeStatusView: View {
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
 
     let text: String

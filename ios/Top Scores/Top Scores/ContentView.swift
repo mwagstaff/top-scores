@@ -17,6 +17,7 @@ struct ContentView: View {
     @State private var selectedTab = 0
     @State private var fantasyTabBadge: String?
     @State private var fantasyTabShouldPulse = false
+    @State private var fantasyTabNeedsAuthentication = false
     @StateObject private var fixturesCoordinator = FixturesViewCoordinator()
     @ObservedObject private var tablesNavigationCoordinator = TablesNavigationCoordinator.shared
 
@@ -49,15 +50,26 @@ struct ContentView: View {
                     Label {
                         Text("FPL")
                     } icon: {
-                        Image("FantasyPremierLeagueLionTab")
-                            .renderingMode(.template)
-                            .scaleEffect(fantasyTabShouldPulse ? 1.08 : 1.0)
-                            .animation(
-                                fantasyTabShouldPulse
-                                    ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
-                                    : .default,
-                                value: fantasyTabShouldPulse
-                            )
+                        ZStack(alignment: .topTrailing) {
+                            Image("FantasyPremierLeagueLionTab")
+                                .renderingMode(.template)
+                                .scaleEffect(fantasyTabShouldPulse ? 1.08 : 1.0)
+                                .animation(
+                                    fantasyTabShouldPulse
+                                        ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
+                                        : .default,
+                                    value: fantasyTabShouldPulse
+                                )
+
+                            if fantasyTabNeedsAuthentication {
+                                Circle()
+                                    .fill(.red)
+                                    .frame(width: 8, height: 8)
+                                    .overlay(Circle().stroke(Color(.systemBackground), lineWidth: 1.5))
+                                    .offset(x: 4, y: -3)
+                                    .accessibilityHidden(true)
+                            }
+                        }
                     }
                 }
                 .badge(fantasyTabBadge)
@@ -114,7 +126,8 @@ struct ContentView: View {
                 selectedTab: $selectedTab,
                 fantasyManagerEntryID: fantasyManagerEntryID,
                 fantasyTabBadge: $fantasyTabBadge,
-                fantasyTabShouldPulse: $fantasyTabShouldPulse
+                fantasyTabShouldPulse: $fantasyTabShouldPulse,
+                fantasyTabNeedsAuthentication: $fantasyTabNeedsAuthentication
             )
             .frame(width: 0, height: 0)
             .allowsHitTesting(false)
@@ -132,6 +145,8 @@ private struct ContentLifecycleCoordinator: View {
     let fantasyManagerEntryID: String
     @Binding var fantasyTabBadge: String?
     @Binding var fantasyTabShouldPulse: Bool
+    @Binding var fantasyTabNeedsAuthentication: Bool
+    @AppStorage("fantasy.hasAuthenticatedBefore") private var hasAuthenticatedBefore = false
     @State private var lastAutomaticFantasyScoreRefreshAt: Date?
 
     private let fantasyBackgroundRefreshTimer = Timer.publish(
@@ -148,6 +163,9 @@ private struct ContentLifecycleCoordinator: View {
     var body: some View {
         Color.clear
             .onAppear {
+                if !hasAuthenticatedBefore, FantasySyncStore.hasPersistedSquad {
+                    hasAuthenticatedBefore = true
+                }
                 updateFantasyTabPresentation()
             }
             .onChange(of: fantasyManagerEntryID) { _, newValue in
@@ -163,6 +181,15 @@ private struct ContentLifecycleCoordinator: View {
                 }
             }
             .onChange(of: fantasyViewModel.isSeasonActive) { _, _ in
+                updateFantasyTabPresentation()
+            }
+            .onChange(of: fantasyViewModel.requiresAuthentication) { _, _ in
+                updateFantasyTabPresentation()
+            }
+            .onChange(of: fantasyViewModel.authenticatedEntryID) { _, entryID in
+                if let entryID, entryID > 0 {
+                    hasAuthenticatedBefore = true
+                }
                 updateFantasyTabPresentation()
             }
             .onChange(of: matchesStore.matches) { _, _ in
@@ -249,10 +276,17 @@ private struct ContentLifecycleCoordinator: View {
     }
 
     private func updateFantasyTabPresentation(now: Date = Date()) {
+        let nextNeedsAuthentication = fantasyShouldShowReauthenticationIndicator(
+            hasAuthenticatedBefore: hasAuthenticatedBefore,
+            requiresAuthentication: fantasyViewModel.requiresAuthentication
+        )
         let nextBadge: String?
         let nextShouldPulse: Bool
 
-        if fantasyViewModel.isSeasonActive,
+        if nextNeedsAuthentication {
+            nextBadge = nil
+            nextShouldPulse = false
+        } else if fantasyViewModel.isSeasonActive,
            !trimmedFantasyManagerEntryID.isEmpty,
            let squad = fantasyViewModel.data {
             let relevantMatches = matchesStore.matches.filter { match in
@@ -280,6 +314,10 @@ private struct ContentLifecycleCoordinator: View {
         if fantasyTabShouldPulse != nextShouldPulse {
             fantasyTabShouldPulse = nextShouldPulse
         }
+
+        if fantasyTabNeedsAuthentication != nextNeedsAuthentication {
+            fantasyTabNeedsAuthentication = nextNeedsAuthentication
+        }
     }
 
     private func isPremierLeagueMatch(_ match: Match) -> Bool {
@@ -294,6 +332,13 @@ private struct ContentLifecycleCoordinator: View {
         FantasySyncStore.persist(managerEntryID: managerEntryID, squad: squad)
         await PreferencesSyncService.shared.syncPreferences(preferences.snapshot)
     }
+}
+
+func fantasyShouldShowReauthenticationIndicator(
+    hasAuthenticatedBefore: Bool,
+    requiresAuthentication: Bool
+) -> Bool {
+    hasAuthenticatedBefore && requiresAuthentication
 }
 
 func fantasyTabMatchIsLiveOrRecentlyFinished(

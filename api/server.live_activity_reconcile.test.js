@@ -22,11 +22,31 @@ test("foreground reconcile refreshes a valid local activity without restarting i
   );
 });
 
-test("foreground reconcile replaces a stranded local activity after its server token is invalidated", () => {
+test("foreground reconcile preserves a local activity when server state is transiently missing", () => {
   assert.deepEqual(
     liveActivityForegroundReconcileDecision({
       trigger: "app_foreground",
       reportedActiveCount: 1,
+      reportedActiveActivityIds: ["activity-1"],
+      hasFreshCurrentServerActivity: false,
+      hasRecentDispatch: true,
+    }),
+    {
+      isForegroundClient: true,
+      shouldSuppressForegroundStart: true,
+      shouldPrepareForegroundContent: true,
+      requiresActivityRestart: false,
+    }
+  );
+});
+
+test("foreground reconcile restarts only the activity explicitly invalidated by APNs", () => {
+  assert.deepEqual(
+    liveActivityForegroundReconcileDecision({
+      trigger: "app_foreground",
+      reportedActiveCount: 1,
+      reportedActiveActivityIds: ["activity-1"],
+      invalidatedActivityId: "activity-1",
       hasFreshCurrentServerActivity: false,
       hasRecentDispatch: true,
     }),
@@ -36,6 +56,18 @@ test("foreground reconcile replaces a stranded local activity after its server t
       shouldPrepareForegroundContent: true,
       requiresActivityRestart: true,
     }
+  );
+});
+
+test("foreground reconcile does not restart a different local activity", () => {
+  assert.equal(
+    liveActivityForegroundReconcileDecision({
+      trigger: "app_foreground",
+      reportedActiveCount: 1,
+      reportedActiveActivityIds: ["new-activity"],
+      invalidatedActivityId: "old-activity",
+    }).requiresActivityRestart,
+    false
   );
 });
 

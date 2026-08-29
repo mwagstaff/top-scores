@@ -11,6 +11,21 @@ struct FantasyPreviousTeamTests {
         #expect(fantasyPreviousTeamPickerTitle(finalScore: 51) == "Previous team (51)")
     }
 
+    @Test func reauthenticationIndicatorRequiresPriorSuccessfulSignIn() {
+        #expect(!fantasyShouldShowReauthenticationIndicator(
+            hasAuthenticatedBefore: false,
+            requiresAuthentication: true
+        ))
+        #expect(!fantasyShouldShowReauthenticationIndicator(
+            hasAuthenticatedBefore: true,
+            requiresAuthentication: false
+        ))
+        #expect(fantasyShouldShowReauthenticationIndicator(
+            hasAuthenticatedBefore: true,
+            requiresAuthentication: true
+        ))
+    }
+
     @Test func entryHistoryDecodesHistoricalTeamValue() throws {
         let data = Data(
             #"{"event":4,"points":51,"rank":123,"overall_rank":456,"event_transfers_cost":0,"points_on_bench":8,"value":1013}"#.utf8
