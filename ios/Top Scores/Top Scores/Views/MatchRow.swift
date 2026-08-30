@@ -92,6 +92,7 @@ struct MatchRow: View {
     var showsFinishedInlineAggregateBrackets: Bool = false
     var layoutStyle: MatchRowLayoutStyle = .standard
     var presentationStyle: MatchRowPresentationStyle = .standalone
+    var broadcastRegionCode: String? = nil
     var fantasyContext: FantasyMatchRowContext = .empty
     var rowPreferences: MatchRowPreferences = .disabledFantasy
     var predictionDisplay: FixturePredictionDisplayState = .hidden
@@ -514,7 +515,7 @@ struct MatchRow: View {
             footerLeadingContent
 
             if showBroadcastDetails && !isMatchFinished {
-                TvLogoRow(channels: localeFilteredChannels(match.tvChannels))
+                TvLogoRow(channels: filteredBroadcastChannels)
                     .fixedSize(horizontal: true, vertical: false)
             }
 
@@ -787,7 +788,14 @@ struct MatchRow: View {
     private var compactPrimaryBroadcastChannel: TvChannel? {
         guard Self.shouldShowCompactBroadcastLogo(for: match) else { return nil }
         guard rowPreferences.showCompactFixtureTvLogo else { return nil }
-        return localeFilteredChannels(match.tvChannels).first
+        return filteredBroadcastChannels.first
+    }
+
+    private var filteredBroadcastChannels: [TvChannel] {
+        localeFilteredChannels(
+            match.tvChannels,
+            regionCode: broadcastRegionCode ?? Locale.current.region?.identifier
+        )
     }
 
     private var compactPrimaryBroadcastLogo: UIImage? {

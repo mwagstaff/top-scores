@@ -126,6 +126,8 @@ const fantasyScore = require("./fantasy_score");
 const { registerGoalGuesserRoutes } = require("./goal_guesser");
 const { registerGoalGuesserTestHarnessRoutes } = require("./goal_guesser_test_harness");
 const { registerStadiumArtworkRoutes } = require("./stadium_artwork");
+const { calculateWatchability } = require("./watchability");
+const majorClubDerbies = require("./major_club_derbies.json");
 
 function parseEnvBoolean(value, fallback = false) {
   if (value === undefined || value === null) return fallback;
@@ -1342,6 +1344,9 @@ let footballDatabaseLastSuccessDurationSeconds = 0;
 let footballDatabaseLastFailureDurationSeconds = 0;
 let cachedNationalEloTeams = [];
 let nationalEloLastUpdated = null;
+let cachedWatchabilityContext = null;
+let cachedWatchabilityContextVersion = null;
+const watchabilityIndexByMatchKey = new Map();
 let nationalEloUpdating = false;
 let nationalEloLastSuccessAt = null;
 let nationalEloLastFailureAt = null;
@@ -11821,6 +11826,143 @@ function resolveMatchDetailsIdFromLookup(normalizedMatch, options = {}) {
   return teamMatch ? teamMatch.id : null;
 }
 
+function watchabilityTeamNamesMatch(leftName, rightName, manualMappings = null) {
+  const left = String(leftName || "").trim();
+  const right = String(rightName || "").trim();
+  if (!left || !right) return false;
+  if (teamMatchesSelectionAliasAware(left, right, manualMappings)) return true;
+  const rightKeys = new Set(identityTeamKeys(right));
+  return identityTeamKeys(left).some((key) => rightKeys.has(key));
+}
+
+function watchabilityTableForLeague(leagueName, tables) {
+  const target = normalizeCompetitionFilterName(leagueName || "");
+  if (!target) return null;
+  return (Array.isArray(tables) ? tables : []).find((table) => {
+    const candidate = normalizeCompetitionFilterName(
+      table && (table.league_name || table.league_id) || ""
+    );
+    return candidate === target;
+  }) || null;
+}
+
+function watchabilityStandingForTeam(teamName, table, manualMappings = null) {
+  if (!table || typeof table !== "object") return null;
+  const rows = Array.isArray(table.rows)
+    ? table.rows
+    : (Array.isArray(table.groups) ? table.groups : []).flatMap((group) =>
+        Array.isArray(group && group.rows) ? group.rows : []
+      );
+  const row = rows.find((candidate) =>
+    watchabilityTeamNamesMatch(teamName, candidate && candidate.team, manualMappings)
+  );
+  if (!row) return null;
+  return {
+    position: Number(row.position),
+    points: Number(row.points),
+    team_count: rows.length,
+    played: Number(row.played),
+    goals_for: Number(row.goals_for),
+    form: Array.isArray(row.form) ? row.form.slice(-5) : [],
+  };
+}
+
+function watchabilityRivalryForMatch(match, manualMappings = null) {
+  return (Array.isArray(majorClubDerbies) ? majorClubDerbies : []).find((rivalry) => {
+    const teams = Array.isArray(rivalry && rivalry.teams) ? rivalry.teams : [];
+    if (teams.length !== 2) return false;
+    return (
+      watchabilityTeamNamesMatch(match.home_team, teams[0], manualMappings) &&
+      watchabilityTeamNamesMatch(match.away_team, teams[1], manualMappings)
+    ) || (
+      watchabilityTeamNamesMatch(match.home_team, teams[1], manualMappings) &&
+      watchabilityTeamNamesMatch(match.away_team, teams[0], manualMappings)
+    );
+  }) || null;
+}
+
+function buildWatchabilityContext() {
+  const fixtureContext = currentFixtureViewFilterContext();
+  const nationalEloTeams = Array.isArray(cachedNationalEloTeams) ? cachedNationalEloTeams : [];
+  const nationalEloIndex = buildNationalEloCandidateIndex(nationalEloTeams);
+  const nationalTeamByName = new Map();
+  const nationalEloTeamForName = (teamName) => {
+    const key = normalizeTeamName(teamName || "");
+    if (nationalTeamByName.has(key)) return nationalTeamByName.get(key);
+    const match = findBestNationalEloMatch(teamName, nationalEloTeams, nationalEloIndex);
+    const row = match && match.accepted ? match.team : null;
+    nationalTeamByName.set(key, row);
+    return row;
+  };
+  return {
+    fixtureContext,
+    nationalEloTeamForName,
+    tables: Array.isArray(cachedLeagueTables) ? cachedLeagueTables : [],
+  };
+}
+
+function currentWatchabilityContext() {
+  const version = [
+    clubEloLastUpdated || "unknown",
+    cachedClubEloTeams.length,
+    nationalEloLastUpdated || "unknown",
+    cachedNationalEloTeams.length,
+    leagueTablesLastUpdated || "unknown",
+    cachedLeagueTables.length,
+    clubEloManualMappingsMtimeMs || 0,
+  ].join(":");
+  if (cachedWatchabilityContext && cachedWatchabilityContextVersion === version) {
+    return cachedWatchabilityContext;
+  }
+  cachedWatchabilityContext = buildWatchabilityContext();
+  cachedWatchabilityContextVersion = version;
+  return cachedWatchabilityContext;
+}
+
+function watchabilityIndexForMatch(match, competitionWeight) {
+  if (!match || !Array.isArray(match.tv_channels) || match.tv_channels.length === 0) return null;
+  const cacheKey = matchKey(match);
+  const cached = watchabilityIndexByMatchKey.get(cacheKey);
+  const kickoffMs = zonedDateTimeToUtcMs(match.date, match.time, MATCH_DISPLAY_TIME_ZONE);
+  const status = normalizeMatchStatusValue(match.score_status);
+  const hasStarted = isInProgressMatchStatus(status) || isFinishedMatchStatus(status) ||
+    (Number.isFinite(kickoffMs) && kickoffMs <= Date.now());
+  if (hasStarted && cached) return cached;
+
+  const context = currentWatchabilityContext();
+  const manualMappings = context.fixtureContext.manualMappings;
+  const clubHome = context.fixtureContext.clubEloTeamForName(match.home_team);
+  const clubAway = context.fixtureContext.clubEloTeamForName(match.away_team);
+  const useNationalRatings = !clubHome && !clubAway &&
+    isLikelyNationalTeamName(match.home_team) && isLikelyNationalTeamName(match.away_team);
+  const homeRating = useNationalRatings
+    ? context.nationalEloTeamForName(match.home_team)
+    : clubHome;
+  const awayRating = useNationalRatings
+    ? context.nationalEloTeamForName(match.away_team)
+    : clubAway;
+  const homeElo = Number(homeRating && (homeRating.Elo ?? homeRating.Points));
+  const awayElo = Number(awayRating && (awayRating.Elo ?? awayRating.Points));
+  const table = watchabilityTableForLeague(match.league, context.tables);
+  const rivalry = watchabilityRivalryForMatch(match, manualMappings);
+
+  const index = calculateWatchability({
+    competitionName: match.league,
+    competitionWeight,
+    homeElo: Number.isFinite(homeElo) ? homeElo : null,
+    awayElo: Number.isFinite(awayElo) ? awayElo : null,
+    homeStanding: watchabilityStandingForTeam(match.home_team, table, manualMappings),
+    awayStanding: watchabilityStandingForTeam(match.away_team, table, manualMappings),
+    stage: match.league_subcategory || match.stage_name || "League",
+    rivalryName: rivalry && rivalry.name,
+  });
+  watchabilityIndexByMatchKey.set(cacheKey, index);
+  if (watchabilityIndexByMatchKey.size > 10000) {
+    watchabilityIndexByMatchKey.delete(watchabilityIndexByMatchKey.keys().next().value);
+  }
+  return index;
+}
+
 function toMatchListPayload(match, options = {}) {
   const normalized = normalizeMatchRecord(match);
   if (!normalized) return null;
@@ -11842,6 +11984,10 @@ function toMatchListPayload(match, options = {}) {
   const competitionWeight = competitionWeightForLeagueName(normalized.league);
   if (Number.isFinite(competitionWeight)) {
     payload.competition_weight = competitionWeight;
+  }
+  const watchabilityIndex = watchabilityIndexForMatch(normalized, competitionWeight);
+  if (watchabilityIndex) {
+    payload.watchability_index = watchabilityIndex;
   }
 
   if (normalized.league_subcategory) {
@@ -17073,6 +17219,9 @@ function clearFootballOperationalMemoryState() {
   footballDatabaseLastUpdated = null;
   cachedNationalEloTeams = [];
   nationalEloLastUpdated = null;
+  cachedWatchabilityContext = null;
+  cachedWatchabilityContextVersion = null;
+  watchabilityIndexByMatchKey.clear();
   matchDetailsById = new Map();
   matchDetailsActiveRefreshUntilById.clear();
   matchDetailsRefreshNotBeforeById.clear();
@@ -18725,6 +18874,20 @@ function canonicalMatchDetailsToListPayload(payload, options = {}) {
     tv_channels: uniqueChannels(statePayload.tv_channels),
     match_details_id: statePayload.id,
   };
+  const competitionWeight = competitionWeightForLeagueName(statePayload.league);
+  if (Number.isFinite(competitionWeight)) {
+    listPayload.competition_weight = competitionWeight;
+  }
+  const watchabilityIndex = watchabilityIndexForMatch(
+    {
+      ...statePayload,
+      league_subcategory: payload && payload.league_subcategory,
+    },
+    competitionWeight
+  );
+  if (watchabilityIndex) {
+    listPayload.watchability_index = watchabilityIndex;
+  }
 
   if (options.includeInternalMetadata === true && payload && payload.updated_at) {
     listPayload._source_updated_at = String(payload.updated_at);

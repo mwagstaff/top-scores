@@ -31,7 +31,7 @@ struct TVListingsTimelineTests {
         ))
     }
 
-    @Test func matchesUseStrictDateAllCompetitionsAndRequestedRegion() {
+    @Test func matchesUseStrictDateAllCompetitionsAndUKChannels() {
         let matches = [
             makeMatch(
                 date: "2026-08-29",
@@ -58,6 +58,13 @@ struct TVListingsTimelineTests {
                 channels: [TvChannel(name: "Apple TV", countryCode: "US")]
             ),
             makeMatch(
+                date: "2026-08-29",
+                time: "18:00",
+                home: "Legacy BBC",
+                league: "FA Cup",
+                channels: [TvChannel(name: "BBC One")]
+            ),
+            makeMatch(
                 date: "2026-08-30",
                 time: "00:30",
                 home: "Tomorrow FC",
@@ -68,8 +75,7 @@ struct TVListingsTimelineTests {
 
         let listings = TVListingsTimeline.matches(
             for: "2026-08-29",
-            from: matches,
-            regionCode: "GB"
+            from: matches
         )
 
         #expect(listings.map(\.homeTeam) == ["Barcelona", "Chelsea"])
@@ -95,8 +101,7 @@ struct TVListingsTimelineTests {
 
         let listings = TVListingsTimeline.matches(
             for: "2026-08-29",
-            from: matches,
-            regionCode: "GB"
+            from: matches
         )
 
         #expect(listings.map(\.league) == ["Championship", "Premier League"])
@@ -125,6 +130,84 @@ struct TVListingsTimelineTests {
         ) == matches.endIndex)
     }
 
+    @Test func currentTimeStatusShowsNextMatchWhenNothingIsLive() throws {
+        let matches = [
+            makeMatch(date: "2026-08-29", time: "09:00", home: "Finished"),
+            makeMatch(date: "2026-08-29", time: "12:00", home: "Next"),
+            makeMatch(date: "2026-08-29", time: "14:00", home: "Later"),
+        ]
+        let nextKickoff = try #require(matches[1].dateTime)
+        let now = nextKickoff.addingTimeInterval(-60 * 60)
+
+        #expect(TVListingsTimeline.currentTimeStatus(in: matches, now: now) == .nextMatch(
+            at: nextKickoff
+        ))
+    }
+
+    @Test func currentTimeStatusPrefersLiveMatchOverNextKickoff() throws {
+        let matches = [
+            makeMatch(
+                date: "2026-08-29",
+                time: "10:00",
+                home: "Live",
+                scoreStatus: "38"
+            ),
+            makeMatch(date: "2026-08-29", time: "12:00", home: "Next"),
+        ]
+        let liveKickoff = try #require(matches[0].dateTime)
+        let now = liveKickoff.addingTimeInterval(38 * 60)
+
+        #expect(TVListingsTimeline.currentTimeStatus(in: matches, now: now) == .onNow)
+    }
+
+    @Test func currentTimeStatusHandlesEndOfDay() throws {
+        let matches = [
+            makeMatch(date: "2026-08-29", time: "20:00", home: "Last"),
+        ]
+        let kickoff = try #require(matches[0].dateTime)
+
+        #expect(TVListingsTimeline.currentTimeStatus(
+            in: matches,
+            now: kickoff.addingTimeInterval(3 * 60 * 60)
+        ) == .noMoreMatches)
+    }
+
+    @Test func matchDecodesWatchabilityIndexBreakdown() throws {
+        let json = """
+        {
+          "date": "2026-08-29",
+          "time": "20:00",
+          "league": "Premier League",
+          "home_team": "Arsenal",
+          "away_team": "Liverpool",
+          "tv_channels": [],
+          "watchability_index": {
+            "score": 91,
+            "tier": "must_watch",
+            "stars": 5,
+            "confidence": 0.94,
+            "model_version": "v1",
+            "components": [
+              {
+                "key": "competition",
+                "label": "Competition",
+                "score": 100,
+                "weight": 50,
+                "contribution": 50,
+                "detail": "Premier League carries a 100/100 competition weighting."
+              }
+            ]
+          }
+        }
+        """
+
+        let match = try JSONDecoder().decode(Match.self, from: Data(json.utf8))
+
+        #expect(match.watchabilityIndex?.score == 91)
+        #expect(match.watchabilityIndex?.tier == "must_watch")
+        #expect(match.watchabilityIndex?.components.first?.key == "competition")
+    }
+
     private var testCalendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.locale = Locale(identifier: "en_GB")
@@ -137,6 +220,7 @@ struct TVListingsTimelineTests {
         time: String,
         home: String,
         league: String = "Premier League",
+        scoreStatus: String? = nil,
         channels: [TvChannel] = [TvChannel(name: "Sky Sports", countryCode: "GB")]
     ) -> Match {
         Match(
@@ -145,7 +229,8 @@ struct TVListingsTimelineTests {
             homeTeam: home,
             awayTeam: "Away",
             league: league,
-            tvChannels: channels
+            tvChannels: channels,
+            scoreStatus: scoreStatus
         )
     }
 }

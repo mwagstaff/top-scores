@@ -359,6 +359,18 @@ test("toMatchListPayload includes server-controlled competition weight", () => {
   assert.equal(typeof payload.competition_weight, "number");
 });
 
+test("toMatchListPayload includes a stable watchability breakdown for televised matches", () => {
+  const payload = toMatchListPayload(baseMatch({
+    league: "Premier League",
+    tv_channels: [{ name: "Sky Sports", countryCode: "GB" }],
+  }));
+
+  assert.equal(payload.watchability_index.tier, "highly_watchable");
+  assert.equal(payload.watchability_index.stars, Math.round(payload.watchability_index.score / 20));
+  assert.equal(payload.watchability_index.model_version, "v1");
+  assert.ok(payload.watchability_index.components.length >= 6);
+});
+
 test("shouldRefreshCanonicalMatchDetails heals missing canonical records", () => {
   clearFootballOperationalMemoryState();
 

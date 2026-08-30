@@ -563,6 +563,35 @@ struct TvChannel: Codable, Equatable, Hashable, Sendable {
     }
 }
 
+nonisolated struct MatchWatchabilityComponent: Codable, Hashable, Sendable, Identifiable {
+    let key: String
+    let label: String
+    let score: Int
+    let weight: Int
+    let contribution: Double
+    let detail: String
+
+    nonisolated var id: String { key }
+}
+
+nonisolated struct MatchWatchabilityIndex: Codable, Hashable, Sendable {
+    let score: Int
+    let tier: String
+    let stars: Int
+    let confidence: Double
+    let modelVersion: String
+    let components: [MatchWatchabilityComponent]
+
+    enum CodingKeys: String, CodingKey {
+        case score
+        case tier
+        case stars
+        case confidence
+        case modelVersion = "model_version"
+        case components
+    }
+}
+
 struct Match: Identifiable, Codable, Hashable, Sendable {
     let date: String
     let time: String
@@ -582,6 +611,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     let seasonID: Int?
     let roundNumber: Int?
     let competitionWeight: Double?
+    let watchabilityIndex: MatchWatchabilityIndex?
     let detailsURL: String?
     let matchDetailsIDValue: String?
     let hasBbcSourceValue: Bool?
@@ -627,6 +657,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         seasonID: Int? = nil,
         roundNumber: Int? = nil,
         competitionWeight: Double? = nil,
+        watchabilityIndex: MatchWatchabilityIndex? = nil,
         detailsURL: String? = nil,
         matchDetailsID: String? = nil,
         hasBbcSource: Bool? = nil,
@@ -671,6 +702,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         self.seasonID = seasonID
         self.roundNumber = roundNumber
         self.competitionWeight = competitionWeight
+        self.watchabilityIndex = watchabilityIndex
         self.detailsURL = detailsURL
         self.matchDetailsIDValue = Self.normalizedMatchDetailsID(matchDetailsID)
         self.hasBbcSourceValue = hasBbcSource
@@ -940,6 +972,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             seasonID: seasonID,
             roundNumber: roundNumber,
             competitionWeight: competitionWeight,
+            watchabilityIndex: watchabilityIndex,
             detailsURL: detailsURL,
             matchDetailsID: matchDetailsIDValue,
             hasBbcSource: hasBbcSourceValue,
@@ -988,6 +1021,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             seasonID: seasonID,
             roundNumber: roundNumber,
             competitionWeight: competitionWeight,
+            watchabilityIndex: watchabilityIndex,
             detailsURL: detailsURL,
             matchDetailsID: matchDetailsIDValue,
             hasBbcSource: hasBbcSourceValue,
@@ -1036,6 +1070,10 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         seasonID = try container.decodeIfPresent(Int.self, forKey: .seasonID)
         roundNumber = try container.decodeIfPresent(Int.self, forKey: .roundNumber)
         competitionWeight = try container.decodeIfPresent(Double.self, forKey: .competitionWeight)
+        watchabilityIndex = try container.decodeIfPresent(
+            MatchWatchabilityIndex.self,
+            forKey: .watchabilityIndex
+        )
         detailsURL = try container.decodeIfPresent(String.self, forKey: .detailsURL)
         matchDetailsIDValue = Self.normalizedMatchDetailsID(
             try container.decodeIfPresent(String.self, forKey: .matchDetailsIDValue)
@@ -1085,6 +1123,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         case seasonID = "season_id"
         case roundNumber = "round_number"
         case competitionWeight = "competition_weight"
+        case watchabilityIndex = "watchability_index"
         case detailsURL = "details_url"
         case matchDetailsIDValue = "match_details_id"
         case hasBbcSourceValue = "has_bbc_source"
@@ -1132,6 +1171,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         try container.encodeIfPresent(seasonID, forKey: .seasonID)
         try container.encodeIfPresent(roundNumber, forKey: .roundNumber)
         try container.encodeIfPresent(competitionWeight, forKey: .competitionWeight)
+        try container.encodeIfPresent(watchabilityIndex, forKey: .watchabilityIndex)
         try container.encodeIfPresent(detailsURL, forKey: .detailsURL)
         try container.encodeIfPresent(matchDetailsIDValue, forKey: .matchDetailsIDValue)
         try container.encodeIfPresent(hasBbcSourceValue, forKey: .hasBbcSourceValue)
@@ -1176,6 +1216,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         lhs.seasonID == rhs.seasonID &&
         lhs.roundNumber == rhs.roundNumber &&
         lhs.competitionWeight == rhs.competitionWeight &&
+        lhs.watchabilityIndex == rhs.watchabilityIndex &&
         lhs.detailsURL == rhs.detailsURL &&
         lhs.matchDetailsIDValue == rhs.matchDetailsIDValue &&
         lhs.hasBbcSourceValue == rhs.hasBbcSourceValue &&
@@ -1251,6 +1292,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             seasonID: seasonID,
             roundNumber: roundNumber,
             competitionWeight: competitionWeight,
+            watchabilityIndex: watchabilityIndex,
             detailsURL: details.detailsURL ?? detailsURL,
             matchDetailsID: details.id,
             hasBbcSource: hasBbcSourceValue,
@@ -1302,6 +1344,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             seasonID: refreshed.seasonID,
             roundNumber: refreshed.roundNumber,
             competitionWeight: refreshed.competitionWeight,
+            watchabilityIndex: refreshed.watchabilityIndex,
             detailsURL: refreshed.detailsURL,
             matchDetailsID: refreshed.matchDetailsID,
             hasBbcSource: refreshed.hasBbcSourceValue,
