@@ -304,9 +304,7 @@ final class FantasyViewModel: ObservableObject {
 
     private var currentLiveFixtureTeamIDs: Set<Int> {
         Set(currentSquadSnapshot?.fixtures.flatMap { fixture -> [Int] in
-            guard fixture.started == true,
-                  fixture.finished != true,
-                  fixture.finishedProvisional != true else {
+            guard FantasyFixtureLiveStateResolver.isLive(fixture) else {
                 return []
             }
             return [fixture.teamH, fixture.teamA]
@@ -423,14 +421,12 @@ final class FantasyViewModel: ObservableObject {
     var automaticScoreRefreshMinimumInterval: TimeInterval {
         guard let data, let snapshot = currentSquadSnapshot else { return 15 * 60 }
         let hasAnyLiveFixture = snapshot.fixtures.contains { fixture in
-            fixture.started == true
-                && fixture.finished != true
-                && fixture.finishedProvisional != true
+            FantasyFixtureLiveStateResolver.isLive(fixture)
         }
         if data.hasActiveFixtures || (!rivalSquads.isEmpty && hasAnyLiveFixture) { return 30 }
         if data.scorePhase == .provisional {
             let hasUpcomingRelevantFixture = snapshot.fixtures.contains { fixture in
-                guard fixture.started != true,
+                guard !FantasyFixtureLiveStateResolver.isLive(fixture),
                       fixture.finished != true,
                       fixture.finishedProvisional != true else {
                     return false
@@ -742,7 +738,8 @@ final class FantasyViewModel: ObservableObject {
                 liveResponse: snapshot.liveResponse,
                 fixtures: snapshot.fixtures,
                 fixture: fixture,
-                bootstrap: bootstrap
+                bootstrap: bootstrap,
+                match: match
             )
         }
 
@@ -799,7 +796,8 @@ final class FantasyViewModel: ObservableObject {
         liveResponse: FantasyEventLiveResponse,
         fixtures: [FantasyFixture],
         fixture: FantasyFixture,
-        bootstrap: FantasyBootstrapLookup
+        bootstrap: FantasyBootstrapLookup,
+        match: Match
     ) -> FantasyMatchFixtureContext {
         let elementsByID = Dictionary(uniqueKeysWithValues: bootstrap.elements.map { ($0.id, $0) })
         let liveByElementID = Dictionary(uniqueKeysWithValues: liveResponse.elements.map { ($0.id, $0) })
@@ -808,6 +806,23 @@ final class FantasyViewModel: ObservableObject {
             counts[fixture.teamH, default: 0] += 1
             counts[fixture.teamA, default: 0] += 1
         }
+        let fixtureBPSByElementID = liveResponse.elements.reduce(into: [Int: Int]()) { values, liveElement in
+            guard let teamID = elementsByID[liveElement.id]?.team,
+                  teamID == fixture.teamH || teamID == fixture.teamA else {
+                return
+            }
+            let hasSingleFixture = fixtureCountsByTeamID[teamID] == 1
+            let minutes = liveElement.statValue("minutes", forFixtureID: fixture.id)
+                ?? (hasSingleFixture ? liveElement.stats.minutes : nil)
+                ?? 0
+            let bps = liveElement.statValue("bps", forFixtureID: fixture.id)
+                ?? (hasSingleFixture ? liveElement.stats.bps : nil)
+            guard minutes > 0, let bps else { return }
+            values[liveElement.id] = bps
+        }
+        let provisionalBonusByElementID = FantasyProvisionalBonusResolver.bonusByElementID(
+            bpsByElementID: fixtureBPSByElementID
+        )
 
         var expectedPointsByElementID: [Int: Double] = [:]
         var pointsByElementID: [Int: Int] = [:]
@@ -833,7 +848,19 @@ final class FantasyViewModel: ObservableObject {
             }
 
             let rawFixturePoints: Int
-            if let explainedPoints = liveByElementID[player.elementID]?.points(forFixtureID: fixture.id) {
+            if match.isInProgress,
+               let teamID,
+               teamID == fixture.teamH || teamID == fixture.teamA {
+                rawFixturePoints = FantasyLiveScoringEngine.score(
+                    player: player,
+                    liveElement: liveByElementID[player.elementID],
+                    fixtureID: fixture.id,
+                    hasSingleGameweekFixture: fixtureCountsByTeamID[teamID] == 1,
+                    match: match,
+                    isHomeTeam: teamID == fixture.teamH,
+                    provisionalBonus: provisionalBonusByElementID[player.elementID]
+                ).total
+            } else if let explainedPoints = liveByElementID[player.elementID]?.points(forFixtureID: fixture.id) {
                 rawFixturePoints = explainedPoints
             } else if let teamID, fixtureCountsByTeamID[teamID] == 1 {
                 // Older cached payloads may predate decoding `explain`; the
@@ -953,7 +980,8 @@ final class FantasyViewModel: ObservableObject {
             liveResponse: record.liveResponse,
             fixtures: record.fixtures,
             fixture: fixture,
-            bootstrap: record.bootstrap
+            bootstrap: record.bootstrap,
+            match: match
         )
         preparedHistoricalRecordDates[match.id] = record.savedAt
         matchHistoryRevision += 1
@@ -1002,7 +1030,10 @@ final class FantasyViewModel: ObservableObject {
             return
         }
 
-        await loadPersistedMatchHistoryIfNeeded(managerEntryID: entryID)
+        guard !isLoading, !isRefreshing else {
+            logPerf("refresh_skipped entry_id=\(entryID) reason=already_refreshing")
+            return
+        }
 
         let hadExistingData = data != nil
         if hadExistingData {
@@ -1016,6 +1047,8 @@ final class FantasyViewModel: ObservableObject {
             isLoading = false
             isRefreshing = false
         }
+
+        await loadPersistedMatchHistoryIfNeeded(managerEntryID: entryID)
 
         do {
             cancelBackgroundRefreshWork()

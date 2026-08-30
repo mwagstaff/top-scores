@@ -54,6 +54,7 @@ private struct FantasySignInWebView: UIViewRepresentable {
         if let url = URL(string: "https://fantasy.premierleague.com/") {
             webView.load(URLRequest(url: url))
         }
+        context.coordinator.startDetection(webView: webView)
         return webView
     }
 
@@ -63,41 +64,84 @@ private struct FantasySignInWebView: UIViewRepresentable {
         Coordinator(onAuthenticated: onAuthenticated)
     }
 
+    static func dismantleUIView(_ webView: WKWebView, coordinator: Coordinator) {
+        coordinator.stopDetection()
+        webView.navigationDelegate = nil
+        webView.stopLoading()
+    }
+
+    @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate {
         private let onAuthenticated: (Int) -> Void
+        private let authenticatedClient = FantasyAuthenticatedAPIClient()
         private var hasAuthenticated = false
+        private var hasCapturedSession = false
+        private var detectionTask: Task<Void, Never>?
+        private weak var webView: WKWebView?
 
         init(onAuthenticated: @escaping (Int) -> Void) {
             self.onAuthenticated = onAuthenticated
         }
 
-        func webView(_ webView: WKWebView, didFinish navigation: WKNavigation?) {
-            guard !hasAuthenticated else { return }
-
-            let script = """
-            const response = await fetch('/api/me/', {
-                cache: 'no-store',
-                credentials: 'include'
-            });
-            if (!response.ok) {
-                return null;
-            }
-            const account = await response.json();
-            const entryID = account?.player?.entry ?? account?.player?.entry_id ?? account?.entry ?? account?.entry_id;
-            return Number.isInteger(Number(entryID)) && Number(entryID) > 0 ? Number(entryID) : null;
-            """
-
-            webView.callAsyncJavaScript(script, arguments: [:], in: nil, in: .page) { [weak self] result in
-                guard let self,
-                      !self.hasAuthenticated,
-                      case let .success(value) = result,
-                      let entryID = (value as? NSNumber)?.intValue,
-                      entryID > 0 else {
-                    return
+        func startDetection(webView: WKWebView) {
+            guard detectionTask == nil else { return }
+            self.webView = webView
+            detectionTask = Task { [weak self] in
+                defer { self?.detectionTask = nil }
+                while !Task.isCancelled {
+                    guard let self, !hasAuthenticated else { return }
+                    if !hasCapturedSession,
+                       let sessionJSON = try? await oidcSessionJSON(),
+                       sessionJSON.isEmpty == false,
+                       (try? FantasyAuthSessionStore.saveOIDCSessionJSON(sessionJSON)) != nil {
+                        hasCapturedSession = true
+                        #if DEBUG
+                        diagnosticPrint("[FantasySignIn] oidc_session_captured")
+                        #endif
+                    }
+                    do {
+                        let entryID = try await authenticatedClient.detectSignedInEntryID()
+                        hasAuthenticated = true
+                        #if DEBUG
+                        diagnosticPrint("[FantasySignIn] account_detected entry_id=\(entryID)")
+                        #endif
+                        onAuthenticated(entryID)
+                        return
+                    } catch let error as FantasyPublicAPIError {
+                        if case .authenticationRequired = error {
+                            hasCapturedSession = false
+                        }
+                    } catch {
+                        // A transient web or network error is retried while the
+                        // sign-in sheet remains visible.
+                    }
+                    do {
+                        try await Task.sleep(for: .seconds(1))
+                    } catch {
+                        return
+                    }
                 }
-                self.hasAuthenticated = true
-                self.onAuthenticated(entryID)
             }
+        }
+
+        func stopDetection() {
+            detectionTask?.cancel()
+            detectionTask = nil
+            webView = nil
+        }
+
+        private func oidcSessionJSON() async throws -> String? {
+            guard let webView else { return nil }
+            let script = """
+            (() => {
+                const clientID = 'bfcbaf69-aade-4c1b-8f00-c1cb8a193030';
+                const key = Object.keys(window.localStorage).find(candidate =>
+                    candidate.startsWith('oidc.user:') && candidate.includes(clientID)
+                );
+                return key ? window.localStorage.getItem(key) : null;
+            })();
+            """
+            return try await webView.evaluateJavaScript(script) as? String
         }
     }
 }

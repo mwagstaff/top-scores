@@ -657,6 +657,15 @@ nonisolated struct FantasyLiveElement: Codable, Hashable {
         }
     }
 
+    func statValue(_ identifier: String, forFixtureID fixtureID: Int) -> Int? {
+        guard let fixture = explain.first(where: { $0.fixture == fixtureID }) else {
+            return nil
+        }
+        let matchingStats = fixture.stats.filter { $0.identifier == identifier }
+        guard !matchingStats.isEmpty else { return nil }
+        return matchingStats.reduce(0) { $0 + ($1.value ?? 0) }
+    }
+
     private enum CodingKeys: String, CodingKey {
         case id
         case stats
@@ -670,11 +679,27 @@ nonisolated struct FantasyLiveFixtureExplanation: Codable, Hashable {
 }
 
 nonisolated struct FantasyLiveFixtureStat: Codable, Hashable {
+    let identifier: String?
     let points: Int
+    let value: Int?
     let pointsModification: Int?
 
+    init(
+        identifier: String? = nil,
+        points: Int,
+        value: Int? = nil,
+        pointsModification: Int?
+    ) {
+        self.identifier = identifier
+        self.points = points
+        self.value = value
+        self.pointsModification = pointsModification
+    }
+
     enum CodingKeys: String, CodingKey {
+        case identifier
         case points
+        case value
         case pointsModification = "points_modification"
     }
 }
@@ -684,16 +709,68 @@ nonisolated struct FantasyLiveStats: Codable, Hashable {
     let minutes: Int?
     let goalsScored: Int?
     let assists: Int?
+    let cleanSheets: Int?
+    let goalsConceded: Int?
+    let ownGoals: Int?
+    let penaltiesSaved: Int?
+    let penaltiesMissed: Int?
     let yellowCards: Int?
     let redCards: Int?
+    let saves: Int?
+    let bonus: Int?
+    let bps: Int?
+    let defensiveContribution: Int?
+
+    init(
+        totalPoints: Int,
+        minutes: Int?,
+        goalsScored: Int?,
+        assists: Int?,
+        yellowCards: Int?,
+        redCards: Int?,
+        cleanSheets: Int? = nil,
+        goalsConceded: Int? = nil,
+        ownGoals: Int? = nil,
+        penaltiesSaved: Int? = nil,
+        penaltiesMissed: Int? = nil,
+        saves: Int? = nil,
+        bonus: Int? = nil,
+        bps: Int? = nil,
+        defensiveContribution: Int? = nil
+    ) {
+        self.totalPoints = totalPoints
+        self.minutes = minutes
+        self.goalsScored = goalsScored
+        self.assists = assists
+        self.cleanSheets = cleanSheets
+        self.goalsConceded = goalsConceded
+        self.ownGoals = ownGoals
+        self.penaltiesSaved = penaltiesSaved
+        self.penaltiesMissed = penaltiesMissed
+        self.yellowCards = yellowCards
+        self.redCards = redCards
+        self.saves = saves
+        self.bonus = bonus
+        self.bps = bps
+        self.defensiveContribution = defensiveContribution
+    }
 
     enum CodingKeys: String, CodingKey {
         case totalPoints = "total_points"
         case minutes
         case goalsScored = "goals_scored"
         case assists
+        case cleanSheets = "clean_sheets"
+        case goalsConceded = "goals_conceded"
+        case ownGoals = "own_goals"
+        case penaltiesSaved = "penalties_saved"
+        case penaltiesMissed = "penalties_missed"
         case yellowCards = "yellow_cards"
         case redCards = "red_cards"
+        case saves
+        case bonus
+        case bps
+        case defensiveContribution = "defensive_contribution"
     }
 }
 
@@ -1849,6 +1926,301 @@ struct FantasyMatchFixtureContext: Hashable, Sendable {
 
     func points(for player: FantasyDisplayPlayer) -> Int {
         pointsByElementID[player.elementID] ?? 0
+    }
+}
+
+struct FantasyLiveScore: Hashable, Sendable {
+    let appearance: Int
+    let goals: Int
+    let assists: Int
+    let cleanSheet: Int
+    let goalsConceded: Int
+    let saves: Int
+    let penaltySaves: Int
+    let defensiveContribution: Int
+    let yellowCards: Int
+    let redCards: Int
+    let ownGoals: Int
+    let penaltiesMissed: Int
+    let bonus: Int
+
+    var total: Int {
+        appearance + goals + assists + cleanSheet + goalsConceded + saves + penaltySaves +
+            defensiveContribution + yellowCards + redCards + ownGoals + penaltiesMissed + bonus
+    }
+}
+
+enum FantasyProvisionalBonusResolver {
+    /// Converts the live fixture BPS ranking into FPL's provisional 3/2/1
+    /// allocation, including the official tie handling.
+    nonisolated static func bonusByElementID(
+        bpsByElementID: [Int: Int]
+    ) -> [Int: Int] {
+        let ranked = bpsByElementID
+            .filter { $0.value > 0 }
+            .sorted {
+                if $0.value == $1.value { return $0.key < $1.key }
+                return $0.value > $1.value
+            }
+        guard !ranked.isEmpty else { return [:] }
+
+        var result: [Int: Int] = [:]
+        var availableBonus = 3
+        var index = 0
+        while index < ranked.count, availableBonus > 0 {
+            let bps = ranked[index].value
+            var end = index + 1
+            while end < ranked.count, ranked[end].value == bps {
+                end += 1
+            }
+            for player in ranked[index..<end] {
+                result[player.key] = availableBonus
+            }
+            availableBonus -= end - index
+            index = end
+        }
+        return result
+    }
+}
+
+enum FantasyLiveScoringEngine {
+    nonisolated static func score(
+        player: FantasyDisplayPlayer,
+        liveElement: FantasyLiveElement?,
+        fixtureID: Int,
+        hasSingleGameweekFixture: Bool,
+        match: Match,
+        isHomeTeam: Bool,
+        provisionalBonus: Int? = nil
+    ) -> FantasyLiveScore {
+        let stats = liveElement?.stats
+
+        func liveValue(_ identifier: String, fallback: Int?) -> Int {
+            if let fixtureValue = liveElement?.statValue(identifier, forFixtureID: fixtureID) {
+                return fixtureValue
+            }
+            return hasSingleGameweekFixture ? (fallback ?? 0) : 0
+        }
+
+        let teamGoals = isHomeTeam ? match.homeGoalScorers : match.awayGoalScorers
+        let teamAssists = isHomeTeam ? match.homeAssists : match.awayAssists
+        let teamYellowCards = isHomeTeam ? match.homeYellowCards : match.awayYellowCards
+        let teamRedCards = isHomeTeam ? match.homeRedCards : match.awayRedCards
+        let lineup = isHomeTeam ? match.teamLineups?.home : match.teamLineups?.away
+        let matchMinute = scoringMinute(match.scoreStatus)
+        let observedMinutes = playerMinutes(
+            player: player,
+            lineup: lineup,
+            matchMinute: matchMinute
+        )
+        let minutes = max(liveValue("minutes", fallback: stats?.minutes), observedMinutes ?? 0)
+        let observedGoals = incidentCount(
+            for: player,
+            incidents: teamGoals.map { ($0.player, $0.goalTimes.count) }
+        )
+        let observedAssists = incidentCount(
+            for: player,
+            incidents: teamAssists.map { ($0.player, $0.assistTimes.count) }
+        )
+        let observedYellowCards = incidentCount(
+            for: player,
+            incidents: teamYellowCards.map { ($0.player, $0.yellowCardTimes.count) }
+        )
+        let observedRedCards = incidentCount(
+            for: player,
+            incidents: teamRedCards.map { ($0.player, $0.redCardTimes.count) }
+        )
+        let observedOwnGoals = incidentCount(
+            for: player,
+            incidents: teamGoals.map { ($0.player, $0.ownGoalTimes.count) }
+        )
+
+        let goals = max(liveValue("goals_scored", fallback: stats?.goalsScored), observedGoals)
+        let assists = max(liveValue("assists", fallback: stats?.assists), observedAssists)
+        let yellowCards = max(
+            liveValue("yellow_cards", fallback: stats?.yellowCards),
+            observedYellowCards
+        )
+        let redCards = max(liveValue("red_cards", fallback: stats?.redCards), observedRedCards)
+        let ownGoals = max(liveValue("own_goals", fallback: stats?.ownGoals), observedOwnGoals)
+        let officialGoalsConceded = liveValue("goals_conceded", fallback: stats?.goalsConceded)
+        let opponentScore = (isHomeTeam ? match.awayScore : match.homeScore) ?? 0
+        let goalsConceded: Int = {
+            guard minutes > 0 else { return 0 }
+            return playerIsCurrentlyOnPitch(
+                player: player,
+                lineup: lineup,
+                matchMinute: matchMinute
+            ) == false ? officialGoalsConceded : max(officialGoalsConceded, opponentScore)
+        }()
+        let saves = liveValue("saves", fallback: stats?.saves)
+        let penaltySaves = liveValue("penalties_saved", fallback: stats?.penaltiesSaved)
+        let penaltiesMissed = liveValue("penalties_missed", fallback: stats?.penaltiesMissed)
+        let defensiveContributions = liveValue(
+            "defensive_contribution",
+            fallback: stats?.defensiveContribution
+        )
+        let bonus = max(
+            liveValue("bonus", fallback: stats?.bonus),
+            provisionalBonus ?? 0
+        )
+
+        let appearancePoints = minutes == 0 ? 0 : (minutes < 60 ? 1 : 2)
+        let goalPointsPerGoal: Int = {
+            switch player.positionType {
+            case .goalkeeper: return 10
+            case .defender: return 6
+            case .midfielder: return 5
+            case .forward: return 4
+            }
+        }()
+        let cleanSheetPoints: Int = {
+            guard minutes >= 60, goalsConceded == 0 else { return 0 }
+            switch player.positionType {
+            case .goalkeeper, .defender: return 4
+            case .midfielder: return 1
+            case .forward: return 0
+            }
+        }()
+        let goalsConcededPoints: Int = {
+            guard player.positionType == .goalkeeper || player.positionType == .defender else {
+                return 0
+            }
+            return -(goalsConceded / 2)
+        }()
+        let defensiveContributionPoints: Int = {
+            let threshold: Int
+            switch player.positionType {
+            case .goalkeeper: return 0
+            case .defender: threshold = 10
+            case .midfielder, .forward: threshold = 12
+            }
+            return defensiveContributions >= threshold ? 2 : 0
+        }()
+
+        return FantasyLiveScore(
+            appearance: appearancePoints,
+            goals: goals * goalPointsPerGoal,
+            assists: assists * 3,
+            cleanSheet: cleanSheetPoints,
+            goalsConceded: goalsConcededPoints,
+            saves: player.positionType == .goalkeeper ? saves / 3 : 0,
+            penaltySaves: penaltySaves * 5,
+            defensiveContribution: defensiveContributionPoints,
+            yellowCards: -yellowCards,
+            redCards: redCards * -3,
+            ownGoals: ownGoals * -2,
+            penaltiesMissed: penaltiesMissed * -2,
+            bonus: bonus
+        )
+    }
+
+    private nonisolated static func incidentCount(
+        for player: FantasyDisplayPlayer,
+        incidents: [(name: String, count: Int)]
+    ) -> Int {
+        incidents.reduce(0) { result, incident in
+            guard namesMatch(
+                incident.name,
+                playerFullName: player.fullName,
+                playerDisplayName: player.displayName
+            ) else {
+                return result
+            }
+            return result + incident.count
+        }
+    }
+
+    private nonisolated static func playerMinutes(
+        player: FantasyDisplayPlayer,
+        lineup: MatchTeamLineup?,
+        matchMinute: Int?
+    ) -> Int? {
+        guard let lineup, let matchMinute else { return nil }
+        if lineup.startingLineup.contains(where: { lineupPlayerMatches($0, player: player) }) {
+            let offMinute = lineup.substitutions.first(where: {
+                lineupPlayerMatches($0.playerOff, player: player)
+            }).flatMap { scoringMinute($0.minute) }
+            return min(matchMinute, offMinute ?? matchMinute)
+        }
+        if let onMinute = lineup.substitutions.first(where: {
+            lineupPlayerMatches($0.playerOn, player: player)
+        }).flatMap({ scoringMinute($0.minute) }) {
+            return max(0, matchMinute - onMinute)
+        }
+        return 0
+    }
+
+    private nonisolated static func playerIsCurrentlyOnPitch(
+        player: FantasyDisplayPlayer,
+        lineup: MatchTeamLineup?,
+        matchMinute: Int?
+    ) -> Bool? {
+        guard let lineup, let matchMinute else { return nil }
+        if lineup.startingLineup.contains(where: { lineupPlayerMatches($0, player: player) }) {
+            let hasGoneOff = lineup.substitutions.contains {
+                lineupPlayerMatches($0.playerOff, player: player) &&
+                    (scoringMinute($0.minute) ?? Int.max) <= matchMinute
+            }
+            return !hasGoneOff
+        }
+        return lineup.substitutions.contains {
+            lineupPlayerMatches($0.playerOn, player: player) &&
+                (scoringMinute($0.minute) ?? Int.max) <= matchMinute
+        }
+    }
+
+    private nonisolated static func scoringMinute(_ rawValue: String?) -> Int? {
+        guard let rawValue else { return nil }
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let plusIndex = trimmed.firstIndex(of: "+") {
+            let regulationPart = trimmed[..<plusIndex]
+                .filter(\.isNumber)
+            if let minute = Int(regulationPart) {
+                return minute
+            }
+        }
+        return MatchStatusFormatter.parseMatchTimeMinutes(trimmed)
+    }
+
+    private nonisolated static func lineupPlayerMatches(
+        _ lineupPlayer: MatchLineupPlayer,
+        player: FantasyDisplayPlayer
+    ) -> Bool {
+        namesMatch(
+            lineupPlayer.name,
+            playerFullName: player.fullName,
+            playerDisplayName: player.displayName
+        )
+    }
+
+    private nonisolated static func namesMatch(
+        _ candidate: String,
+        playerFullName: String,
+        playerDisplayName: String
+    ) -> Bool {
+        let candidateTokens = normalizedNameTokens(candidate)
+        guard !candidateTokens.isEmpty else { return false }
+        for playerName in [playerFullName, playerDisplayName] {
+            let playerTokens = normalizedNameTokens(playerName)
+            guard !playerTokens.isEmpty else { continue }
+            if candidateTokens == playerTokens { return true }
+            if candidateTokens.count == 1, candidateTokens.last == playerTokens.last { return true }
+            if playerTokens.count == 1, playerTokens.last == candidateTokens.last { return true }
+            if candidateTokens.last == playerTokens.last,
+               candidateTokens.first?.first == playerTokens.first?.first {
+                return true
+            }
+        }
+        return false
+    }
+
+    private nonisolated static func normalizedNameTokens(_ value: String) -> [String] {
+        value
+            .replacingOccurrences(of: "(c)", with: "", options: .caseInsensitive)
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "en_GB"))
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map { $0.lowercased() }
     }
 }
 
@@ -3048,6 +3420,40 @@ enum FantasyEntryLiveStatusResolver {
     }
 }
 
+enum FantasyFixtureLiveStateResolver {
+    private nonisolated static let assumedMatchDuration: TimeInterval = 3 * 60 * 60
+
+    nonisolated static func isLive(_ fixture: FantasyFixture, at now: Date = Date()) -> Bool {
+        guard fixture.finished != true,
+              fixture.finishedProvisional != true else {
+            return false
+        }
+        if fixture.started == true {
+            return true
+        }
+
+        guard let kickoff = parseISO8601Date(fixture.kickoffTime),
+              kickoff <= now else {
+            return false
+        }
+        return now.timeIntervalSince(kickoff) < assumedMatchDuration
+    }
+
+    private nonisolated static func parseISO8601Date(_ value: String?) -> Date? {
+        guard let value else { return nil }
+
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: value) {
+            return date
+        }
+
+        let standard = ISO8601DateFormatter()
+        standard.formatOptions = [.withInternetDateTime]
+        return standard.date(from: value)
+    }
+}
+
 enum FantasySquadBuilder {
     nonisolated static func build(
         gameweek: FantasyGameweek,
@@ -3087,11 +3493,11 @@ enum FantasySquadBuilder {
         }
 
         func fixtureHasStarted(_ fixture: FantasyFixture) -> Bool {
-            fixture.started == true || fixtureHasEnded(fixture)
+            FantasyFixtureLiveStateResolver.isLive(fixture, at: now) || fixtureHasEnded(fixture)
         }
 
         func fixtureIsLive(_ fixture: FantasyFixture) -> Bool {
-            fixture.started == true && !fixtureHasEnded(fixture)
+            FantasyFixtureLiveStateResolver.isLive(fixture, at: now)
         }
 
         let activeTeamIDs = Set(
@@ -3207,7 +3613,7 @@ enum FantasySquadBuilder {
         let nextFiveFixtureDifficultiesByTeamID: [Int: [Int?]] = {
             let upcomingFixtures = mergedSeasonFixtures
                 .filter { fixture in
-                    let hasStarted = fixture.started == true
+                    let hasStarted = fixtureHasStarted(fixture)
                     let isConfirmed = fixture.finished == true && fixture.finishedProvisional != true
                     return !hasStarted && !isConfirmed
                 }
@@ -3291,7 +3697,7 @@ enum FantasySquadBuilder {
 
         var currentGameweekOpponentSelectionsByTeamID: [Int: TeamOpponentSelection] = [:]
         for fixture in fixtures {
-            let hasStarted = fixture.started == true
+            let hasStarted = fixtureHasStarted(fixture)
             let isConfirmed = fixture.finished == true && fixture.finishedProvisional != true
             let priority: Int = {
                 if hasStarted, !isConfirmed { return 0 }
@@ -3339,7 +3745,7 @@ enum FantasySquadBuilder {
                 return lhs.id < rhs.id
             }
             .forEach { fixture in
-                let hasStarted = fixture.started == true
+                let hasStarted = fixtureHasStarted(fixture)
                 let isConfirmed = fixture.finished == true && fixture.finishedProvisional != true
                 guard !hasStarted, !isConfirmed else { return }
 

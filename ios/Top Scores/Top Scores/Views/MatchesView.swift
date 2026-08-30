@@ -1516,7 +1516,7 @@ struct MatchesView: View {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(showFPLChevron ? .semibold : .regular))
                     .foregroundStyle(showFPLChevron
-                        ? Color(red: 0.95, green: 0.20, blue: 0.66)
+                        ? FootballSectionAccent.fantasy
                         : Color(.tertiaryLabel))
                     .frame(width: 16)
             }

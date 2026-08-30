@@ -322,6 +322,9 @@ struct MatchDetailView: View {
             guard !Task.isCancelled else { return }
             teamCompetitionEntries = entries
         }
+        .task(id: "fantasy-live|\(activeMatch.id)|\(activeMatch.isInProgress)") {
+            await refreshFantasyScoresForLiveMatchIfNeeded()
+        }
         .refreshable {
             await refreshDetailsManually()
             await loadMatchSocial()
@@ -740,6 +743,15 @@ struct MatchDetailView: View {
         }
     }
 
+    private func refreshFantasyScoresForLiveMatchIfNeeded() async {
+        guard activeMatch.isInProgress,
+              shouldLoadFantasySquad,
+              fantasyViewModel.data != nil else {
+            return
+        }
+        _ = await fantasyViewModel.refreshCurrentScores()
+    }
+
     private func reportMissingTeamLogosIfNeeded(for match: Match) {
         let missingTeamNames = LogoResolver.shared.missingTeamNames(in: [
             (match.homeTeam, [match.homeShortName].compactMap { $0 }),
@@ -1079,11 +1091,11 @@ private struct MatchDetailScoreboardHero: View {
     }
 
     private var homeGoalSummaries: [MatchScoreboardGoalSummary] {
-        goalSummaries(scorers: match.homeGoalScorers, assists: match.homeAssists)
+        goalSummaries(for: .home)
     }
 
     private var awayGoalSummaries: [MatchScoreboardGoalSummary] {
-        goalSummaries(scorers: match.awayGoalScorers, assists: match.awayAssists)
+        goalSummaries(for: .away)
     }
 
     private var hasGoalSummaries: Bool {
@@ -1370,12 +1382,9 @@ private struct MatchDetailScoreboardHero: View {
             .foregroundStyle(.white.opacity(0.72))
     }
 
-    private func goalSummaries(
-        scorers: [MatchGoalScorer],
-        assists: [MatchAssistProvider]
-    ) -> [MatchScoreboardGoalSummary] {
+    private func goalSummaries(for side: MatchCompetitionTeamSide) -> [MatchScoreboardGoalSummary] {
         guard match.isInProgress || match.isFinished else { return [] }
-        return MatchScoreboardGoalSummary.make(scorers: scorers, assists: assists)
+        return MatchScoreboardGoalSummary.make(for: side, match: match)
     }
 
     private func teamAccessibilityLabel(
@@ -1622,7 +1631,20 @@ private struct MatchScoreboardGoalSummary: Identifiable {
     }
 
     static func make(
+        for side: MatchCompetitionTeamSide,
+        match: Match
+    ) -> [MatchScoreboardGoalSummary] {
+        let credits = match.goalCredits(for: side)
+        return make(
+            scorers: credits.scorers,
+            ownGoalScorers: credits.ownGoalScorers,
+            assists: credits.assists
+        )
+    }
+
+    private static func make(
         scorers: [MatchGoalScorer],
+        ownGoalScorers: [MatchGoalScorer],
         assists: [MatchAssistProvider]
     ) -> [MatchScoreboardGoalSummary] {
         let assistLookup = assists.reduce(into: [String: String]()) { lookup, assist in
@@ -1645,6 +1667,10 @@ private struct MatchScoreboardGoalSummary: Identifiable {
                     )
                 )
             }
+        }
+
+        for (scorerIndex, scorer) in ownGoalScorers.enumerated() {
+            let scorerName = lastName(scorer.player)
             for (minuteIndex, minute) in scorer.ownGoalTimes.enumerated() {
                 summaries.append(
                     MatchScoreboardGoalSummary(
@@ -1711,13 +1737,14 @@ private struct MatchPenaltyShootoutSummary: View {
 private struct MatchEventsCard: View {
     @EnvironmentObject private var preferences: PreferencesStore
     @State private var selectedPlayer: MatchLineupPlayer?
+    @State private var sortOrder = MatchEventSortOrder.defaultOrder
 
     let match: Match
 
     private var entries: [MatchEventEntry] {
         Self.entries(for: match).sorted { left, right in
             if left.sortMinute != right.sortMinute {
-                return left.sortMinute < right.sortMinute
+                return sortOrder.sorts(left.sortMinute, before: right.sortMinute)
             }
             return left.title.localizedCaseInsensitiveCompare(right.title) == .orderedAscending
         }
@@ -1728,9 +1755,40 @@ private struct MatchEventsCard: View {
             EmptyView()
         } else {
             VStack(alignment: .leading, spacing: 14) {
-                Text("Match Events")
-                    .font(.headline)
-                    .foregroundStyle(.primary)
+                HStack(spacing: 12) {
+                    Text("Match Events")
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+
+                    Spacer(minLength: 0)
+
+                    Button {
+                        sortOrder.toggle()
+                    } label: {
+                        Label(
+                            sortOrder == .newestFirst ? "Newest" : "Oldest",
+                            systemImage: sortOrder == .newestFirst ? "arrow.down" : "arrow.up"
+                        )
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 10)
+                        .frame(height: 30)
+                        .background(
+                            Color(.tertiarySystemBackground),
+                            in: Capsule()
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
+                    .accessibilityLabel("Match events order")
+                    .accessibilityValue(sortOrder == .newestFirst ? "Newest first" : "Oldest first")
+                    .accessibilityHint(
+                        sortOrder == .newestFirst
+                            ? "Shows oldest events first"
+                            : "Shows newest events first"
+                    )
+                }
 
                 VStack(alignment: .leading, spacing: 5) {
                     ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
@@ -2008,6 +2066,8 @@ private struct MatchEventsCard: View {
             assists: match.homeAssists,
             teamName: match.displayHomeTeam,
             side: .home,
+            ownGoalTeamName: match.displayAwayTeam,
+            ownGoalSide: .away,
             match: match,
             to: &output
         )
@@ -2016,6 +2076,8 @@ private struct MatchEventsCard: View {
             assists: match.awayAssists,
             teamName: match.displayAwayTeam,
             side: .away,
+            ownGoalTeamName: match.displayHomeTeam,
+            ownGoalSide: .home,
             match: match,
             to: &output
         )
@@ -2036,6 +2098,8 @@ private struct MatchEventsCard: View {
         assists: [MatchAssistProvider],
         teamName: String,
         side: MatchEventEntry.Side,
+        ownGoalTeamName: String,
+        ownGoalSide: MatchEventEntry.Side,
         match: Match,
         to output: inout [MatchEventEntry]
     ) {
@@ -2068,15 +2132,10 @@ private struct MatchEventsCard: View {
                         minute: formattedMatchMinute(minute),
                         sortMinute: sortMinute(minute),
                         kind: .goal,
-                        side: side,
+                        side: ownGoalSide,
                         title: "\(scorer.player) (OG)",
-                        subtitle: teamName,
-                        player: playerForEvent(
-                            idPlayer: scorer.idPlayer,
-                            named: scorer.player,
-                            side: side,
-                            match: match
-                        )
+                        subtitle: ownGoalTeamName,
+                        player: player
                     )
                 )
             }

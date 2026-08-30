@@ -266,9 +266,11 @@ struct FantasyView: View {
                     migrateLegacyInitialSetupIfNeeded()
                     if initialSetupVersion < Self.currentInitialSetupVersion {
                         beginInitialSetup()
+                    } else if fantasyViewModel.data != nil {
+                        triggerFantasyScoreRefresh(force: true)
                     } else {
                         triggerFantasyRefresh(
-                            force: fantasyViewModel.data == nil,
+                            force: true,
                             rivalManagers: storedRivals,
                             trackedLeagues: storedLeagues
                         )
@@ -292,11 +294,15 @@ struct FantasyView: View {
                     return
                 }
                 if isFantasySetupReadyForRefresh {
-                    triggerFantasyRefresh(
-                        force: fantasyViewModel.data == nil,
-                        rivalManagers: rivalManagers,
-                        trackedLeagues: trackedLeagues
-                    )
+                    if fantasyViewModel.data == nil {
+                        triggerFantasyRefresh(
+                            force: true,
+                            rivalManagers: rivalManagers,
+                            trackedLeagues: trackedLeagues
+                        )
+                    } else {
+                        triggerFantasyScoreRefresh(force: true)
+                    }
                 } else if !managerEntryID.isEmpty, initialSetupVersion < Self.currentInitialSetupVersion {
                     beginInitialSetup()
                 }
@@ -4137,8 +4143,20 @@ struct FantasyView: View {
 
     private func completeFantasySignIn(_ entryID: Int?) {
         if let entryID, entryID > 0 {
-            managerEntryID = String(entryID)
+            let detectedEntryID = String(entryID)
+            let isExistingManager = managerEntryID == detectedEntryID
+            managerEntryID = detectedEntryID
             managerCaptureStatusMessage = "Successfully connected your account. Finalising setup..."
+            if isExistingManager {
+                #if DEBUG
+                diagnosticPrint("[FantasySignIn] reconnect_existing_manager action=refresh")
+                #endif
+                if initialSetupVersion < Self.currentInitialSetupVersion {
+                    beginInitialSetup(force: true)
+                } else {
+                    triggerFantasyRefresh(force: true)
+                }
+            }
             return
         }
 

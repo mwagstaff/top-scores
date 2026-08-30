@@ -1,6 +1,6 @@
 "use strict";
 
-const MODEL_VERSION = "v1";
+const MODEL_VERSION = "v2";
 
 const FACTORS = Object.freeze({
   competition: { label: "Competition", weight: 0.5 },
@@ -109,6 +109,22 @@ function stageScore(stage) {
   return 30;
 }
 
+function eplClubDrawAdjustment(input) {
+  const competition = String(input.competitionName || "").trim().toLowerCase();
+  if (competition !== "premier league" && competition !== "english premier league") {
+    return null;
+  }
+
+  const ratings = [input.homeElo, input.awayElo].map(Number).filter(Number.isFinite);
+  const drawScore = ratings.length > 0
+    ? clamp((Math.max(...ratings) - 1822) * 2)
+    : 50;
+  return {
+    score: rounded(drawScore),
+    contribution: Math.round((-9 * (1 - drawScore / 100)) * 10) / 10,
+  };
+}
+
 function factorDetail(key, score, input) {
   switch (key) {
     case "competition":
@@ -159,6 +175,18 @@ function calculateWatchability(input = {}) {
     };
   });
 
+  const clubDrawAdjustment = eplClubDrawAdjustment(input);
+  if (clubDrawAdjustment) {
+    components.push({
+      key: "club_draw",
+      label: "Club draw",
+      score: clubDrawAdjustment.score,
+      weight: 0,
+      contribution: clubDrawAdjustment.contribution,
+      detail: "Adjusts the Premier League baseline using the highest pre-match club Elo in the fixture.",
+    });
+  }
+
   const weightedScore = components.reduce((total, component) => total + component.contribution, 0);
   const tableStakes = factorScores.table_stakes;
   const baseRivalryBonus = 15 + clamp(tableStakes) * 0.07;
@@ -203,4 +231,5 @@ module.exports = {
   tableStakesScore,
   formAndAttackScore,
   stageScore,
+  eplClubDrawAdjustment,
 };

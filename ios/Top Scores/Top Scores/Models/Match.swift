@@ -91,6 +91,32 @@ struct MatchAssistProvider: Codable, Hashable, Sendable {
     }
 }
 
+struct MatchGoalCredits: Sendable {
+    let scorers: [MatchGoalScorer]
+    let ownGoalScorers: [MatchGoalScorer]
+    let assists: [MatchAssistProvider]
+}
+
+enum MatchEventSortOrder: Equatable, Sendable {
+    case newestFirst
+    case oldestFirst
+
+    static let defaultOrder: MatchEventSortOrder = .newestFirst
+
+    mutating func toggle() {
+        self = self == .newestFirst ? .oldestFirst : .newestFirst
+    }
+
+    func sorts(_ leftMinute: Int, before rightMinute: Int) -> Bool {
+        switch self {
+        case .newestFirst:
+            leftMinute > rightMinute
+        case .oldestFirst:
+            leftMinute < rightMinute
+        }
+    }
+}
+
 struct MatchRedCardEvent: Codable, Hashable, Sendable {
     let player: String
     let idPlayer: String?
@@ -742,6 +768,23 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     nonisolated var displayAwayTeam: String {
         let trimmed = awayShortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? awayTeam : trimmed
+    }
+
+    nonisolated func goalCredits(for side: MatchCompetitionTeamSide) -> MatchGoalCredits {
+        switch side {
+        case .home:
+            MatchGoalCredits(
+                scorers: homeGoalScorers,
+                ownGoalScorers: awayGoalScorers,
+                assists: homeAssists
+            )
+        case .away:
+            MatchGoalCredits(
+                scorers: awayGoalScorers,
+                ownGoalScorers: homeGoalScorers,
+                assists: awayAssists
+            )
+        }
     }
 
     nonisolated var dateTime: Date? {

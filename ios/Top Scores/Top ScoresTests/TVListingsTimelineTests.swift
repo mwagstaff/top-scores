@@ -130,6 +130,21 @@ struct TVListingsTimelineTests {
         ) == matches.endIndex)
     }
 
+    @Test func currentTimeMarkerFallsBeforeFirstLiveMatch() throws {
+        let matches = [
+            makeMatch(date: "2026-08-29", time: "12:00", home: "Finished", scoreStatus: "FT"),
+            makeMatch(date: "2026-08-29", time: "14:00", home: "First live", scoreStatus: "39"),
+            makeMatch(date: "2026-08-29", time: "14:00", home: "Second live", scoreStatus: "39"),
+            makeMatch(date: "2026-08-29", time: "16:00", home: "Later"),
+        ]
+        let liveKickoff = try #require(matches[1].dateTime)
+
+        #expect(TVListingsTimeline.currentTimeInsertionIndex(
+            in: matches,
+            now: liveKickoff.addingTimeInterval(39 * 60)
+        ) == 1)
+    }
+
     @Test func currentTimeStatusShowsNextMatchWhenNothingIsLive() throws {
         let matches = [
             makeMatch(date: "2026-08-29", time: "09:00", home: "Finished"),

@@ -3456,6 +3456,149 @@ struct Top_ScoresTests {
         #expect(liveElement.explain.isEmpty)
     }
 
+    @Test func fantasyLiveScoring_recalculatesChelseaPlayersFromLiveMatchEvents() {
+        let joaoPedro = makeFantasyPlayer(
+            elementID: 165,
+            pickPosition: 11,
+            positionType: .forward,
+            displayName: "João Pedro",
+            fullName: "João Pedro Junqueira de Jesus",
+            teamName: "Chelsea"
+        )
+        let rogers = makeFantasyPlayer(
+            elementID: 40,
+            pickPosition: 6,
+            positionType: .midfielder,
+            displayName: "Rogers",
+            fullName: "Morgan Rogers",
+            teamName: "Chelsea"
+        )
+        let joaoLineupPlayer = MatchLineupPlayer(
+            number: 20,
+            name: "João Pedro",
+            positionCategory: "forward",
+            formationRowIndex: nil,
+            formationSlotIndex: nil,
+            formationRowSize: nil
+        )
+        let rogersLineupPlayer = MatchLineupPlayer(
+            number: 27,
+            name: "M. Rogers",
+            positionCategory: "midfielder",
+            formationRowIndex: nil,
+            formationSlotIndex: nil,
+            formationRowSize: nil
+        )
+        let match = Match(
+            date: "2026-08-30",
+            time: "14:00",
+            homeTeam: "Chelsea",
+            awayTeam: "Brighton & Hove Albion",
+            league: "Premier League",
+            tvChannels: [],
+            homeScore: 3,
+            awayScore: 1,
+            scoreStatus: "HT",
+            homeGoalScorers: [
+                MatchGoalScorer(player: "Pedro", goalTimes: ["32"])
+            ],
+            homeAssists: [
+                MatchAssistProvider(player: "M. Rogers", assistTimes: ["14"])
+            ],
+            teamLineups: MatchTeamLineups(
+                home: MatchTeamLineup(
+                    team: "Chelsea",
+                    manager: nil,
+                    formation: nil,
+                    startingLineup: [joaoLineupPlayer, rogersLineupPlayer],
+                    substitutes: [],
+                    substitutions: []
+                ),
+                away: nil
+            )
+        )
+        let joaoLive = FantasyLiveElement(
+            id: 165,
+            stats: FantasyLiveStats(
+                totalPoints: 1,
+                minutes: 45,
+                goalsScored: 0,
+                assists: 0,
+                yellowCards: 0,
+                redCards: 0,
+                goalsConceded: 0,
+                bonus: 0,
+                bps: 35
+            ),
+            explain: [
+                FantasyLiveFixtureExplanation(
+                    fixture: 16,
+                    stats: [
+                        FantasyLiveFixtureStat(identifier: "minutes", points: 1, value: 45, pointsModification: 0),
+                        FantasyLiveFixtureStat(identifier: "bps", points: 0, value: 35, pointsModification: 0)
+                    ]
+                )
+            ]
+        )
+        let rogersLive = FantasyLiveElement(
+            id: 40,
+            stats: FantasyLiveStats(
+                totalPoints: 5,
+                minutes: 45,
+                goalsScored: 0,
+                assists: 1,
+                yellowCards: 0,
+                redCards: 0,
+                cleanSheets: 1,
+                goalsConceded: 0,
+                bps: 18
+            )
+        )
+        let provisionalBonus = FantasyProvisionalBonusResolver.bonusByElementID(
+            bpsByElementID: [joaoLive.id: 35, rogersLive.id: 18]
+        )
+
+        let joaoScore = FantasyLiveScoringEngine.score(
+            player: joaoPedro,
+            liveElement: joaoLive,
+            fixtureID: 16,
+            hasSingleGameweekFixture: true,
+            match: match,
+            isHomeTeam: true,
+            provisionalBonus: provisionalBonus[joaoLive.id]
+        )
+        let rogersScore = FantasyLiveScoringEngine.score(
+            player: rogers,
+            liveElement: rogersLive,
+            fixtureID: 16,
+            hasSingleGameweekFixture: true,
+            match: match,
+            isHomeTeam: true
+        )
+
+        #expect(joaoScore.appearance == 1)
+        #expect(joaoScore.goals == 4)
+        #expect(joaoScore.bonus == 3)
+        #expect(joaoScore.total == 8)
+        #expect(rogersScore.appearance == 1)
+        #expect(rogersScore.assists == 3)
+        #expect(rogersScore.cleanSheet == 0)
+        #expect(rogersScore.total == 4)
+    }
+
+    @Test func fantasyProvisionalBonusResolver_handlesTiesUsingFPLRules() {
+        #expect(
+            FantasyProvisionalBonusResolver.bonusByElementID(
+                bpsByElementID: [1: 30, 2: 30, 3: 24, 4: 10]
+            ) == [1: 3, 2: 3, 3: 1]
+        )
+        #expect(
+            FantasyProvisionalBonusResolver.bonusByElementID(
+                bpsByElementID: [1: 30, 2: 24, 3: 24, 4: 10]
+            ) == [1: 3, 2: 2, 3: 2]
+        )
+    }
+
     @Test func fantasyFixtureMatchesMatch_requiresTeamsAndKickoff() {
         let kickoff = Date(timeIntervalSince1970: 1_778_000_000)
         let fixture = FantasyFixture(
@@ -4301,6 +4444,43 @@ struct Top_ScoresTests {
         #expect(picks.entryHistory.points == 0)
     }
 
+    @Test @MainActor func fantasyAuthenticatedClient_usesCapturedOIDCSessionWithoutPageFetch() async throws {
+        FantasyAuthSessionStore.clear()
+        defer { FantasyAuthSessionStore.clear() }
+        try FantasyAuthSessionStore.saveOIDCSessionJSON(
+            #"{"access_token":"test-access-token","refresh_token":"test-refresh-token","expires_at":9999999999}"#
+        )
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [FantasyAuthenticatedURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        FantasyAuthenticatedURLProtocol.requestHandler = { request in
+            let body: String
+            if request.url?.path.contains("/api/my-team/") == true {
+                body = #"{"picks":[{"element":42,"position":1,"multiplier":1,"is_captain":false,"is_vice_captain":false}]}"#
+            } else {
+                body = #"{"player":{"entry":658621}}"#
+            }
+            #expect(request.value(forHTTPHeaderField: "X-API-Authorization") == "Bearer test-access-token")
+            let response = HTTPURLResponse(
+                url: try #require(request.url),
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"]
+            )!
+            return (response, Data(body.utf8))
+        }
+        defer { FantasyAuthenticatedURLProtocol.requestHandler = nil }
+        let client = FantasyAuthenticatedAPIClient(
+            session: session,
+            cookieProvider: { [] }
+        )
+
+        let result = try await client.fetchCurrentTeam(entryID: 123)
+
+        #expect(result.entryID == 658621)
+        #expect(result.team.picks.map(\.element) == [42])
+    }
+
     @Test func lineupPlayerInitials_handlesParticlesAndHyphenatedSurnames() async throws {
         #expect(lineupPlayerInitials("Virgil van Dijk") == "VvD")
         #expect(lineupPlayerInitials("Declan Rice") == "DR")
@@ -4647,6 +4827,68 @@ struct Top_ScoresTests {
         #expect(squad.scorePhase == .provisional)
         #expect(squad.hasActiveFixtures)
         #expect(squad.goalkeepers.first?.isPlayingNow == true)
+    }
+
+    @Test func fantasySquadBuilder_treatsPastKickoffAsLiveWhileStartedFlagLags() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let kickoff = ISO8601DateFormatter().string(from: now.addingTimeInterval(-36 * 60))
+        let gameweek = FantasyGameweek(
+            id: 2,
+            name: "Gameweek 2",
+            isCurrent: true,
+            isNext: false,
+            finished: false,
+            dataChecked: false,
+            deadlineTime: nil
+        )
+        let bootstrap = FantasyBootstrapLookup(
+            updatedAt: nil,
+            elements: [makeFantasyBootstrapElement(id: 40, team: 6, elementType: 3, webName: "Rogers")],
+            teams: [
+                FantasyBootstrapTeam(id: 5, name: "Brighton", shortName: "BHA"),
+                FantasyBootstrapTeam(id: 6, name: "Chelsea", shortName: "CHE")
+            ],
+            elementTypes: [
+                FantasyBootstrapElementType(id: 3, singularName: "Midfielder", singularNameShort: "MID")
+            ],
+            events: [gameweek]
+        )
+        let picks = FantasyPicksResponse(
+            picks: [makeFantasyPick(element: 40, position: 6, elementType: 3)],
+            entryHistory: FantasyEntryHistory(
+                event: 2,
+                points: 21,
+                rank: nil,
+                overallRank: nil,
+                eventTransfersCost: nil,
+                pointsOnBench: 0
+            )
+        )
+        let fixtures = [FantasyFixture(
+            id: 16,
+            event: 2,
+            teamH: 6,
+            teamA: 5,
+            kickoffTime: kickoff,
+            started: false,
+            finished: false,
+            finishedProvisional: false
+        )]
+
+        let squad = FantasySquadBuilder.build(
+            gameweek: gameweek,
+            picksResponse: picks,
+            liveResponse: FantasyEventLiveResponse(elements: [makeLiveElement(id: 40, points: 4)]),
+            fixtures: fixtures,
+            seasonFixtures: fixtures,
+            bootstrap: bootstrap,
+            now: now
+        )
+
+        #expect(squad.scorePhase == .provisional)
+        #expect(squad.hasActiveFixtures)
+        #expect(squad.midfielders.first?.isPlayingNow == true)
+        #expect(squad.midfielders.first?.displayPoints == 4)
     }
 
     @Test func fantasyDisplayPlayer_exposesOnlyCompletedProvisionalPoints() {
@@ -5527,6 +5769,35 @@ struct Top_ScoresTests {
         )
     }
 
+}
+
+private final class FantasyAuthenticatedURLProtocol: URLProtocol {
+    nonisolated(unsafe) static var requestHandler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let requestHandler = Self.requestHandler else {
+            client?.urlProtocol(self, didFailWithError: URLError(.unknown))
+            return
+        }
+        do {
+            let (response, data) = try requestHandler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
 }
 
 private final class PlayerDetailsRequestRecorder: @unchecked Sendable {

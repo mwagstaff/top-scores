@@ -71,7 +71,11 @@ nonisolated enum TVListingsTimeline {
         in matches: [Match],
         now: Date
     ) -> Int {
-        matches.firstIndex { match in
+        if let firstLiveIndex = matches.firstIndex(where: { isInProgress($0, now: now) }) {
+            return firstLiveIndex
+        }
+
+        return matches.firstIndex { match in
             guard let kickoff = match.dateTime else { return false }
             return kickoff > now
         } ?? matches.endIndex
@@ -81,7 +85,7 @@ nonisolated enum TVListingsTimeline {
         in matches: [Match],
         now: Date
     ) -> CurrentTimeStatus {
-        if matches.contains(where: \.isInProgress) {
+        if matches.contains(where: { isInProgress($0, now: now) }) {
             return .onNow
         }
 
@@ -117,6 +121,11 @@ nonisolated enum TVListingsTimeline {
             return homeComparison == .orderedAscending
         }
         return lhs.awayTeam.localizedCaseInsensitiveCompare(rhs.awayTeam) == .orderedAscending
+    }
+
+    private static func isInProgress(_ match: Match, now: Date) -> Bool {
+        guard let status = match.stabilizedScoreStatus(now: now) else { return false }
+        return MatchStatusFormatter.isInProgress(status)
     }
 
     private static func date(from dateKey: String, calendar: Calendar) -> Date? {
@@ -374,10 +383,10 @@ struct TVListingsView: View {
         Task { @MainActor in
             await Task.yield()
             if accessibilityReduceMotion {
-                proxy.scrollTo(TVListingsTimeline.currentTimeMarkerID, anchor: .center)
+                proxy.scrollTo(TVListingsTimeline.currentTimeMarkerID, anchor: .top)
             } else {
                 withAnimation(.easeOut(duration: 0.28)) {
-                    proxy.scrollTo(TVListingsTimeline.currentTimeMarkerID, anchor: .center)
+                    proxy.scrollTo(TVListingsTimeline.currentTimeMarkerID, anchor: .top)
                 }
             }
         }

@@ -236,7 +236,7 @@ struct PreferencesView: View {
                             .foregroundStyle(.secondary)
 
                         Toggle("Fantasy Premier League indicator", isOn: showCompactFixtureFantasyLogoBinding)
-                        Text("Shows a pink chevron on fixture rows when your squad has one or more players involved in the match.")
+                        Text("Shows a purple chevron on fixture rows when your squad has one or more players involved in the match.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 

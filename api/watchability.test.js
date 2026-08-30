@@ -23,19 +23,50 @@ test("tier thresholds and star rounding match the product calibration", () => {
   assert.equal(result.stars, Math.round(result.score / 20));
 });
 
-test("an ordinary balanced Premier League fixture is highly watchable", () => {
+test("Leeds against Brentford calibrates to a lower highly-watchable score", () => {
   const result = calculateWatchability({
     competitionName: "Premier League",
     competitionWeight: 100,
-    homeElo: 1650,
-    awayElo: 1630,
-    homeStanding: standing(12, 26),
-    awayStanding: standing(10, 29),
+    homeElo: 1759.66040039,
+    awayElo: 1828.95019531,
     stage: "League",
   });
 
   assert.equal(result.tier, "highly_watchable");
-  assert.ok(result.score >= 70 && result.score < 85);
+  assert.equal(result.score, 72);
+});
+
+test("Sunderland against Fulham is a good watch rather than highly watchable", () => {
+  const result = calculateWatchability({
+    competitionName: "Premier League",
+    competitionWeight: 100,
+    homeElo: 1686.75891113,
+    awayElo: 1790.57385254,
+    stage: "League",
+  });
+
+  assert.equal(result.tier, "good_watch");
+  assert.equal(result.score, 68);
+});
+
+test("Premier League fixtures featuring a high-draw club retain their calibration", () => {
+  const chelseaBrighton = calculateWatchability({
+    competitionName: "Premier League",
+    competitionWeight: 100,
+    homeElo: 1880.36804199,
+    awayElo: 1829.68884277,
+    stage: "League",
+  });
+  const manchesterUnitedIpswich = calculateWatchability({
+    competitionName: "Premier League",
+    competitionWeight: 100,
+    homeElo: 1876.9630127,
+    awayElo: 1624.99560547,
+    stage: "League",
+  });
+
+  assert.equal(chelseaBrighton.score, 82);
+  assert.equal(manchesterUnitedIpswich.score, 73);
 });
 
 test("Real Madrid against a much weaker La Liga opponent remains moderate", () => {
