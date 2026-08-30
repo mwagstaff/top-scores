@@ -338,6 +338,7 @@ struct MatchesView: View {
     @State private var isSubscribingToCalendar = false
     @State private var calendarSubscriptionErrorMessage = ""
     @State private var showsCalendarSubscriptionError = false
+    @State private var isTVListingsPresented = false
     init(
         mode: MatchesViewMode,
         isSelected: Bool = true,
@@ -441,7 +442,19 @@ struct MatchesView: View {
                     if mode == .fixtures {
                         fixtureDateBrowserControl
                     }
-                    if usesFixtureBrowser {
+                    if isTVListingsPresented,
+                       let selectedDateKey = fixtureBrowser.selectedDateKey {
+                        TVListingsView(
+                            matches: fixtureBrowser.selectedDateUnfilteredMatches,
+                            selectedDateKey: selectedDateKey,
+                            isLoading: fixtureBrowser.isLoadingSelectedDate,
+                            errorMessage: fixtureBrowser.errorMessage,
+                            rowPreferences: matchRowPreferences,
+                            fantasyContext: fantasyViewModel.matchRowContext,
+                            onSelectMatch: navigateToTVMatch,
+                            onRefresh: fixtureBrowser.refresh
+                        )
+                    } else if usesFixtureBrowser {
                         fixtureDatePagedContent(containerWidth: proxy.size.width)
                     } else {
                         activeMatchesContent
@@ -527,10 +540,10 @@ struct MatchesView: View {
             Text(calendarSubscriptionErrorMessage)
         }
         .onAppear {
-            fixturesCoordinator.isDockEnabled = navigationMatch == nil
+            updateFixtureDockAvailability()
             refreshVisibleGroupedDays(from: sourceGroupedDays)
             guard isSelected else { return }
-            if mode == .fixtures {
+            if mode == .fixtures, !isTVListingsPresented {
                 fixturesCoordinator.prepareCompetitionDockForScoresEntry()
             }
             runActivationIfNeeded(logEvent: "onAppear")
@@ -549,9 +562,10 @@ struct MatchesView: View {
                 screenViewSentForActivation = false
                 return
             }
-            if mode == .fixtures {
+            if mode == .fixtures, !isTVListingsPresented {
                 fixturesCoordinator.prepareCompetitionDockForScoresEntry()
             }
+            updateFixtureDockAvailability()
             refreshVisibleGroupedDays(from: sourceGroupedDays)
             runActivationIfNeeded(logEvent: "isSelected")
             beginScreenViewTiming()
@@ -560,10 +574,21 @@ struct MatchesView: View {
             handleScenePhaseChange(phase)
         }
         .onChange(of: navigationMatch) { _, match in
-            fixturesCoordinator.isDockEnabled = match == nil
+            updateFixtureDockAvailability()
             if match != nil {
                 fixturesCoordinator.resetPresentation()
             }
+        }
+        .onChange(of: isTVListingsPresented) { _, isPresented in
+            if isPresented {
+                fixturesCoordinator.resetPresentation()
+                AppMetricsService.shared.fireScreenView(
+                    screen: "tv_listings",
+                    durationMs: nil,
+                    apiBaseURL: preferences.apiBaseURL
+                )
+            }
+            updateFixtureDockAvailability()
         }
         .onChange(of: fixturesCoordinator.predictionWarmRequestToken) { _, _ in
             guard mode == .fixtures else { return }
@@ -644,6 +669,10 @@ struct MatchesView: View {
         }
         .onChange(of: fixtureBrowser.selectedDateKey) { _, dateKey in
             guard mode == .fixtures, let dateKey else { return }
+            if isTVListingsPresented,
+               !TVListingsTimeline.isAvailable(for: dateKey) {
+                isTVListingsPresented = false
+            }
             diagnosticLog("[MatchesView] fixture_date_change date=%@", dateKey)
         }
         .onChange(of: preferences.showPostponedGames) { _, _ in
@@ -661,6 +690,9 @@ struct MatchesView: View {
         guard let selectedDateKey = fixtureBrowser.selectedDateKey else {
             return "Fixtures"
         }
+        if isTVListingsPresented {
+            return TVListingsTimeline.title(for: selectedDateKey)
+        }
         let matches = fixtureBrowser.cachedMatchesByDate[selectedDateKey] ?? []
         return Self.navigationTitlePrefix(for: matches)
     }
@@ -674,12 +706,54 @@ struct MatchesView: View {
     private var scoresHeroHeader: some View {
         FootballHeroHeader(title: scoresHeaderTitle, subtitle: scoresHeaderSubtitle)
         .animation(accessibilityReduceMotion ? nil : .easeOut(duration: 0.18), value: fixtureBrowser.selectedDateKey)
+        .animation(accessibilityReduceMotion ? nil : .easeOut(duration: 0.18), value: isTVListingsPresented)
+        .overlay(alignment: .topLeading) {
+            if canShowTVListings {
+                tvListingsHeaderButton
+                    .padding(.leading, 14)
+            }
+        }
         .overlay(alignment: .topTrailing) {
             if mode == .fixtures {
                 fixtureHeaderActions
                     .padding(.trailing, 14)
             }
         }
+    }
+
+    private var canShowTVListings: Bool {
+        mode == .fixtures && TVListingsTimeline.isAvailable(
+            for: fixtureBrowser.selectedDateKey
+        )
+    }
+
+    private var tvListingsHeaderButton: some View {
+        Button(action: toggleTVListings) {
+            Image(systemName: isTVListingsPresented ? "tv.fill" : "tv")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(isTVListingsPresented ? Color.white : Color.accentColor)
+                .frame(width: 44, height: 44)
+                .background(
+                    Color.accentColor.opacity(isTVListingsPresented ? 0.88 : 0.12),
+                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                )
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.accentColor.opacity(isTVListingsPresented ? 1 : 0.58), lineWidth: 1)
+                }
+                .shadow(
+                    color: isTVListingsPresented ? Color.accentColor.opacity(0.34) : .clear,
+                    radius: 8
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(isTVListingsPresented ? "Show scores" : "Show TV listings")
+        .accessibilityValue(isTVListingsPresented ? "TV listings selected" : "Scores selected")
+        .accessibilityHint(
+            isTVListingsPresented
+                ? "Returns to the standard Scores view"
+                : "Shows televised matches for the selected date"
+        )
     }
 
     private var fixtureHeaderActions: some View {
@@ -1035,6 +1109,25 @@ struct MatchesView: View {
             phase == .active,
             refreshImmediately: phase == .active
         )
+    }
+
+    private func toggleTVListings() {
+        guard canShowTVListings else { return }
+        withAnimation(accessibilityReduceMotion ? nil : .easeOut(duration: 0.20)) {
+            isTVListingsPresented.toggle()
+        }
+    }
+
+    private func navigateToTVMatch(_ match: Match) {
+        navigationMatch = MatchNavigation(
+            match: match,
+            showFantasyBadge: false,
+            predictionDisplay: .hidden
+        )
+    }
+
+    private func updateFixtureDockAvailability() {
+        fixturesCoordinator.isDockEnabled = navigationMatch == nil && !isTVListingsPresented
     }
 
     private func handleScreenDisappear() {

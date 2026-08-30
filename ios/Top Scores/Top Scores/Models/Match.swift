@@ -968,7 +968,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         )
     }
 
-    func withTvChannels(_ channels: [TvChannel]) -> Match {
+    nonisolated func withTvChannels(_ channels: [TvChannel]) -> Match {
         Match(
             date: date,
             time: time,

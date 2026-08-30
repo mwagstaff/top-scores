@@ -545,6 +545,7 @@ final class FixtureBrowserStore: ObservableObject {
     @Published private(set) var competitions: [CompetitionCatalogEntry] = []
     @Published private(set) var availableDays: [FixtureCalendarDay] = []
     @Published private(set) var visibleMatches: [Match] = []
+    @Published private(set) var selectedDateUnfilteredMatches: [Match] = []
     @Published private(set) var selectedDateKey: String?
     @Published private(set) var isLoadingSelectedDate = false
     @Published private(set) var hasLoadedCalendar = false
@@ -577,14 +578,7 @@ final class FixtureBrowserStore: ObservableObject {
               let bucket = cachePayload?.buckets[Self.bucketKey(dateKey: dateKey)] else {
             return []
         }
-        return FixtureBrowseSelectionResolver.filterMatches(
-            bucket.matches,
-            topMatchesOnly: false,
-            selectedCompetitionIDs: [],
-            competitions: competitions,
-            showAllMatches: true,
-            includePostponed: snapshot.showPostponedGames
-        )
+        return unfilteredMatches(in: bucket, snapshot: snapshot)
     }
 
     var calendarCompetitionSummariesByDate: [String: [FixtureCalendarCompetitionSummary]] {
@@ -658,6 +652,7 @@ final class FixtureBrowserStore: ObservableObject {
                 catalogFetchedAt = cachePayload?.catalogFetchedAt
             }
             pageCache.replace(with: [:])
+            selectedDateUnfilteredMatches = []
             hasLoadedCalendar = !(cachePayload?.calendarDays.isEmpty ?? true)
             CompetitionBadgeCache.shared.warmIfNeeded(entries: competitions)
         }
@@ -685,6 +680,7 @@ final class FixtureBrowserStore: ObservableObject {
         if visibleMatches != cachedMatches {
             visibleMatches = cachedMatches
         }
+        refreshSelectedDateUnfilteredMatches()
         loadSelectedDateIfNeeded(force: false)
         if isAutoRefreshEnabled {
             startAutoRefreshLoop(refreshImmediately: true)
@@ -963,6 +959,12 @@ final class FixtureBrowserStore: ObservableObject {
     ) -> Bool {
         guard let snapshot else { return false }
         let filtered = filteredMatches(in: bucket, snapshot: snapshot, topMatchesOnly: topMatchesOnly)
+        if selectedDateKey == dateKey {
+            let unfiltered = unfilteredMatches(in: bucket, snapshot: snapshot)
+            if selectedDateUnfilteredMatches != unfiltered {
+                selectedDateUnfilteredMatches = unfiltered
+            }
+        }
         if visibleMatches != filtered {
             visibleMatches = filtered
         }
@@ -1072,7 +1074,7 @@ final class FixtureBrowserStore: ObservableObject {
         }
 
         let refreshMatches = FixtureBrowseAutoRefreshPolicy.stateRefreshMatches(
-            in: visibleMatches
+            in: selectedDateUnfilteredMatches
         )
         let matchIDs = refreshMatches.compactMap(\.matchDetailsID)
         guard !matchIDs.isEmpty else { return }
@@ -1128,11 +1130,13 @@ final class FixtureBrowserStore: ObservableObject {
         guard !availableDays.isEmpty else {
             selectedDateKey = nil
             visibleMatches = []
+            selectedDateUnfilteredMatches = []
             return
         }
         let replacementIndex = min(removedIndex, availableDays.count - 1)
         selectedDateKey = availableDays[replacementIndex].date
         visibleMatches = []
+        refreshSelectedDateUnfilteredMatches()
     }
 
     private func schedulePrefetch(from dateKey: String) {
@@ -1412,6 +1416,35 @@ final class FixtureBrowserStore: ObservableObject {
             includePostponed: snapshot.showPostponedGames,
             topTeamsMatcher: topTeamsMatcher
         )
+    }
+
+    private func unfilteredMatches(
+        in bucket: FixtureBrowseBucket,
+        snapshot: PreferencesSnapshot
+    ) -> [Match] {
+        FixtureBrowseSelectionResolver.filterMatches(
+            bucket.matches,
+            topMatchesOnly: false,
+            selectedCompetitionIDs: [],
+            competitions: competitions,
+            showAllMatches: true,
+            includePostponed: snapshot.showPostponedGames
+        )
+    }
+
+    private func refreshSelectedDateUnfilteredMatches() {
+        guard let snapshot,
+              let selectedDateKey,
+              let bucket = cachePayload?.buckets[Self.bucketKey(dateKey: selectedDateKey)] else {
+            if !selectedDateUnfilteredMatches.isEmpty {
+                selectedDateUnfilteredMatches = []
+            }
+            return
+        }
+        let matches = unfilteredMatches(in: bucket, snapshot: snapshot)
+        if selectedDateUnfilteredMatches != matches {
+            selectedDateUnfilteredMatches = matches
+        }
     }
 
     private func applyTopTeamsPreset(_ preset: TopTeamsPresetDefinition) {

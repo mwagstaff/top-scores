@@ -1710,14 +1710,12 @@ struct FantasyView: View {
                     FootballPitchSegmentOption(
                         value: .currentGameweek,
                         title: "Current gameweek",
-                        subtitle: "This round",
-                        systemImage: "calendar"
+                        subtitle: "This round"
                     ),
                     FootballPitchSegmentOption(
                         value: .allGameweeks,
                         title: "All gameweeks",
-                        subtitle: "Season total",
-                        systemImage: "chart.bar.fill"
+                        subtitle: "Season total"
                     ),
                 ],
                 accessibilityLabel: "Rivals score scope",

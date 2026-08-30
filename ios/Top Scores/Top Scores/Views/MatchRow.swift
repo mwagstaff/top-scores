@@ -2179,13 +2179,15 @@ private func lineupInitialFragment(from value: String, lowercaseParticles: Bool,
 
 
 
-private func localeFilteredChannels(_ channels: [TvChannel]) -> [TvChannel] {
-    let regionCode = Locale.current.region?.identifier
+nonisolated func localeFilteredChannels(
+    _ channels: [TvChannel],
+    regionCode: String? = Locale.current.region?.identifier
+) -> [TvChannel] {
     let local = regionCode.map { code in channels.filter { broadcastCountryCode(for: $0) == code } } ?? []
     return local.isEmpty ? [] : local
 }
 
-private func broadcastCountryCode(for channel: TvChannel) -> String? {
+private nonisolated func broadcastCountryCode(for channel: TvChannel) -> String? {
     if let countryCode = channel.countryCode {
         return countryCode
     }
