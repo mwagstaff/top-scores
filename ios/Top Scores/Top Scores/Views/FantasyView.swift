@@ -102,6 +102,8 @@ struct FantasyView: View {
     @State private var pendingFantasyRefreshRequest: PendingFantasyRefreshRequest?
     @State private var inFlightFantasyRefreshRequest: PendingFantasyRefreshRequest?
     @State private var fantasyRefreshTask: Task<Void, Never>?
+    @State private var fantasyAutomaticRetryTask: Task<Void, Never>?
+    @State private var fantasyAutomaticRetryAttempt = 0
     @State private var fantasyScoreRefreshTask: Task<Void, Never>?
     @State private var lastStartedFantasyRefreshRequest: PendingFantasyRefreshRequest?
     @State private var lastStartedFantasyRefreshAt: Date?
@@ -282,6 +284,7 @@ struct FantasyView: View {
             }
             .onChange(of: isSelected) { _, selected in
                 guard selected else {
+                    cancelFantasyAutomaticRetry(resetAttempt: false)
                     fantasyRefreshTask?.cancel()
                     fantasyRefreshTask = nil
                     fantasyScoreRefreshTask?.cancel()
@@ -316,6 +319,7 @@ struct FantasyView: View {
             }
             .onChange(of: scenePhase) { _, newValue in
                 guard newValue == .active else {
+                    cancelFantasyAutomaticRetry(resetAttempt: false)
                     fantasyRefreshTask?.cancel()
                     fantasyRefreshTask = nil
                     fantasyScoreRefreshTask?.cancel()
@@ -327,7 +331,7 @@ struct FantasyView: View {
                 }
                 if isSelected, isFantasySetupReadyForRefresh {
                     triggerFantasyRefresh(
-                        force: false,
+                        force: fantasyViewModel.shouldAutomaticallyRetry,
                         rivalManagers: rivalManagers,
                         trackedLeagues: trackedLeagues
                     )
@@ -351,6 +355,7 @@ struct FantasyView: View {
             .onChange(of: managerEntryID) { previousValue, newValue in
                 syncManagerEntryIDToSharedDefaults()
                 if newValue.isEmpty {
+                    cancelFantasyAutomaticRetry(resetAttempt: true)
                     pendingFantasyRefreshRequest = nil
                     fantasyViewModel.reset()
                     managerCaptureStatusMessage = "Waiting for shared Fantasy entry URL. Open your Points page in Safari/Chrome and share it to Top Scores."
@@ -431,6 +436,13 @@ struct FantasyView: View {
             .onChange(of: fantasyViewModel.isRefreshing) { _, isRefreshing in
                 if !isRefreshing {
                     drainPendingFantasyRefreshIfNeeded()
+                }
+            }
+            .onChange(of: fantasyViewModel.shouldAutomaticallyRetry) { _, shouldRetry in
+                if shouldRetry {
+                    scheduleFantasyAutomaticRetry()
+                } else {
+                    cancelFantasyAutomaticRetry(resetAttempt: true)
                 }
             }
             .onChange(of: rivalManagersJSON) { _, _ in
@@ -1411,6 +1423,9 @@ struct FantasyView: View {
                                 Text(row.playerName)
                                     .font(.subheadline.weight(.semibold))
                                     .lineLimit(1)
+                                if row.hasAvailabilityIssue {
+                                    FantasyAvailabilityWarningIcon()
+                                }
                                 Spacer(minLength: 0)
                                 Text("\(row.totalPoints)")
                                     .font(.subheadline.monospacedDigit().weight(.semibold))
@@ -1510,6 +1525,7 @@ struct FantasyView: View {
                     elementID: player.elementID,
                     playerName: player.displayName,
                     profileImageURL: player.profileImageURL,
+                    hasAvailabilityIssue: player.isUnavailable,
                     totalPoints: player.appliedPoints,
                     components: scoreBreakdownComponents(for: player)
                 )
@@ -3240,8 +3256,8 @@ struct FantasyView: View {
         Group {
             if fantasyViewModel.requiresAuthentication {
                 fantasySignInCard
-            } else if fantasyViewModel.isShowingGameUpdatingState {
-                gameUpdatingCard
+            } else if fantasyViewModel.shouldAutomaticallyRetry {
+                temporaryUnavailableCard(message)
             } else {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("Fantasy data unavailable")
@@ -3286,56 +3302,50 @@ struct FantasyView: View {
         )
     }
 
-    private var gameUpdatingCard: some View {
-        VStack(spacing: 16) {
-            ZStack {
-                Circle()
-                    .fill(Color.accentColor.opacity(0.12))
-
-                Circle()
-                    .stroke(Color.accentColor.opacity(0.20), lineWidth: 1)
-
-                TimelineView(.animation) { context in
-                    let cycleDuration = 1.6
-                    let phase = context.date.timeIntervalSinceReferenceDate
-                        .truncatingRemainder(dividingBy: cycleDuration) / cycleDuration
-                    let pulse = phase < 0.5 ? phase * 2.0 : (1.0 - phase) * 2.0
-                    let opacity = 0.74 + (0.26 * pulse)
-
-                    FantasyLionIconView(size: 42, scale: 0.94)
+    private func temporaryUnavailableCard(_ message: String) -> some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(Color.accentColor.opacity(0.12))
+                    Circle()
+                        .stroke(Color.accentColor.opacity(0.22), lineWidth: 1)
+                    FantasyLionIconView(size: 26, scale: 0.94)
                         .foregroundStyle(Color.accentColor)
-                        .opacity(opacity)
-                        .frame(width: 42, height: 42)
-                        .allowsHitTesting(false)
-                        .accessibilityHidden(true)
-                        .transaction { transaction in
-                            transaction.animation = nil
-                        }
                 }
-                .frame(width: 42, height: 42)
-                .transaction { transaction in
-                    transaction.animation = nil
-                }
-            }
-            .frame(width: 76, height: 76)
+                .frame(width: 48, height: 48)
+                .accessibilityHidden(true)
 
-            VStack(spacing: 8) {
-                Text("FPL is updating right now")
+                Text("FPL is temporarily unavailable")
                     .font(.headline)
-                    .multilineTextAlignment(.center)
-
-                Text("The official Fantasy Premier League game is being updated, so your squad and scores will return shortly. Stay tuned...")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
-            Button("Check again") {
-                triggerFantasyRefresh(force: true)
+            Text(message)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(Color.accentColor)
+                    .accessibilityHidden(true)
+
+                Text("Trying again automatically…")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(Color.primary.opacity(0.86))
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Trying to load FPL data again automatically")
+
+            Button("Try again now") {
+                retryFantasyNow()
             }
             .buttonStyle(.bordered)
+            .disabled(fantasyViewModel.isLoading || fantasyViewModel.isRefreshing)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 18)
         .padding(.vertical, 20)
         .background(
@@ -3448,9 +3458,71 @@ struct FantasyView: View {
                 fantasyRefreshTask = nil
                 inFlightFantasyRefreshRequest = nil
                 drainPendingFantasyRefreshIfNeeded()
+                updateFantasyAutomaticRetryAfterRefresh()
             }
         }
         fantasyRefreshTask = task
+    }
+
+    private func updateFantasyAutomaticRetryAfterRefresh() {
+        if fantasyViewModel.shouldAutomaticallyRetry {
+            scheduleFantasyAutomaticRetry()
+        } else {
+            cancelFantasyAutomaticRetry(resetAttempt: true)
+        }
+    }
+
+    private func scheduleFantasyAutomaticRetry() {
+        guard fantasyAutomaticRetryTask == nil,
+              fantasyViewModel.shouldAutomaticallyRetry,
+              isFantasySetupReadyForRefresh,
+              isSelected,
+              scenePhase == .active else {
+            return
+        }
+        guard fantasyRefreshTask == nil,
+              !fantasyViewModel.isLoading,
+              !fantasyViewModel.isRefreshing else {
+            return
+        }
+
+        let delay = fantasyAutomaticRetryDelay(
+            forAttempt: fantasyAutomaticRetryAttempt,
+            jitter: Double.random(in: 0...1)
+        )
+        fantasyAutomaticRetryTask = Task {
+            do {
+                try await Task.sleep(for: .seconds(delay))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled else { return }
+
+            await MainActor.run {
+                fantasyAutomaticRetryTask = nil
+                guard fantasyViewModel.shouldAutomaticallyRetry,
+                      isFantasySetupReadyForRefresh,
+                      isSelected,
+                      scenePhase == .active else {
+                    return
+                }
+                fantasyAutomaticRetryAttempt += 1
+                triggerFantasyRefresh(force: true)
+            }
+        }
+    }
+
+    private func cancelFantasyAutomaticRetry(resetAttempt: Bool) {
+        fantasyAutomaticRetryTask?.cancel()
+        fantasyAutomaticRetryTask = nil
+        if resetAttempt {
+            fantasyAutomaticRetryAttempt = 0
+        }
+    }
+
+    private func retryFantasyNow() {
+        cancelFantasyAutomaticRetry(resetAttempt: true)
+        triggerFantasyRefresh(force: true)
     }
 
     private func triggerFantasyScoreRefresh(force: Bool = false) {
@@ -4891,6 +4963,10 @@ private struct FantasyPlayerCard: View {
         player.gameweekScoreState
     }
 
+    private var isInPlay: Bool {
+        player.hasActiveFixtureThisGameweek
+    }
+
     private enum ScorePresentation {
         case expected(Double)
         case live(Int)
@@ -5028,9 +5104,7 @@ private struct FantasyPlayerCard: View {
                 if player.isUnavailable || player.hasFutureAvailabilityIssue {
                     VStack(alignment: .leading, spacing: 3) {
                         if player.isUnavailable {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .font(.system(size: 9, weight: .bold))
-                                .foregroundStyle(Color.orange)
+                            FantasyAvailabilityWarningIcon(size: 9)
                         }
                         if player.hasFutureAvailabilityIssue {
                             Image(systemName: "info.circle.fill")
@@ -5122,17 +5196,37 @@ private struct FantasyPlayerCard: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .stroke(
-                    LinearGradient(
-                        colors: [clubAccentColor.opacity(0.82), Color.white.opacity(0.18), clubAccentColor.opacity(0.36)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 1.15
-                )
+            ZStack {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(
+                        LinearGradient(
+                            colors: [clubAccentColor.opacity(0.82), Color.white.opacity(0.18), clubAccentColor.opacity(0.36)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1.15
+                    )
+
+                if isInPlay {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .strokeBorder(Color.red.opacity(0.96), lineWidth: 3.5)
+
+                    RoundedRectangle(
+                        cornerRadius: max(5, cornerRadius - 2.25),
+                        style: .continuous
+                    )
+                    .strokeBorder(Color.white.opacity(0.94), lineWidth: 1.1)
+                    .padding(2.25)
+                }
+            }
         }
         .opacity(player.isUnavailable ? 0.72 : 1)
+        .shadow(
+            color: isInPlay ? Color.red.opacity(0.28) : Color.clear,
+            radius: 4,
+            x: 0,
+            y: 0
+        )
         .shadow(
             color: Color.black.opacity(0.36),
             radius: 5,
@@ -6204,6 +6298,7 @@ private struct FantasyScoreBreakdownRow: Identifiable {
     let elementID: Int
     let playerName: String
     let profileImageURL: URL?
+    let hasAvailabilityIssue: Bool
     let totalPoints: Int
     let components: [FantasyScoreBreakdownComponent]
 
@@ -6963,6 +7058,9 @@ private struct FantasyAssistantManagerSheet: View {
                                     assistantPlayerProfileImage(elementID: item.elementID, size: 16)
                                     Text(item.playerName)
                                         .font(.subheadline.weight(.semibold))
+                                    if item.hasAvailabilityIssue {
+                                        FantasyAvailabilityWarningIcon()
+                                    }
                                 }
                                 Text("\(item.teamShortName ?? "") • \(item.opponentLabel)")
                                     .font(.caption)

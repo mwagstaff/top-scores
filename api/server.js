@@ -40,10 +40,19 @@ const { BSD_LEAGUE_ALLOWLIST } = require("./bsd_config");
 const {
   getSocial: getBsdSocial,
   getPlayer: getBsdPlayer,
+  getPlayers: getBsdPlayers,
+  getTeamSquad: getBsdTeamSquad,
+  getManagerCareer: getBsdManagerCareer,
   setRequestObserver: setBsdRequestObserver,
 } = require("./bsd_client");
+const { createEurGbpRateService } = require("./exchange_rates");
 const bsdHttpMetrics = require("./bsd_http_metrics");
 const { refreshAllPredictions } = require("./fetch_bsd_predictions");
+const {
+  METADATA_DATASET: LIVE_FOOTBALL_TV_METADATA_DATASET,
+  refreshLiveFootballTvListings,
+} = require("./live_football_tv_listings");
+const { publishBsdCurrentMatchesProjection } = require("./bsd_current_matches");
 const { refreshEplSeasonActive, eplSeasonStatusSnapshot } = require("./epl_season_status");
 const {
   LEAGUE_TABLE_SOURCES,
@@ -55,6 +64,8 @@ const {
 const {
   findPlayerCachesByNames,
   getBsdRecords,
+  getOperationalDataset: getMongoOperationalDataset,
+  saveOperationalDataset: saveMongoOperationalDataset,
   upsertBsdRecords,
   registerCalendarSubscription,
   getCalendarSubscription,
@@ -172,6 +183,18 @@ const EPL_INTERVAL_HOURS = Number(process.env.EPL_UPDATE_INTERVAL_HOURS || 24);
 const EPL_INTERVAL_MS = Number(
   process.env.EPL_UPDATE_INTERVAL_MS || EPL_INTERVAL_HOURS * 60 * 60 * 1000
 );
+const LIVE_FOOTBALL_TV_DAILY_HOUR_UK = Number(
+  process.env.LIVE_FOOTBALL_TV_DAILY_HOUR_UK ?? 5
+);
+const LIVE_FOOTBALL_TV_DAILY_MINUTE_UK = Number(
+  process.env.LIVE_FOOTBALL_TV_DAILY_MINUTE_UK ?? 15
+);
+const LIVE_FOOTBALL_TV_STALE_AFTER_MS = Number(
+  process.env.LIVE_FOOTBALL_TV_STALE_AFTER_MS || 24 * 60 * 60 * 1000
+);
+const LIVE_FOOTBALL_TV_ADMIN_TOKEN = String(
+  process.env.LIVE_FOOTBALL_TV_ADMIN_TOKEN || ""
+).trim();
 const parsedEplTeamMinConfidence = Number(process.env.EPL_TEAM_MIN_CONFIDENCE || 0.82);
 const EPL_TEAM_MIN_CONFIDENCE = Number.isFinite(parsedEplTeamMinConfidence)
   ? Math.min(1, Math.max(0, parsedEplTeamMinConfidence))
@@ -774,6 +797,7 @@ const SOURCE_BSD_SCHEDULE = "bsd_schedule_matches";
 const SOURCE_BSD_PREMIER_LEAGUE = "bsd_premier_league_teams";
 const SOURCE_BSD_LEAGUE_TABLES = "bsd_league_tables";
 const SOURCE_BSD_TV = "bsd_broadcasts";
+const SOURCE_LIVE_FOOTBALL_TV = "live_football_tv_listings";
 const COMPONENT_SOURCE_BBC_TABLES_LEAGUE_TABLES = "source_bbc_league_tables";
 const COMPONENT_SOURCE_CLUB_ELO = "source_club_elo_rankings";
 const COMPONENT_SOURCE_CLUB_ELO_FIXTURES = "source_club_elo_fixtures";
@@ -787,6 +811,7 @@ const COMPONENT_SOURCE_BSD_LIVE = "source_bsd_live";
 const COMPONENT_SOURCE_BSD_SCHEDULE = "source_bsd_schedule";
 const COMPONENT_SOURCE_BSD_PREMIER_TEAMS = "source_bsd_premier_teams";
 const COMPONENT_SOURCE_BSD_LEAGUE_TABLES = "source_bsd_league_tables";
+const COMPONENT_SOURCE_LIVE_FOOTBALL_TV = "source_live_football_tv";
 const BSD_LEAGUE_ID_BY_NAME = new Map(
   Object.entries(BSD_LEAGUE_NAME_MAP).map(([id, name]) => [String(name).toLowerCase(), id])
 );
@@ -1312,6 +1337,10 @@ let leagueTablesLastUpdated = null;
 let leagueTablesUpdating = false;
 let leagueTablesDailyRefreshTimer = null;
 let leagueTablesNextDailyRefreshAt = null;
+let liveFootballTvUpdating = false;
+let liveFootballTvDailyRefreshTimer = null;
+let liveFootballTvNextDailyRefreshAt = null;
+let liveFootballTvLastResult = null;
 let cachedClubEloTeams = [];
 let clubEloLastUpdated = null;
 let cachedFixtureViewFilterContext = null;
@@ -3742,6 +3771,88 @@ function millisecondsUntilNextLondonTime(targetHour, targetMinute, now = new Dat
   }
 
   return 24 * 60 * 60 * 1000;
+}
+
+async function updateLiveFootballTvListings(options = {}) {
+  const trigger = String(options.trigger || "scheduled");
+  if (liveFootballTvUpdating) {
+    const error = new Error("TV listings refresh already in progress");
+    error.code = "TV_LISTINGS_REFRESH_IN_PROGRESS";
+    throw error;
+  }
+  if (options.staleOnly) {
+    const metadata = await getMongoOperationalDataset(LIVE_FOOTBALL_TV_METADATA_DATASET);
+    const scrapedAt = Date.parse(String(metadata && metadata.payload && metadata.payload.scraped_at || ""));
+    if (
+      Number.isFinite(scrapedAt) &&
+      Date.now() - scrapedAt < Math.max(60_000, LIVE_FOOTBALL_TV_STALE_AFTER_MS)
+    ) {
+      return { success: true, skipped: true, reason: "active_snapshot_is_fresh" };
+    }
+  }
+
+  liveFootballTvUpdating = true;
+  const startedAtMs = Date.now();
+  let success = false;
+  let recordsFetched = null;
+  recordRuntimeComponentStart(COMPONENT_SOURCE_LIVE_FOOTBALL_TV, { trigger });
+  try {
+    const result = await refreshLiveFootballTvListings({ trigger });
+    recordsFetched = result.parsed_count;
+    const projection = await publishBsdCurrentMatchesProjection("supplementary_tv", {
+      source: `live_football_tv:${trigger}`,
+    });
+    cachedBsdCurrentProjectionVersion = null;
+    bsdMatchesCacheBuiltMs = 0;
+    await refreshBsdMatchesCache();
+    clearMatchListResponseCache();
+    setSourceCacheSize(SOURCE_LIVE_FOOTBALL_TV, result.parsed_count);
+    liveFootballTvLastResult = {
+      ...result,
+      projection_changed: projection.changed,
+      projection_matches: projection.matches.length,
+    };
+    success = true;
+    recordRuntimeComponentSuccess(COMPONENT_SOURCE_LIVE_FOOTBALL_TV, liveFootballTvLastResult);
+    return liveFootballTvLastResult;
+  } catch (error) {
+    recordRuntimeComponentFailure(COMPONENT_SOURCE_LIVE_FOOTBALL_TV, error, { trigger });
+    throw error;
+  } finally {
+    trackSourceUpdateMetrics({
+      source: SOURCE_LIVE_FOOTBALL_TV,
+      startedAtMs,
+      success,
+      recordsFetched,
+    });
+    liveFootballTvUpdating = false;
+  }
+}
+
+function scheduleLiveFootballTvDailyRefresh() {
+  if (liveFootballTvDailyRefreshTimer) {
+    cancelRuntimeTimeout(liveFootballTvDailyRefreshTimer);
+    liveFootballTvDailyRefreshTimer = null;
+  }
+  const delayMs = millisecondsUntilNextLondonTime(
+    LIVE_FOOTBALL_TV_DAILY_HOUR_UK,
+    LIVE_FOOTBALL_TV_DAILY_MINUTE_UK
+  );
+  const nextAt = new Date(Date.now() + delayMs);
+  liveFootballTvNextDailyRefreshAt = nextAt.toISOString();
+  console.info(
+    `[TVListings] Daily refresh scheduled next_london="${londonDateTimeFormatter.format(nextAt)}" next_iso=${liveFootballTvNextDailyRefreshAt}`
+  );
+  liveFootballTvDailyRefreshTimer = registerRuntimeTimeout(async () => {
+    liveFootballTvDailyRefreshTimer = null;
+    try {
+      await updateLiveFootballTvListings({ trigger: "daily_uk_time" });
+    } catch (error) {
+      console.warn("[TVListings] Daily refresh failed:", error.message || error);
+    } finally {
+      scheduleLiveFootballTvDailyRefresh();
+    }
+  }, delayMs);
 }
 
 function scheduleLeagueTablesDailyRefresh() {
@@ -6235,6 +6346,35 @@ function buildPrometheusMetricsText() {
         source,
       });
     });
+
+  lines.push("# HELP top_scores_live_football_tv_refresh_running 1 while the supplementary TV listings refresh is running.");
+  lines.push("# TYPE top_scores_live_football_tv_refresh_running gauge");
+  pushPrometheusSample(
+    lines,
+    "top_scores_live_football_tv_refresh_running",
+    liveFootballTvUpdating ? 1 : 0
+  );
+
+  lines.push("# HELP top_scores_live_football_tv_listings Number of supplementary TV listings in the latest refresh by match status.");
+  lines.push("# TYPE top_scores_live_football_tv_listings gauge");
+  [
+    ["parsed", liveFootballTvLastResult && liveFootballTvLastResult.parsed_count],
+    ["matched", liveFootballTvLastResult && liveFootballTvLastResult.matched_count],
+    ["ambiguous", liveFootballTvLastResult && liveFootballTvLastResult.ambiguous_count],
+    ["unmatched", liveFootballTvLastResult && liveFootballTvLastResult.unmatched_count],
+  ].forEach(([status, count]) => {
+    pushPrometheusSample(lines, "top_scores_live_football_tv_listings", Number(count) || 0, {
+      status,
+    });
+  });
+
+  lines.push("# HELP top_scores_live_football_tv_next_refresh_timestamp_seconds Scheduled time of the next supplementary TV listings refresh.");
+  lines.push("# TYPE top_scores_live_football_tv_next_refresh_timestamp_seconds gauge");
+  pushPrometheusSample(
+    lines,
+    "top_scores_live_football_tv_next_refresh_timestamp_seconds",
+    Math.max(0, Date.parse(liveFootballTvNextDailyRefreshAt || "") / 1000) || 0
+  );
 
   const bsdMatchCoverage = bbcRangeMatchDateCoverage(cachedBsdMatches);
   lines.push("# HELP top_scores_bsd_match_date_timestamp_seconds Earliest and latest match dates in the BSD projection cache.");
@@ -9194,20 +9334,154 @@ function normalizePlayerDetailsPayload(value) {
   if (!id || !name) return null;
 
   const preferredFoot = String(value.preferred_foot || "").trim().toUpperCase();
-  const side = preferredFoot === "L" ? "Left" : preferredFoot === "R" ? "Right" : null;
+  const side = ["L", "LEFT"].includes(preferredFoot)
+    ? "Left"
+    : ["R", "RIGHT"].includes(preferredFoot)
+      ? "Right"
+      : preferredFoot === "BOTH" ? "Both" : null;
+  const currentTeam = value.current_team && typeof value.current_team === "object"
+    ? {
+        id: String(value.current_team.id || "").trim() || null,
+        name: String(value.current_team.name || "").trim() || null,
+        short_name: String(value.current_team.short_name || "").trim() || null,
+      }
+    : null;
+  const nationalTeam = value.national_team && typeof value.national_team === "object"
+    ? {
+        id: String(value.national_team.id || "").trim() || null,
+        name: String(value.national_team.name || "").trim() || null,
+        short_name: String(value.national_team.short_name || "").trim() || null,
+      }
+    : null;
+  const numberOrNull = (candidate) => {
+    if (candidate === null || candidate === undefined || candidate === "") return null;
+    const number = Number(candidate);
+    return Number.isFinite(number) ? number : null;
+  };
+  const dateOfBirth = String(value.date_of_birth || value.born || "").trim() || null;
+  const teamName = String(
+    currentTeam && currentTeam.name || value.team || ""
+  ).trim() || null;
 
   return {
     id,
     name,
-    team: null,
-    born: String(value.date_of_birth || "").trim() || null,
-    description: null,
+    short_name: String(value.short_name || "").trim() || null,
+    team: teamName,
+    born: dateOfBirth,
+    description: String(value.description || "").trim() || null,
     side,
     position: String(value.specific_position || value.position || "").trim() || null,
-    birth_location: null,
+    birth_location: String(value.birth_location || "").trim() || null,
     cutout_url: playerDetailsWithBsdImage({}, id).cutout_url,
-    thumb_url: null,
-    render_url: null,
+    thumb_url: String(value.thumb_url || "").trim() || null,
+    render_url: String(value.render_url || "").trim() || null,
+    position_code: String(value.position || "").trim() || null,
+    specific_position: String(value.specific_position || "").trim() || null,
+    jersey_number: numberOrNull(value.jersey_number),
+    date_of_birth: dateOfBirth,
+    height_cm: numberOrNull(value.height_cm),
+    weight_kg: numberOrNull(value.weight_kg),
+    preferred_foot: preferredFoot || null,
+    nationality: String(value.nationality || "").trim() || null,
+    current_team_id: String(value.current_team_id || currentTeam && currentTeam.id || "").trim() || null,
+    national_team_id: String(value.national_team_id || nationalTeam && nationalTeam.id || "").trim() || null,
+    current_team: currentTeam,
+    national_team: nationalTeam,
+    market_value_eur: numberOrNull(value.market_value_eur),
+    contract_until: String(value.contract_until || "").trim() || null,
+    availability: String(value.availability || "").trim() || null,
+    injury_type: String(value.injury_type || "").trim() || null,
+    injury_expected_return: String(value.injury_expected_return || "").trim() || null,
+    attributes: value.attributes ?? null,
+    strengths: Array.isArray(value.strengths) ? value.strengths : [],
+    weaknesses: Array.isArray(value.weaknesses) ? value.weaknesses : [],
+    rating: numberOrNull(value.rating),
+    potential: String(value.potential || "").trim() || null,
+    injury_risk: String(value.injury_risk || "").trim() || null,
+    wage_eur_annual: numberOrNull(value.wage_eur_annual),
+  };
+}
+
+function mergePlayerDetailsPayload(primary, fallback) {
+  if (!primary) return fallback || null;
+  if (!fallback) return primary;
+  const merged = { ...fallback, ...primary };
+  Object.keys(merged).forEach((key) => {
+    if (primary[key] === null || primary[key] === undefined || primary[key] === "") {
+      merged[key] = fallback[key] ?? primary[key];
+    }
+  });
+  return merged;
+}
+
+function playerPayloadWithExchangeRate(payload, exchangeRate) {
+  if (!payload) return null;
+  const rate = Number(exchangeRate && exchangeRate.rate);
+  const hasMarketValue = payload.market_value_eur !== null &&
+    payload.market_value_eur !== undefined &&
+    payload.market_value_eur !== "";
+  const marketValueEur = hasMarketValue ? Number(payload.market_value_eur) : NaN;
+  return {
+    ...payload,
+    market_value_gbp: Number.isFinite(rate) && rate > 0 && Number.isFinite(marketValueEur)
+      ? Math.round(marketValueEur * rate)
+      : null,
+  };
+}
+
+function fantasyPlayerProfileUrl(element) {
+  const code = Number(element && element.code);
+  if (!Number.isFinite(code) || code <= 0) return null;
+  return `https://resources.premierleague.com/premierleague25/photos/players/110x140/${code}.png`;
+}
+
+function playerPayloadWithFantasyData(payload, fantasyBootstrap) {
+  if (!payload || !fantasyBootstrap || typeof fantasyBootstrap !== "object") return payload;
+  const elements = Array.isArray(fantasyBootstrap.elements) ? fantasyBootstrap.elements : [];
+  const teamsById = new Map(
+    (Array.isArray(fantasyBootstrap.teams) ? fantasyBootstrap.teams : [])
+      .map((team) => [Number(team && team.id), String(team && team.name || "").trim()])
+      .filter(([id, name]) => Number.isFinite(id) && id > 0 && name)
+  );
+  const playerTeamName = String(
+    payload.current_team && payload.current_team.name || payload.team || ""
+  ).trim();
+  const playerLookup = lineupPlayerNameLookup(payload.name);
+  const candidates = elements.map((element) => {
+    const elementTeamName = teamsById.get(Number(element && element.team)) || "";
+    if (playerTeamName && !watchabilityTeamNamesMatch(playerTeamName, elementTeamName)) return null;
+    const fullNameScore = lineupPlayerNameMatchScore(
+      playerLookup,
+      lineupPlayerNameLookup(normalizedPlayerName(element))
+    );
+    const webNameScore = lineupPlayerNameMatchScore(
+      playerLookup,
+      lineupPlayerNameLookup(element && element.web_name)
+    );
+    return { element, score: Math.max(fullNameScore, webNameScore) };
+  }).filter((candidate) => candidate && candidate.score > 0);
+  if (candidates.length === 0) return payload;
+  const bestScore = Math.max(...candidates.map((candidate) => candidate.score));
+  const bestMatches = candidates.filter((candidate) => candidate.score === bestScore);
+  if (bestMatches.length !== 1) return payload;
+
+  const element = bestMatches[0].element;
+  const selectedByPercent = Number(element && element.selected_by_percent);
+  const totalPlayers = Number(fantasyBootstrap.total_players);
+  return {
+    ...payload,
+    fpl_element_id: Number(element && element.id) || null,
+    fpl_first_name: String(element && element.first_name || "").trim() || null,
+    fpl_last_name: String(element && element.second_name || "").trim() || null,
+    fpl_total_points: Number.isFinite(Number(element && element.total_points))
+      ? Number(element.total_points)
+      : null,
+    fpl_selected_by_percent: Number.isFinite(selectedByPercent) ? selectedByPercent : null,
+    fpl_selected_by_count: Number.isFinite(selectedByPercent) && Number.isFinite(totalPlayers)
+      ? Math.round(totalPlayers * selectedByPercent / 100)
+      : null,
+    fpl_profile_url: fantasyPlayerProfileUrl(element),
   };
 }
 
@@ -9220,12 +9494,48 @@ function withConfiguredMatchDetailsPlayerImages(payload) {
 }
 
 const BSD_PLAYER_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const BSD_TEAM_SQUAD_CACHE_MAX_AGE_MS = 60 * 60 * 1000;
+const BSD_MANAGER_CAREER_CACHE_MAX_AGE_MS = 60 * 60 * 1000;
+const EUR_GBP_DATASET_NAME = "exchange_rate_eur_gbp";
 const playerPayloadRefreshes = new Map();
+const teamSquadRefreshes = new Map();
+const managerCareerRefreshes = new Map();
+const eurGbpRateService = createEurGbpRateService({
+  load: () => getMongoOperationalDataset(EUR_GBP_DATASET_NAME),
+  save: (record) => saveMongoOperationalDataset({
+    name: EUR_GBP_DATASET_NAME,
+    ...record,
+    provider: "frankfurter",
+    base_currency: "EUR",
+    quote_currency: "GBP",
+    updated_at: record.fetched_at,
+  }),
+});
+
+async function getEurGbpRateOrNull() {
+  return eurGbpRateService.getRate().catch((error) => {
+    console.warn("[API] EUR to GBP rate unavailable:", error.message || error);
+    return null;
+  });
+}
 
 function bsdPlayerCacheFresh(record, nowMs = Date.now()) {
   if (!record || typeof record !== "object") return false;
   const updatedAtMs = Date.parse(String(record.updated_at || ""));
   return Number.isFinite(updatedAtMs) && nowMs - updatedAtMs < BSD_PLAYER_CACHE_MAX_AGE_MS;
+}
+
+function bsdPlayerPayloadIsDetailed(value) {
+  if (!value || typeof value !== "object") return false;
+  return Object.prototype.hasOwnProperty.call(value, "market_value_eur") ||
+    Object.prototype.hasOwnProperty.call(value, "current_team") ||
+    Object.prototype.hasOwnProperty.call(value, "contract_until");
+}
+
+function bsdTeamSquadCacheFresh(record, nowMs = Date.now()) {
+  if (!record || typeof record !== "object") return false;
+  const updatedAtMs = Date.parse(String(record.updated_at || ""));
+  return Number.isFinite(updatedAtMs) && nowMs - updatedAtMs < BSD_TEAM_SQUAD_CACHE_MAX_AGE_MS;
 }
 
 function normalizedLineupPlayerPosition(player) {
@@ -9307,7 +9617,10 @@ async function fetchAndCachePlayerPayload(playerId, options = {}) {
     reason: options.reason || "player_details_request",
     trigger: options.trigger || "player_details_request",
   });
-  const payload = normalizePlayerDetailsPayload(raw);
+  const payload = mergePlayerDetailsPayload(
+    normalizePlayerDetailsPayload(raw),
+    playerDetailsPayloadFromMatchLineups(playerId)
+  );
   if (!payload) return { payload: null, source: "bsd_player" };
   await upsertBsdRecords("bsd_players", [{ id: playerId, payload: raw }]).catch((error) => {
     console.warn(`[API] Failed to cache player ${playerId}:`, error.message || error);
@@ -9341,8 +9654,12 @@ async function getCachedOrFetchPlayerPayload(playerId, options = {}) {
   const cached = await getBsdRecords("bsd_players", { _id: String(playerId) })
     .then((records) => records[0] || null)
     .catch(() => null);
-  const cachedPayload = normalizePlayerDetailsPayload(cached && cached.payload);
-  if (!options.force && cachedPayload) {
+  const lineupPayload = playerDetailsPayloadFromMatchLineups(playerId);
+  const cachedPayload = mergePlayerDetailsPayload(
+    normalizePlayerDetailsPayload(cached && cached.payload),
+    lineupPayload
+  );
+  if (!options.force && cachedPayload && bsdPlayerPayloadIsDetailed(cached && cached.payload)) {
     if (bsdPlayerCacheFresh(cached, nowMs)) {
       return { payload: cachedPayload, source: "bsd_player_cache" };
     }
@@ -9350,15 +9667,368 @@ async function getCachedOrFetchPlayerPayload(playerId, options = {}) {
     return { payload: cachedPayload, source: "bsd_player_cache_stale" };
   }
 
-  if (!options.force) {
-    const lineupPayload = playerDetailsPayloadFromMatchLineups(playerId);
-    if (lineupPayload) {
-      refreshPlayerPayloadInBackground(playerId, options);
+  try {
+    return await refreshPlayerPayload(playerId, options);
+  } catch (error) {
+    if (!options.force && lineupPayload) {
       return { payload: lineupPayload, source: "match_lineup_cache" };
     }
+    throw error;
   }
+}
 
-  return refreshPlayerPayload(playerId, options);
+function teamSquadPlayers(value) {
+  if (Array.isArray(value)) return value;
+  return Array.isArray(value && value.players) ? value.players : [];
+}
+
+function normalizeTeamSquadPayload(
+  teamId,
+  squadValue,
+  detailedPlayers = [],
+  exchangeRate = null,
+  fantasyBootstrap = cachedFantasyBootstrap
+) {
+  const detailsById = new Map(
+    (Array.isArray(detailedPlayers) ? detailedPlayers : [])
+      .map((player) => [String(player && (player.id || player.id_player) || "").trim(), player])
+      .filter(([id]) => id)
+  );
+  const players = teamSquadPlayers(squadValue).map((squadPlayer) => {
+    const id = String(squadPlayer && (squadPlayer.id || squadPlayer.id_player) || "").trim();
+    const mergedRaw = { ...(squadPlayer || {}), ...(detailsById.get(id) || {}) };
+    const normalized = playerPayloadWithExchangeRate(
+      normalizePlayerDetailsPayload(mergedRaw),
+      exchangeRate
+    );
+    return playerPayloadWithFantasyData(normalized, fantasyBootstrap);
+  }).filter(Boolean);
+  const normalizedTeamId = String(
+    squadValue && squadValue.team_id || teamId || ""
+  ).trim();
+  return {
+    team_id: normalizedTeamId,
+    count: players.length,
+    players,
+    exchange_rate: exchangeRate ? {
+      base: "EUR",
+      quote: "GBP",
+      rate: exchangeRate.rate,
+      date: exchangeRate.date || null,
+      stale: Boolean(exchangeRate.stale),
+      source: exchangeRate.source || null,
+    } : null,
+  };
+}
+
+async function cachedTeamSquadDetails(squadRecord) {
+  const ids = teamSquadPlayers(squadRecord && squadRecord.payload)
+    .map((player) => String(player && (player.id || player.id_player) || "").trim())
+    .filter(Boolean);
+  if (ids.length === 0) return [];
+  return getBsdRecords("bsd_players", { _id: { $in: ids } })
+    .then((records) => records
+      .map((record) => record.payload)
+      .filter(bsdPlayerPayloadIsDetailed))
+    .catch(() => []);
+}
+
+async function fetchAndCacheTeamSquad(teamId, options = {}) {
+  const requestOptions = {
+    initiator: options.initiator || "api",
+    trigger: options.trigger || "team_squad_request",
+  };
+  const [squadResult, playersResult] = await Promise.allSettled([
+    getBsdTeamSquad(teamId, { ...requestOptions, reason: "team_squad_request" }),
+    getBsdPlayers({ teamId }, { ...requestOptions, reason: "team_players_request" }),
+  ]);
+  if (squadResult.status === "rejected") throw squadResult.reason;
+
+  const squad = squadResult.value;
+  const detailedPlayers = playersResult.status === "fulfilled" ? playersResult.value : [];
+  await Promise.all([
+    upsertBsdRecords("bsd_team_squads", [{ id: teamId, payload: squad }]),
+    upsertBsdRecords(
+      "bsd_players",
+      detailedPlayers.map((player) => ({
+        id: player && (player.id || player.id_player),
+        payload: player,
+      }))
+    ),
+  ]).catch((error) => {
+    console.warn(`[API] Failed to cache squad for team ${teamId}:`, error.message || error);
+  });
+  return { squad, detailedPlayers, source: "bsd_team_squad" };
+}
+
+function refreshTeamSquad(teamId, options = {}) {
+  const existing = teamSquadRefreshes.get(teamId);
+  if (existing) return existing;
+  let refreshPromise;
+  refreshPromise = fetchAndCacheTeamSquad(teamId, options).finally(() => {
+    if (teamSquadRefreshes.get(teamId) === refreshPromise) teamSquadRefreshes.delete(teamId);
+  });
+  teamSquadRefreshes.set(teamId, refreshPromise);
+  return refreshPromise;
+}
+
+async function getCachedOrFetchTeamSquad(teamId, options = {}) {
+  const cached = await getBsdRecords("bsd_team_squads", { _id: String(teamId) })
+    .then((records) => records[0] || null)
+    .catch(() => null);
+  if (!options.force && cached) {
+    const detailedPlayers = await cachedTeamSquadDetails(cached);
+    const expectedPlayerCount = teamSquadPlayers(cached.payload).length;
+    const hasCompleteDetails = expectedPlayerCount > 0 && detailedPlayers.length >= expectedPlayerCount;
+    if (bsdTeamSquadCacheFresh(cached) && hasCompleteDetails) {
+      return { squad: cached.payload, detailedPlayers, source: "bsd_team_squad_cache" };
+    }
+    if (hasCompleteDetails) {
+      void refreshTeamSquad(teamId, options).catch((error) => {
+        console.warn(`[API] Background squad refresh failed for ${teamId}:`, error.message || error);
+      });
+      return { squad: cached.payload, detailedPlayers, source: "bsd_team_squad_cache_stale" };
+    }
+  }
+  return refreshTeamSquad(teamId, options);
+}
+
+function managerNumberOrNull(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function managerPercentage(value, total) {
+  const count = managerNumberOrNull(value);
+  const denominator = managerNumberOrNull(total);
+  if (count === null || denominator === null || denominator <= 0) return null;
+  return Math.round((count / denominator) * 1_000) / 10;
+}
+
+function normalizeManagerPayload(value) {
+  if (!value || typeof value !== "object") return null;
+  const id = String(value.id || "").trim();
+  const name = String(value.name || "").trim();
+  if (!id || !name) return null;
+  const wins = managerNumberOrNull(value.wins);
+  const draws = managerNumberOrNull(value.draws);
+  const losses = managerNumberOrNull(value.losses);
+  const reportedMatches = managerNumberOrNull(value.matches_total);
+  const resultTotal = [wins, draws, losses].every((item) => item !== null)
+    ? wins + draws + losses
+    : null;
+  const percentageTotal = reportedMatches && reportedMatches > 0 ? reportedMatches : resultTotal;
+  const currentTeamId = String(value.current_team_id || "").trim() || null;
+
+  return {
+    id,
+    name,
+    short_name: String(value.short_name || "").trim() || null,
+    country: String(value.country || "").trim() || null,
+    tactical_profile: String(value.tactical_profile || "").trim() || null,
+    preferred_formation: String(value.preferred_formation || "").trim() || null,
+    current_team_id: currentTeamId,
+    matches_total: reportedMatches,
+    wins,
+    draws,
+    losses,
+    win_pct: managerNumberOrNull(value.win_pct) ?? managerPercentage(wins, percentageTotal),
+    draw_pct: managerPercentage(draws, percentageTotal),
+    loss_pct: managerPercentage(losses, percentageTotal),
+    avg_goals_scored: managerNumberOrNull(value.avg_goals_scored),
+    avg_goals_conceded: managerNumberOrNull(value.avg_goals_conceded),
+    avg_possession: managerNumberOrNull(value.avg_possession),
+    clean_sheet_pct: managerNumberOrNull(value.clean_sheet_pct),
+    image_url: `https://sports.bzzoiro.com/img/manager/${encodeURIComponent(id)}/?bg=transparent`,
+  };
+}
+
+function managerDateMilliseconds(value) {
+  const normalized = String(value || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(normalized)) return null;
+  const milliseconds = Date.parse(`${normalized}T00:00:00Z`);
+  if (!Number.isFinite(milliseconds)) return null;
+  return new Date(milliseconds).toISOString().slice(0, 10) === normalized
+    ? milliseconds
+    : null;
+}
+
+function managerTenureHasValidDateRange(tenure) {
+  const dateFrom = String(tenure && tenure.date_from || "").trim();
+  const dateTo = String(tenure && tenure.date_to || "").trim();
+  if (!dateFrom || !dateTo) return true;
+  const fromMilliseconds = managerDateMilliseconds(dateFrom);
+  const toMilliseconds = managerDateMilliseconds(dateTo);
+  return fromMilliseconds !== null &&
+    toMilliseconds !== null &&
+    fromMilliseconds <= toMilliseconds;
+}
+
+function normalizeManagerImpactStats(value) {
+  if (!value || typeof value !== "object") return null;
+  return {
+    matches: managerNumberOrNull(value.matches),
+    wins: managerNumberOrNull(value.wins),
+    draws: managerNumberOrNull(value.draws),
+    losses: managerNumberOrNull(value.losses),
+    points: managerNumberOrNull(value.points),
+    ppm: managerNumberOrNull(value.ppm),
+    win_pct: managerNumberOrNull(value.win_pct),
+    goals_for: managerNumberOrNull(value.goals_for),
+    goals_against: managerNumberOrNull(value.goals_against),
+    goal_diff: managerNumberOrNull(value.goal_diff),
+    matches_led_by_manager: managerNumberOrNull(value.matches_led_by_manager),
+  };
+}
+
+function normalizeManagerAppointmentEffect(value) {
+  if (!value || typeof value !== "object") return null;
+  const before = normalizeManagerImpactStats(value.before);
+  const after = normalizeManagerImpactStats(value.after);
+  if (!before || !after) return null;
+  return {
+    window: managerNumberOrNull(value.window),
+    before,
+    after,
+    ppm_change: managerNumberOrNull(value.ppm_change),
+  };
+}
+
+function normalizeManagerCareerPayload(managerId, value) {
+  const normalizedManagerId = String(value && value.manager_id || managerId || "").trim();
+  const tenures = (Array.isArray(value && value.tenures) ? value.tenures : [])
+    .map((tenure) => {
+      const teamId = String(tenure && tenure.team_id || "").trim();
+      const teamName = String(tenure && tenure.team_name || "").trim();
+      if (!teamId || !teamName) return null;
+      return {
+        team_id: teamId,
+        team_name: teamName,
+        team_logo_url: `https://sports.bzzoiro.com/img/team/${encodeURIComponent(teamId)}/?bg=transparent`,
+        date_from: String(tenure.date_from || "").trim() || null,
+        date_to: String(tenure.date_to || "").trim() || null,
+        matches: managerNumberOrNull(tenure.matches),
+        wins: managerNumberOrNull(tenure.wins),
+        draws: managerNumberOrNull(tenure.draws),
+        losses: managerNumberOrNull(tenure.losses),
+        win_pct: managerNumberOrNull(tenure.win_pct),
+        points: managerNumberOrNull(tenure.points),
+        ppm: managerNumberOrNull(tenure.ppm),
+        goals_for: managerNumberOrNull(tenure.goals_for),
+        goals_against: managerNumberOrNull(tenure.goals_against),
+        goal_diff: managerNumberOrNull(tenure.goal_diff),
+        appointment_effect: normalizeManagerAppointmentEffect(tenure.appointment_effect),
+      };
+    })
+    .filter((tenure) => tenure && managerTenureHasValidDateRange(tenure))
+    .sort((left, right) => {
+      const leftDate = left.date_to || left.date_from || "";
+      const rightDate = right.date_to || right.date_from || "";
+      return rightDate.localeCompare(leftDate);
+    });
+  return {
+    manager_id: normalizedManagerId,
+    count: tenures.length,
+    tenures,
+  };
+}
+
+function normalizeTeamManagerPayload(value, teamId, careerValue) {
+  const manager = normalizeManagerPayload(value);
+  if (!manager) return null;
+
+  const normalizedTeamId = String(teamId || manager.current_team_id || "").trim();
+  const career = normalizeManagerCareerPayload(manager.id, careerValue);
+  const matchingTenures = career.tenures.filter((tenure) => tenure.team_id === normalizedTeamId);
+  const currentTenure = matchingTenures.find((tenure) => !tenure.date_to) || matchingTenures[0] || null;
+  const wins = currentTenure ? currentTenure.wins : null;
+  const draws = currentTenure ? currentTenure.draws : null;
+  const losses = currentTenure ? currentTenure.losses : null;
+  const reportedMatches = currentTenure ? currentTenure.matches : null;
+  const resultTotal = [wins, draws, losses].every((item) => item !== null)
+    ? wins + draws + losses
+    : null;
+  const percentageTotal = reportedMatches && reportedMatches > 0 ? reportedMatches : resultTotal;
+
+  return {
+    ...manager,
+    current_team_id: normalizedTeamId || manager.current_team_id,
+    matches_total: reportedMatches ?? resultTotal,
+    wins,
+    draws,
+    losses,
+    win_pct: currentTenure
+      ? currentTenure.win_pct ?? managerPercentage(wins, percentageTotal)
+      : null,
+    draw_pct: managerPercentage(draws, percentageTotal),
+    loss_pct: managerPercentage(losses, percentageTotal),
+    record_scope: "current_team",
+    record_team_id: normalizedTeamId || null,
+  };
+}
+
+function managerCareerCacheFresh(record, nowMs = Date.now()) {
+  if (!record || typeof record !== "object") return false;
+  const updatedAtMs = Date.parse(String(record.updated_at || ""));
+  return Number.isFinite(updatedAtMs) && nowMs - updatedAtMs < BSD_MANAGER_CAREER_CACHE_MAX_AGE_MS;
+}
+
+async function fetchAndCacheManagerCareer(managerId, options = {}) {
+  const raw = await getBsdManagerCareer(managerId, {
+    initiator: options.initiator || "api",
+    reason: options.reason || "manager_career_request",
+    trigger: options.trigger || "manager_career_request",
+  });
+  await upsertBsdRecords("bsd_manager_careers", [{ id: managerId, payload: raw }]).catch((error) => {
+    console.warn(`[API] Failed to cache manager career ${managerId}:`, error.message || error);
+  });
+  return { payload: raw, source: "bsd_manager_career" };
+}
+
+function refreshManagerCareer(managerId, options = {}) {
+  const existing = managerCareerRefreshes.get(managerId);
+  if (existing) return existing;
+  let refreshPromise;
+  refreshPromise = fetchAndCacheManagerCareer(managerId, options).finally(() => {
+    if (managerCareerRefreshes.get(managerId) === refreshPromise) {
+      managerCareerRefreshes.delete(managerId);
+    }
+  });
+  managerCareerRefreshes.set(managerId, refreshPromise);
+  return refreshPromise;
+}
+
+async function getCachedOrFetchManagerCareer(managerId, options = {}) {
+  const cached = await getBsdRecords("bsd_manager_careers", { _id: String(managerId) })
+    .then((records) => records[0] || null)
+    .catch(() => null);
+  if (!options.force && cached) {
+    if (managerCareerCacheFresh(cached)) {
+      return { payload: cached.payload, source: "bsd_manager_career_cache" };
+    }
+    void refreshManagerCareer(managerId, options).catch((error) => {
+      console.warn(`[API] Background manager career refresh failed for ${managerId}:`, error.message || error);
+    });
+    return { payload: cached.payload, source: "bsd_manager_career_cache_stale" };
+  }
+  return refreshManagerCareer(managerId, options);
+}
+
+async function cachedManagerForTeam(teamId) {
+  const numericTeamId = Number(teamId);
+  const teamIds = Number.isFinite(numericTeamId) ? [String(teamId), numericTeamId] : [String(teamId)];
+  const records = await getBsdRecords(
+    "bsd_managers",
+    {
+      $or: [
+        { current_team_id: { $in: teamIds } },
+        { "payload.current_team_id": { $in: teamIds } },
+      ],
+    },
+    { sort: { updated_at: -1 }, limit: 1 }
+  );
+  return records[0] || null;
 }
 
 function collectLineupPlayers(value) {
@@ -22838,7 +23508,7 @@ function setCacheOnlyHeaders(res) {
 }
 
 const ADMIN_ARCH_COMPONENT_DEFS = Object.freeze([
-  { id: "source_live_football", label: "LiveFootballOnTV", short_label: "LiveFootballOnTV", group: "sources", kind: "source" },
+  { id: COMPONENT_SOURCE_LIVE_FOOTBALL_TV, label: "LiveFootballOnTV TV Listings", short_label: "TV Listings", group: "sources", kind: "source" },
   { id: "source_bsd_live", label: "BSD Live Scores", short_label: "BSD Live", group: "sources", kind: "source" },
   { id: "source_bsd_schedule", label: "BSD Schedule Fixtures", short_label: "BSD Schedule", group: "sources", kind: "source" },
   { id: "source_bsd_match_details", label: "BSD Match Details", short_label: "BSD Details", group: "sources", kind: "source" },
@@ -22861,7 +23531,7 @@ const ADMIN_ARCH_COMPONENT_BY_ID = new Map(
   ADMIN_ARCH_COMPONENT_DEFS.map((component) => [component.id, component])
 );
 const ADMIN_ARCH_FLOW_EDGES = Object.freeze([
-  { from: "source_live_football", to: "operational_memory" },
+  { from: COMPONENT_SOURCE_LIVE_FOOTBALL_TV, to: "operational_memory" },
   { from: "source_bsd_live", to: "operational_memory" },
   { from: "source_bsd_schedule", to: "operational_memory" },
   { from: "source_bsd_match_details", to: "operational_memory" },
@@ -23034,6 +23704,7 @@ function buildUpstreamFeedSnapshot(options = {}) {
     url: options.url || null,
     interval_ms: Number.isFinite(options.interval_ms) ? options.interval_ms : null,
     updated_at: updatedAt,
+    next_refresh_at: options.next_refresh_at || null,
     age_seconds: health.age_seconds,
     count: Number.isFinite(options.count) ? options.count : null,
     running:
@@ -23113,6 +23784,28 @@ async function buildAdminArchitectureOverviewPayload() {
   const recentReconciliation = findReconciliationComponentByName(reconciliation, OP_DATASET_RECENT_MATCHES);
   const tablesReconciliation = findReconciliationComponentByName(reconciliation, OP_DATASET_LEAGUE_TABLES);
   const detailsReconciliation = findReconciliationComponentByName(reconciliation, "match_details");
+  let liveFootballTvMetadata = null;
+  try {
+    liveFootballTvMetadata = await getMongoOperationalDataset(
+      LIVE_FOOTBALL_TV_METADATA_DATASET
+    );
+  } catch (_) {
+    // Runtime diagnostics still expose an unavailable Mongo-backed scraper.
+  }
+  const liveFootballTvPayload = liveFootballTvMetadata && liveFootballTvMetadata.payload || {};
+  const liveFootballTvFeed = buildUpstreamFeedSnapshot({
+    id: COMPONENT_SOURCE_LIVE_FOOTBALL_TV,
+    title: "LiveFootballOnTV TV Listings",
+    runtimeId: COMPONENT_SOURCE_LIVE_FOOTBALL_TV,
+    url: process.env.LIVE_FOOTBALL_TV_URL || "https://www.live-footballontv.com/",
+    interval_ms: 24 * 60 * 60 * 1000,
+    updated_at: liveFootballTvPayload.scraped_at || null,
+    next_refresh_at: liveFootballTvNextDailyRefreshAt,
+    count: Number(liveFootballTvPayload.parsed_count) || 0,
+    last_success_at: sourceLastSuccessAtIso(SOURCE_LIVE_FOOTBALL_TV),
+    running: liveFootballTvUpdating,
+    retry: { mode: "exponential_backoff" },
+  });
 
   const bbcLiveFeed = buildUpstreamFeedSnapshot({
     id: COMPONENT_SOURCE_BSD_LIVE,
@@ -23305,6 +23998,13 @@ async function buildAdminArchitectureOverviewPayload() {
   );
 
   const components = [
+    buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get(COMPONENT_SOURCE_LIVE_FOOTBALL_TV), {
+      level: liveFootballTvFeed.level,
+      status: liveFootballTvFeed.status,
+      summary: `${liveFootballTvPayload.matched_count || 0}/${liveFootballTvFeed.count || 0} listings matched`,
+      updated_at: liveFootballTvFeed.updated_at,
+      age_seconds: liveFootballTvFeed.age_seconds,
+    }),
     buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("source_bsd_live"), {
       level: bbcLiveFeed.level,
       status: bbcLiveFeed.status,
@@ -23395,7 +24095,7 @@ async function buildAdminArchitectureOverviewPayload() {
       summary: "/api/v1/matches and /api/v1/matches/:id",
       updated_at: newestIsoTimestamp([memoryDatasets[OP_DATASET_MERGED_MATCHES].updated_at, memoryMatchDetails.updated_at]),
       age_seconds: ageSecondsFromIso(newestIsoTimestamp([memoryDatasets[OP_DATASET_MERGED_MATCHES].updated_at, memoryMatchDetails.updated_at]), nowMs),
-      dependencies: ["operational_memory", "source_bsd_match_details"],
+      dependencies: ["operational_memory", "source_bsd_match_details", COMPONENT_SOURCE_LIVE_FOOTBALL_TV],
     }),
     buildAdminComponentSummary(ADMIN_ARCH_COMPONENT_BY_ID.get("metadata_api"), {
       level: metadataApiHealth.level,
@@ -23459,6 +24159,7 @@ async function buildAdminArchitectureOverviewPayload() {
     edges: ADMIN_ARCH_FLOW_EDGES,
     components,
     feed_snapshots: {
+      live_football_tv: liveFootballTvFeed,
       bsd_live: bbcLiveFeed,
       bsd_schedule: bbcRangeFeed,
       bsd_match_details: bbcDetailsFeed,
@@ -23758,14 +24459,14 @@ async function buildAdminArchitectureComponentDetail(componentId) {
   }
 
   const simpleSourceMap = {
-    source_live_football: {
-      snapshot: feedSnapshots.live_football,
-      description: "Pulls TV fixture listings from LiveFootballOnTV and seeds the live_matches dataset.",
-      writes_to: ["operational_memory.live_matches", "operational_memory.recent_matches", "operational_memory.merged_matches", "operational_redis.live_matches"],
-      used_by: ["matches_api", "metadata_api"],
+    [COMPONENT_SOURCE_LIVE_FOOTBALL_TV]: {
+      snapshot: feedSnapshots.live_football_tv,
+      description: "Scrapes supplementary UK TV channels from LiveFootballOnTV, matches them to allowlisted BSD fixtures, and unions them behind the existing match API contract.",
+      writes_to: ["mongodb.live_football_tv_listings", "mongodb.bsd_current_matches"],
+      used_by: ["matches_api"],
       failure_impact: [
-        "TV channel and fixture listing freshness degrades for /api/v1/matches.",
-        "Recent cache and merged matches stop incorporating new LiveFootballOnTV entries until the next success.",
+        "BSD listings remain available, but supplementary future TV coverage stops advancing.",
+        "The last complete supplementary snapshot remains active until a later scrape succeeds.",
       ],
     },
     source_bsd_live: {
@@ -24964,6 +25665,102 @@ app.get(`${API_PREFIX}/teams/catalog`, async (req, res) => {
   }
 });
 
+app.get(`${API_PREFIX}/teams/:teamId/squad`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+  const teamId = String(req.params.teamId || "").trim();
+  if (!/^\d+$/.test(teamId)) {
+    res.status(400).json({ error: "Invalid team id." });
+    return;
+  }
+
+  try {
+    const [result, exchangeRate] = await Promise.all([
+      getCachedOrFetchTeamSquad(teamId, {
+        initiator: "api",
+        reason: "team_squad_request",
+        trigger: "team_squad_request",
+      }),
+      getEurGbpRateOrNull(),
+    ]);
+    const payload = normalizeTeamSquadPayload(
+      teamId,
+      result.squad,
+      result.detailedPlayers,
+      exchangeRate
+    );
+    res.set("X-Operational-Source", result.source);
+    res.set("X-Data-Source", result.source);
+    res.status(200).json(payload);
+  } catch (error) {
+    console.warn(`[API] Failed to load squad for team ${teamId}:`, error.message || error);
+    res.status(502).json({ error: "Failed to load team squad." });
+  }
+});
+
+app.get(`${API_PREFIX}/teams/:teamId/manager`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+  const teamId = String(req.params.teamId || "").trim();
+  if (!/^\d+$/.test(teamId)) {
+    res.status(400).json({ error: "Invalid team id." });
+    return;
+  }
+
+  try {
+    const record = await cachedManagerForTeam(teamId);
+    const manager = normalizeManagerPayload(record && record.payload);
+    if (!manager) {
+      res.status(404).json({ error: "No current manager found for team id." });
+      return;
+    }
+
+    let careerPayload = null;
+    let source = "bsd_manager_cache";
+    try {
+      const career = await getCachedOrFetchManagerCareer(manager.id, {
+        initiator: "api",
+        reason: "team_manager_request",
+        trigger: "team_manager_request",
+      });
+      careerPayload = career.payload;
+      source = `bsd_manager_cache+${career.source}`;
+    } catch (error) {
+      console.warn(`[API] Current tenure unavailable for manager ${manager.id}:`, error.message || error);
+    }
+
+    const payload = normalizeTeamManagerPayload(record.payload, teamId, careerPayload);
+    res.set("X-Operational-Source", source);
+    res.set("X-Data-Source", source);
+    res.status(200).json(payload);
+  } catch (error) {
+    console.warn(`[API] Failed to load manager for team ${teamId}:`, error.message || error);
+    res.status(500).json({ error: "Failed to load team manager." });
+  }
+});
+
+app.get(`${API_PREFIX}/managers/:managerId/career`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+  const managerId = String(req.params.managerId || "").trim();
+  if (!/^\d+$/.test(managerId)) {
+    res.status(400).json({ error: "Invalid manager id." });
+    return;
+  }
+
+  try {
+    const result = await getCachedOrFetchManagerCareer(managerId, {
+      initiator: "api",
+      reason: "manager_career_request",
+      trigger: "manager_career_request",
+    });
+    const payload = normalizeManagerCareerPayload(managerId, result.payload);
+    res.set("X-Operational-Source", result.source);
+    res.set("X-Data-Source", result.source);
+    res.status(200).json(payload);
+  } catch (error) {
+    console.warn(`[API] Failed to load manager career ${managerId}:`, error.message || error);
+    res.status(502).json({ error: "Failed to load manager career." });
+  }
+});
+
 app.get(`${API_PREFIX}/players/:playerId`, async (req, res) => {
   setCacheOnlyHeaders(res);
   const playerId = String(req.params.playerId || "").trim();
@@ -24978,7 +25775,9 @@ app.get(`${API_PREFIX}/players/:playerId`, async (req, res) => {
       reason: "player_details_request",
       trigger: "player_details_request",
     });
-    const payload = await withConfiguredPlayerDetailsImage(result.payload, playerId);
+    const exchangeRate = await getEurGbpRateOrNull();
+    const convertedPayload = playerPayloadWithExchangeRate(result.payload, exchangeRate);
+    const payload = await withConfiguredPlayerDetailsImage(convertedPayload, playerId);
     if (!payload) {
       res.status(404).json({ error: "No player details found for player id." });
       return;
@@ -29420,6 +30219,44 @@ app.post(`${API_PREFIX}/admin/bbc-history/cleanup`, async (req, res) => {
   }
 });
 
+function hasValidLiveFootballTvAdminToken(req, expectedToken = LIVE_FOOTBALL_TV_ADMIN_TOKEN) {
+  const normalizedExpectedToken = String(expectedToken || "").trim();
+  if (!normalizedExpectedToken) return false;
+  const authorization = String(req.get("authorization") || "");
+  const match = authorization.match(/^Bearer\s+(.+)$/i);
+  if (!match) return false;
+  const supplied = Buffer.from(match[1].trim(), "utf8");
+  const expected = Buffer.from(normalizedExpectedToken, "utf8");
+  return supplied.length === expected.length && crypto.timingSafeEqual(supplied, expected);
+}
+
+app.post(`${API_PREFIX}/admin/tv-listings/refresh`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+  if (!LIVE_FOOTBALL_TV_ADMIN_TOKEN) {
+    res.status(503).json({ error: "TV listings admin token is not configured." });
+    return;
+  }
+  if (!hasValidLiveFootballTvAdminToken(req)) {
+    res.set("WWW-Authenticate", 'Bearer realm="tv-listings-admin"');
+    res.status(401).json({ error: "Unauthorized." });
+    return;
+  }
+  try {
+    const result = await updateLiveFootballTvListings({ trigger: "admin_api" });
+    res.status(200).json(result);
+  } catch (error) {
+    if (error && error.code === "TV_LISTINGS_REFRESH_IN_PROGRESS") {
+      res.status(409).json({ error: error.message });
+      return;
+    }
+    console.warn("[TVListings] Admin refresh failed:", error.message || error);
+    res.status(502).json({
+      error: "Failed to refresh TV listings.",
+      message: error.message || String(error),
+    });
+  }
+});
+
 app.post(`${API_PREFIX}/admin/predictions/refresh`, async (_req, res) => {
   setCacheOnlyHeaders(res);
   if (bsdPredictionsRefreshInFlight) {
@@ -31673,7 +32510,14 @@ function startMonitorIntervals() {
 
 function startScraperIntervals() {
   scheduleLeagueTablesDailyRefresh();
+  scheduleLiveFootballTvDailyRefresh();
   void updateLeagueTables({ trigger: "startup_scraper" });
+  void updateLiveFootballTvListings({
+    trigger: "startup_stale_check",
+    staleOnly: true,
+  }).catch((error) => {
+    console.warn("[TVListings] Startup stale refresh failed:", error.message || error);
+  });
 
   const clubEloInterval =
     Number.isFinite(CLUB_ELO_INTERVAL_MS) && CLUB_ELO_INTERVAL_MS > 0
@@ -32723,6 +33567,14 @@ module.exports = {
     normalizeMatchDetailsPayload,
     mergeMatchDetailsPayload,
     normalizePlayerDetailsPayload,
+    mergePlayerDetailsPayload,
+    playerPayloadWithExchangeRate,
+    playerPayloadWithFantasyData,
+    normalizeTeamSquadPayload,
+    managerPercentage,
+    normalizeManagerPayload,
+    normalizeManagerCareerPayload,
+    normalizeTeamManagerPayload,
     playerDetailsPayloadFromMatchLineups,
     withConfiguredMatchDetailsPlayerImages,
     withConfiguredPlayerDetailsImage,
@@ -32794,7 +33646,10 @@ module.exports = {
     startApiIntervals,
     startScraperIntervals,
     scheduleLeagueTablesDailyRefresh,
+    scheduleLiveFootballTvDailyRefresh,
     scheduleEplSeasonStatusDailyRefresh,
+    updateLiveFootballTvListings,
+    hasValidLiveFootballTvAdminToken,
     updateFantasyBootstrapStatic,
     updateFantasyFixtures,
     updateFantasyEventLive,

@@ -26,6 +26,9 @@ Top Scores is a multi-surface football scores project with a Node/Express API, a
 
 - Match aggregation
   - The backend merges multiple upstream feeds into a unified match dataset for fixtures, live matches, results, and details.
+- TV listings enrichment
+  - BSD remains the trusted fixture and primary broadcast source. A daily LiveFootballOnTV scrape supplies additional UK channels, which are matched to allowlisted BSD fixtures and unioned behind the existing API response shape.
+  - Unmatched and ambiguous source rows are retained in MongoDB for audit only; they never create synthetic fixtures.
 - Match details enrichment
   - BBC match detail pages are parsed for scores, statuses, scorers, assists, red cards, and lineups.
 - Operational state
@@ -58,6 +61,20 @@ Top Scores is a multi-surface football scores project with a Node/Express API, a
   - The web match query builder in [`web/src/client/api.ts`](web/src/client/api.ts) requests fixtures from today through `9999-12-31`.
   - For results, it requests one year before today through today and automatically loads additional result pages in the background until the server has no more data in that window.
   - Competition/category filtering is sent to the server with the user's preferences; the web client still supports the explicit in-page custom competition picker as an additional display-only refinement.
+
+## Supplementary TV Listings
+
+The scraper runs daily at 05:15 in `Europe/London`. It writes complete snapshots to the `live_football_tv_listings` Mongo collection, reconciles them against allowlisted `bsd_events`, and republishes `bsd_current_matches`. BSD channels are returned first, followed by any distinct supplementary channels, so clients do not need source-specific behavior.
+
+Relevant environment variables:
+
+- `LIVE_FOOTBALL_TV_ADMIN_TOKEN` — required bearer token for the on-demand endpoint.
+- `LIVE_FOOTBALL_TV_URL` — optional source URL override.
+- `LIVE_FOOTBALL_TV_USER_AGENT` — optional scraper user-agent override.
+- `LIVE_FOOTBALL_TV_DAILY_HOUR_UK` and `LIVE_FOOTBALL_TV_DAILY_MINUTE_UK` — optional schedule override; defaults are `5` and `15`.
+- `LIVE_FOOTBALL_TV_STALE_AFTER_MS` — optional startup freshness threshold; defaults to 24 hours.
+
+An operator can trigger the same guarded refresh path with `POST /api/v1/admin/tv-listings/refresh` and `Authorization: Bearer <LIVE_FOOTBALL_TV_ADMIN_TOKEN>`. Concurrent refreshes return `409`; failed or structurally incomplete scrapes leave the previous active snapshot untouched.
 
 ## Major Games Of Interest
 

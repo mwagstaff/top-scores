@@ -1,6 +1,6 @@
 "use strict";
 
-const MODEL_VERSION = "v2";
+const MODEL_VERSION = "v3";
 
 const FACTORS = Object.freeze({
   competition: { label: "Competition", weight: 0.5 },
@@ -125,6 +125,23 @@ function eplClubDrawAdjustment(input) {
   };
 }
 
+function championshipClubStatureAdjustment(input) {
+  const competition = String(input.competitionName || "").trim().toLowerCase();
+  if (competition !== "championship" && competition !== "english championship") {
+    return null;
+  }
+
+  const homeElo = Number(input.homeElo);
+  const awayElo = Number(input.awayElo);
+  if (!Number.isFinite(homeElo) || !Number.isFinite(awayElo)) return null;
+
+  const statureScore = clamp((Math.min(homeElo, awayElo) - 1550) / 1.5);
+  return {
+    score: rounded(statureScore),
+    contribution: Math.round((14 * statureScore / 100) * 10) / 10,
+  };
+}
+
 function factorDetail(key, score, input) {
   switch (key) {
     case "competition":
@@ -187,6 +204,18 @@ function calculateWatchability(input = {}) {
     });
   }
 
+  const clubStatureAdjustment = championshipClubStatureAdjustment(input);
+  if (clubStatureAdjustment) {
+    components.push({
+      key: "club_stature",
+      label: "Club stature",
+      score: clubStatureAdjustment.score,
+      weight: 0,
+      contribution: clubStatureAdjustment.contribution,
+      detail: "Recognises high-profile Championship fixtures where both clubs have strong pre-match Elo ratings.",
+    });
+  }
+
   const weightedScore = components.reduce((total, component) => total + component.contribution, 0);
   const tableStakes = factorScores.table_stakes;
   const baseRivalryBonus = 15 + clamp(tableStakes) * 0.07;
@@ -232,4 +261,5 @@ module.exports = {
   formAndAttackScore,
   stageScore,
   eplClubDrawAdjustment,
+  championshipClubStatureAdjustment,
 };

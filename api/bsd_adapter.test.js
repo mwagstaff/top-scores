@@ -14,6 +14,7 @@ const {
   isPlaceholderTeam,
   bsdMinute,
   bsdBroadcastChannels,
+  mergeBroadcastChannelSources,
   isCurrentSeasonEvent,
   bsdPlayerEntry,
   parseBsdFormString,
@@ -679,6 +680,20 @@ test("bsdBroadcastChannels: empty / missing payload → []", () => {
   assert.deepEqual(bsdBroadcastChannels({ channels: [] }), []);
 });
 
+test("mergeBroadcastChannelSources unions supplementary channels after BSD and dedupes", () => {
+  const bsd = bsdBroadcastChannels({
+    channels: [{ channel_name: "Sky Sports Main Event" }],
+  });
+  const merged = mergeBroadcastChannelSources(bsd, [
+    { name: "sky sports main event", country: "United Kingdom", countryCode: "GB", logo: null },
+    { name: "Sky Sports Premier League", country: "United Kingdom", countryCode: "GB", logo: null },
+  ]);
+  assert.deepEqual(merged.map((channel) => channel.name), [
+    "Sky Sports Main Event",
+    "Sky Sports Premier League",
+  ]);
+});
+
 test("bsdEventToCanonicalMatch: joins channels via channelsByEventId map", () => {
   const event = {
     id: 363, league_id: 1, league_name: "Premier League",
@@ -706,6 +721,26 @@ test("bsdEventToCanonicalMatch: joins channels via broadcastsPayload (detail)", 
   assert.equal(m.tv_channels.length, 1);
   assert.equal(m.tv_channels[0].name, "DAZN UK");
   assert.equal(m.tv_channels[0].countryCode, "GB");
+});
+
+test("bsdEventToCanonicalMatch: detail payload unions BSD and supplementary channels", () => {
+  const event = {
+    id: 9835, league_id: 1, home_team: "Arsenal", away_team: "Chelsea",
+    status: "notstarted", event_date: "2026-05-10T15:00:00Z",
+  };
+  const m = bsdEventToCanonicalMatch(event, {
+    broadcastsPayload: {
+      event_id: "9835",
+      channels: [{ channel_name: "Sky Sports Main Event" }],
+    },
+    supplementaryChannels: [
+      { name: "Sky Sports Premier League", country: "United Kingdom", countryCode: "GB", logo: null },
+    ],
+  });
+  assert.deepEqual(m.tv_channels.map((channel) => channel.name), [
+    "Sky Sports Main Event",
+    "Sky Sports Premier League",
+  ]);
 });
 
 test("bsdEventToCanonicalMatch: no broadcasts → tv_channels is []", () => {

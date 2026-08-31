@@ -69,6 +69,29 @@ test("Premier League fixtures featuring a high-draw club retain their calibratio
   assert.equal(manchesterUnitedIpswich.score, 73);
 });
 
+test("a high-profile Championship fixture receives a bounded club-stature boost", () => {
+  const westHamWolves = calculateWatchability({
+    competitionName: "Championship",
+    competitionWeight: 40,
+    homeElo: 1741.88684082,
+    awayElo: 1697.10461426,
+    stage: "League",
+  });
+  const swanseaWatford = calculateWatchability({
+    competitionName: "Championship",
+    competitionWeight: 40,
+    homeElo: 1508.37060547,
+    awayElo: 1508.77441406,
+    stage: "League",
+  });
+
+  assert.equal(westHamWolves.score, 62);
+  assert.equal(westHamWolves.stars, 3);
+  assert.equal(westHamWolves.tier, "good_watch");
+  assert.equal(swanseaWatford.score, 43);
+  assert.equal(swanseaWatford.stars, 2);
+});
+
 test("Real Madrid against a much weaker La Liga opponent remains moderate", () => {
   const result = calculateWatchability({
     competitionName: "La Liga",

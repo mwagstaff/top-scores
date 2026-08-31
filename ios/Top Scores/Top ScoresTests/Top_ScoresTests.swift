@@ -560,14 +560,14 @@ struct Top_ScoresTests {
         #expect(playerPortraitPixelSizeIsRenderable(width: 150, height: 150))
     }
 
-    @Test func playerPortraitURLNeedsBackgroundRemoval_onlyTargetsBSDPortraits() throws {
-        #expect(playerPortraitURLNeedsBackgroundRemoval(
+    @Test func portraitURLNeedsBackgroundRemoval_onlyTargetsBSDPortraits() throws {
+        #expect(portraitURLNeedsBackgroundRemoval(
             try #require(URL(string: "https://sports.bzzoiro.com/img/player/6525/"))
         ))
-        #expect(!playerPortraitURLNeedsBackgroundRemoval(
+        #expect(!portraitURLNeedsBackgroundRemoval(
             try #require(URL(string: "https://sports.bzzoiro.com/img/team/208/"))
         ))
-        #expect(!playerPortraitURLNeedsBackgroundRemoval(
+        #expect(!portraitURLNeedsBackgroundRemoval(
             try #require(URL(string: "https://example.com/images/player.png"))
         ))
     }

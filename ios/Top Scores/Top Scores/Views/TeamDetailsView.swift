@@ -25,6 +25,26 @@ struct TeamDetailsContext: Hashable, Identifiable, Sendable {
     }
 }
 
+enum TeamDetailsSquadTeamIDResolver {
+    static func resolve(context: TeamDetailsContext, catalog: TeamCatalogResponse? = nil) -> String? {
+        if let teamID = context.teamID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !teamID.isEmpty,
+           teamID.allSatisfy(\.isNumber) {
+            return teamID
+        }
+
+        let candidates = catalog?.teams.filter { entry in
+            TeamIdentityStore.shared.matches(entry.name, context.teamName) ||
+                entry.aliases.contains { TeamIdentityStore.shared.matches($0, context.teamName) }
+        } ?? []
+        let preferred = candidates.first { entry in
+            guard let leagueID = context.originatingLeagueID else { return false }
+            return entry.competitionIDs.contains { $0.caseInsensitiveCompare(leagueID) == .orderedSame }
+        } ?? candidates.first
+        return preferred?.sourceTeamIDs.first { !$0.isEmpty && $0.allSatisfy(\.isNumber) }
+    }
+}
+
 struct TeamSeasonStanding: Hashable, Sendable {
     let leagueID: String
     let leagueName: String
@@ -399,13 +419,26 @@ private final class TeamDetailsViewModel {
     private(set) var tablesResponse: LeagueTablesResponse?
     private(set) var upcomingFixtures: [Match] = []
     private(set) var previousMatches: [Match] = []
+    private(set) var squad: [PlayerDetails] = []
+    private(set) var manager: TeamManager?
+    private(set) var managerCareer: [ManagerTenure] = []
+    private(set) var managerAppointmentEffect: ManagerAppointmentEffect?
+    private(set) var managerCurrentTenure: ManagerTenure?
     private(set) var matchRowFormsByRequestKey: [String: [String]] = [:]
     private(set) var isLoadingStanding = true
     private(set) var isLoadingMatches = true
+    private(set) var isLoadingSquad = true
+    private(set) var isLoadingManager = true
+    private(set) var isLoadingManagerCareer = false
     private(set) var standingErrorMessage: String?
     private(set) var matchesErrorMessage: String?
+    private(set) var squadErrorMessage: String?
+    private(set) var managerErrorMessage: String?
+    private(set) var managerCareerErrorMessage: String?
 
     private var activeLoadKey: String?
+    private var loadedManagerCareerID: String?
+    private var loadingManagerCareerID: String?
 
     func load(
         context: TeamDetailsContext,
@@ -425,9 +458,20 @@ private final class TeamDetailsViewModel {
                 context: context,
                 from: []
             )
+            squad = []
+            manager = nil
+            managerCareer = []
+            managerAppointmentEffect = nil
+            managerCurrentTenure = nil
+            loadedManagerCareerID = nil
+            loadingManagerCareerID = nil
+            isLoadingManagerCareer = false
             matchRowFormsByRequestKey = [:]
             standingErrorMessage = nil
             matchesErrorMessage = nil
+            squadErrorMessage = nil
+            managerErrorMessage = nil
+            managerCareerErrorMessage = nil
         }
 
         if !force {
@@ -459,8 +503,12 @@ private final class TeamDetailsViewModel {
 
         isLoadingStanding = standing == nil
         isLoadingMatches = upcomingFixtures.isEmpty && previousMatches.isEmpty
+        isLoadingSquad = squad.isEmpty
+        isLoadingManager = manager == nil
         standingErrorMessage = nil
         matchesErrorMessage = nil
+        squadErrorMessage = nil
+        managerErrorMessage = nil
 
         async let standingOutcome = Self.fetchStanding(
             context: context,
@@ -472,7 +520,14 @@ private final class TeamDetailsViewModel {
             apiBaseURL: apiBaseURL,
             force: force
         )
-        let (resolvedStanding, resolvedMatches) = await (standingOutcome, matchesOutcome)
+        async let squadOutcome = Self.fetchSquad(context: context, apiBaseURL: apiBaseURL)
+        async let managerOutcome = Self.fetchManager(context: context, apiBaseURL: apiBaseURL)
+        let (resolvedStanding, resolvedMatches, resolvedSquad, resolvedManager) = await (
+            standingOutcome,
+            matchesOutcome,
+            squadOutcome,
+            managerOutcome
+        )
 
         guard !Task.isCancelled, activeLoadKey == loadKey else { return }
 
@@ -491,6 +546,67 @@ private final class TeamDetailsViewModel {
         }
         matchesErrorMessage = resolvedMatches.errorMessage
         isLoadingMatches = false
+
+        if let players = resolvedSquad.value {
+            squad = players
+        }
+        squadErrorMessage = resolvedSquad.errorMessage
+        isLoadingSquad = false
+
+        if manager?.id != resolvedManager.value?.id {
+            managerCareer = []
+            managerAppointmentEffect = nil
+            managerCurrentTenure = nil
+            loadedManagerCareerID = nil
+            loadingManagerCareerID = nil
+            isLoadingManagerCareer = false
+            managerCareerErrorMessage = nil
+        }
+        manager = resolvedManager.value
+        managerErrorMessage = resolvedManager.errorMessage
+        isLoadingManager = false
+
+        if let manager {
+            await loadManagerCareer(manager: manager, apiBaseURL: apiBaseURL, force: force)
+        }
+    }
+
+    func loadManagerCareer(
+        manager: TeamManager,
+        apiBaseURL: String,
+        force: Bool = false
+    ) async {
+        if loadingManagerCareerID == manager.id { return }
+        if !force, loadedManagerCareerID == manager.id { return }
+        guard let baseURL = URL(string: apiBaseURL) else {
+            managerCareerErrorMessage = "The API address is invalid."
+            return
+        }
+        loadingManagerCareerID = manager.id
+        isLoadingManagerCareer = true
+        managerCareerErrorMessage = nil
+        defer {
+            if loadingManagerCareerID == manager.id {
+                loadingManagerCareerID = nil
+                isLoadingManagerCareer = false
+            }
+        }
+        do {
+            let response = try await APIClient(baseURL: baseURL).fetchManagerCareer(managerId: manager.id)
+            try Task.checkCancellation()
+            guard self.manager?.id == manager.id else { return }
+            managerCurrentTenure = response.currentTenure(for: manager.currentTeamID)
+            managerAppointmentEffect = response.appointmentEffect(for: manager.currentTeamID)
+            managerCareer = response.previousClubs(excluding: manager.currentTeamID)
+            loadedManagerCareerID = manager.id
+        } catch is CancellationError {
+            return
+        } catch let error as URLError where error.code == .cancelled {
+            return
+        } catch {
+            guard self.manager?.id == manager.id else { return }
+            managerCareerErrorMessage = error.localizedDescription
+        }
     }
 
     func loadMatchRowForms(
@@ -594,6 +710,64 @@ private final class TeamDetailsViewModel {
         }
     }
 
+    private static func fetchSquad(
+        context: TeamDetailsContext,
+        apiBaseURL: String
+    ) async -> SquadOutcome {
+        guard let baseURL = URL(string: apiBaseURL) else {
+            return SquadOutcome(value: nil, errorMessage: "The API address is invalid.")
+        }
+        do {
+            let client = APIClient(baseURL: baseURL)
+            var teamID = TeamDetailsSquadTeamIDResolver.resolve(context: context)
+            if teamID == nil {
+                let catalog = try await client.fetchTeamCatalog(
+                    query: context.teamName,
+                    limit: 20
+                )
+                teamID = TeamDetailsSquadTeamIDResolver.resolve(context: context, catalog: catalog)
+            }
+            guard let teamID else {
+                return SquadOutcome(value: [], errorMessage: nil)
+            }
+            let response = try await client.fetchTeamSquad(teamId: teamID)
+            return SquadOutcome(value: response.players, errorMessage: nil)
+        } catch is CancellationError {
+            return SquadOutcome(value: nil, errorMessage: nil)
+        } catch let error as URLError where error.code == .cancelled {
+            return SquadOutcome(value: nil, errorMessage: nil)
+        } catch {
+            return SquadOutcome(value: nil, errorMessage: error.localizedDescription)
+        }
+    }
+
+    private static func fetchManager(
+        context: TeamDetailsContext,
+        apiBaseURL: String
+    ) async -> ManagerOutcome {
+        guard let baseURL = URL(string: apiBaseURL) else {
+            return ManagerOutcome(value: nil, errorMessage: "The API address is invalid.")
+        }
+        do {
+            let client = APIClient(baseURL: baseURL)
+            var teamID = TeamDetailsSquadTeamIDResolver.resolve(context: context)
+            if teamID == nil {
+                let catalog = try await client.fetchTeamCatalog(query: context.teamName, limit: 20)
+                teamID = TeamDetailsSquadTeamIDResolver.resolve(context: context, catalog: catalog)
+            }
+            guard let teamID else {
+                return ManagerOutcome(value: nil, errorMessage: nil)
+            }
+            return ManagerOutcome(value: try await client.fetchTeamManager(teamId: teamID), errorMessage: nil)
+        } catch is CancellationError {
+            return ManagerOutcome(value: nil, errorMessage: nil)
+        } catch let error as URLError where error.code == .cancelled {
+            return ManagerOutcome(value: nil, errorMessage: nil)
+        } catch {
+            return ManagerOutcome(value: nil, errorMessage: error.localizedDescription)
+        }
+    }
+
     private struct StandingOutcome: Sendable {
         let value: TeamSeasonStanding?
         let response: LeagueTablesResponse?
@@ -602,6 +776,16 @@ private final class TeamDetailsViewModel {
 
     private struct MatchesOutcome: Sendable {
         let value: TeamMatchLists?
+        let errorMessage: String?
+    }
+
+    private struct SquadOutcome: Sendable {
+        let value: [PlayerDetails]?
+        let errorMessage: String?
+    }
+
+    private struct ManagerOutcome: Sendable {
+        let value: TeamManager?
         let errorMessage: String?
     }
 
@@ -622,6 +806,8 @@ struct TeamDetailsView: View {
     @State private var viewModel = TeamDetailsViewModel()
     @State private var showsAllUpcomingFixtures = false
     @State private var showsAllPreviousMatches = false
+    @State private var squadSortOrder: TeamSquadSortOrder = .value
+    @State private var showsManagerCareer = false
     @State private var hasAppeared = false
 
     private var taskKey: String {
@@ -692,6 +878,8 @@ struct TeamDetailsView: View {
                     currentSeasonSection
                     upcomingFixturesSection
                     previousMatchesSection
+                    playersSection
+                    managerSection
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 24)
@@ -723,6 +911,7 @@ struct TeamDetailsView: View {
         .task(id: taskKey) {
             showsAllUpcomingFixtures = false
             showsAllPreviousMatches = false
+            showsManagerCareer = false
             await viewModel.load(context: context, apiBaseURL: preferences.apiBaseURL)
         }
         .task(id: matchRowFormsTaskKey) {
@@ -1095,6 +1284,392 @@ struct TeamDetailsView: View {
         }
     }
 
+    private var playersSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Capsule()
+                    .fill(FootballSectionAccent.action)
+                    .frame(width: 3, height: 24)
+                    .shadow(color: FootballSectionAccent.action.opacity(0.42), radius: 5)
+
+                Text("Players")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(.white)
+
+                Spacer(minLength: 8)
+
+                Menu {
+                    ForEach(TeamSquadSortOrder.availableCases(for: viewModel.squad)) { order in
+                        Button {
+                            squadSortOrder = order
+                        } label: {
+                            Label(order.title, systemImage: order == squadSortOrder ? "checkmark" : order.systemImage)
+                        }
+                    }
+                } label: {
+                    Label(squadSortOrder.title, systemImage: "arrow.up.arrow.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.88))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(Color.white.opacity(0.08), in: Capsule())
+                }
+                .accessibilityLabel("Sort players, currently \(squadSortOrder.title)")
+            }
+
+            if viewModel.squad.isEmpty && viewModel.isLoadingSquad {
+                loadingCard(label: "Loading players", accentColor: FootballSectionAccent.action)
+            } else if viewModel.squad.isEmpty {
+                unavailableCard(
+                    title: "Squad unavailable",
+                    message: "No current squad was found for \(context.canonicalName).",
+                    systemImage: "person.3.sequence",
+                    accentColor: FootballSectionAccent.action
+                )
+            } else {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(squadSortOrder.sorted(viewModel.squad).enumerated()), id: \.element.id) { index, player in
+                        NavigationLink {
+                            PlayerDetailsView(
+                                player: lineupPlayer(from: player),
+                                apiBaseURL: preferences.apiBaseURL,
+                                initialDetails: player
+                            )
+                        } label: {
+                            TeamSquadPlayerRow(player: player, sortOrder: squadSortOrder)
+                        }
+                        .buttonStyle(.plain)
+
+                        if index < viewModel.squad.count - 1 {
+                            Divider().overlay(Color.white.opacity(0.08))
+                        }
+                    }
+                }
+                .padding(.horizontal, 12)
+                .footballTintedSurface(accentColor: FootballSectionAccent.action, cornerRadius: 18)
+            }
+
+            if let squadErrorMessage = viewModel.squadErrorMessage, !viewModel.squad.isEmpty {
+                inlineError(squadErrorMessage)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var managerSection: some View {
+        if viewModel.isLoadingManager || viewModel.manager != nil {
+            VStack(alignment: .leading, spacing: 10) {
+                sectionHeading("Manager", accentColor: FootballSectionAccent.fantasy)
+
+                if let manager = viewModel.manager {
+                    managerCard(manager)
+                } else {
+                    loadingCard(
+                        label: "Loading manager",
+                        accentColor: FootballSectionAccent.fantasy
+                    )
+                }
+            }
+        }
+    }
+
+    private func managerCard(_ manager: TeamManager) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            managerIdentity(manager)
+                .padding(16)
+
+            Divider().overlay(Color.white.opacity(0.08))
+
+            managerRecord(manager)
+                .padding(.vertical, 14)
+
+            if let appointmentEffect = viewModel.managerAppointmentEffect {
+                Divider().overlay(Color.white.opacity(0.08))
+
+                ManagerAppointmentImpactView(effect: appointmentEffect)
+                    .padding(16)
+            } else if viewModel.isLoadingManagerCareer {
+                Divider().overlay(Color.white.opacity(0.08))
+
+                HStack(spacing: 9) {
+                    ProgressView().tint(FootballSectionAccent.fantasy)
+                    Text("Loading appointment impact")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.62))
+                }
+                .padding(16)
+            }
+
+            Divider().overlay(Color.white.opacity(0.08))
+
+            managerPerformance(manager)
+                .padding(.vertical, 14)
+
+            Divider().overlay(Color.white.opacity(0.08))
+
+            managerCareerDisclosure(manager)
+                .padding(16)
+        }
+        .footballTintedSurface(
+            accentColor: FootballSectionAccent.fantasy,
+            cornerRadius: 20,
+            accentOpacity: 0.16
+        )
+        .accessibilityElement(children: .contain)
+    }
+
+    private func managerIdentity(_ manager: TeamManager) -> some View {
+        HStack(alignment: .center, spacing: 14) {
+            ManagerPortrait(manager: manager)
+
+            VStack(alignment: .leading, spacing: 7) {
+                Text(manager.name)
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(.white)
+                    .lineLimit(2)
+
+                if let country = manager.country, !country.isEmpty {
+                    HStack(spacing: 6) {
+                        Text(PlayerNationalityPresentation.flag(for: country) ?? "🌐")
+                            .accessibilityHidden(true)
+                        Text(country)
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.70))
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("Country, \(country)")
+                }
+
+                HStack(spacing: 7) {
+                    if let profile = manager.tacticalProfile, !profile.isEmpty {
+                        managerBadge(profile.replacingOccurrences(of: "_", with: " ").capitalized)
+                    }
+                    if let formation = manager.preferredFormation, !formation.isEmpty {
+                        managerBadge(formation, systemImage: "rectangle.split.3x3")
+                    }
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func managerBadge(_ text: String, systemImage: String? = nil) -> some View {
+        HStack(spacing: 4) {
+            if let systemImage {
+                Image(systemName: systemImage)
+                    .accessibilityHidden(true)
+            }
+            Text(text)
+        }
+        .font(.caption2.weight(.semibold))
+        .foregroundStyle(.white.opacity(0.82))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Color.white.opacity(0.08), in: Capsule())
+    }
+
+    private func managerRecord(_ manager: TeamManager) -> some View {
+        let matches: Int?
+        let wins: Int?
+        let draws: Int?
+        let losses: Int?
+        let winPercentage: Double?
+        let drawPercentage: Double?
+        let lossPercentage: Double?
+
+        if let tenure = viewModel.managerCurrentTenure {
+            matches = managerTenureMatchTotal(tenure)
+            wins = tenure.wins
+            draws = tenure.draws
+            losses = tenure.losses
+            winPercentage = tenure.winPercentage ?? managerTenurePercentage(tenure.wins, tenure: tenure)
+            drawPercentage = managerTenurePercentage(tenure.draws, tenure: tenure)
+            lossPercentage = managerTenurePercentage(tenure.losses, tenure: tenure)
+        } else {
+            matches = manager.matchesTotal
+            wins = manager.wins
+            draws = manager.draws
+            losses = manager.losses
+            winPercentage = manager.winPercentage
+            drawPercentage = manager.drawPercentage
+            lossPercentage = manager.lossPercentage
+        }
+
+        let metrics = [
+            ManagerMetric(label: "Matches", value: matches.map(String.init) ?? "–", tint: .white),
+            ManagerMetric(label: "Wins", value: managerResult(wins, winPercentage), tint: .green),
+            ManagerMetric(label: "Draws", value: managerResult(draws, drawPercentage), tint: .yellow),
+            ManagerMetric(label: "Losses", value: managerResult(losses, lossPercentage), tint: .red),
+        ]
+        let columns = Array(
+            repeating: GridItem(.flexible(minimum: 0), spacing: 0),
+            count: dynamicTypeSize.isAccessibilitySize ? 2 : 4
+        )
+
+        return VStack(alignment: .leading, spacing: 10) {
+            Text("TOTAL MATCHES AT \(context.canonicalName.uppercased())")
+                .font(.caption2.weight(.semibold))
+                .tracking(0.45)
+                .foregroundStyle(.white.opacity(0.50))
+                .padding(.horizontal, 16)
+
+            LazyVGrid(columns: columns, spacing: 14) {
+                ForEach(metrics) { metric in
+                    ManagerMetricView(metric: metric)
+                }
+            }
+            .padding(.horizontal, 8)
+        }
+    }
+
+    private func managerTenureMatchTotal(_ tenure: ManagerTenure) -> Int? {
+        if let matches = tenure.matches { return matches }
+        guard let wins = tenure.wins, let draws = tenure.draws, let losses = tenure.losses else {
+            return nil
+        }
+        return wins + draws + losses
+    }
+
+    private func managerTenurePercentage(_ count: Int?, tenure: ManagerTenure) -> Double? {
+        guard let count, let matches = managerTenureMatchTotal(tenure), matches > 0 else { return nil }
+        return (Double(count) / Double(matches)) * 100
+    }
+
+    private func managerPerformance(_ manager: TeamManager) -> some View {
+        let metrics = [
+            ManagerMetric(label: "Avg goals scored", value: decimal(manager.averageGoalsScored), tint: .green),
+            ManagerMetric(label: "Avg goals conceded", value: decimal(manager.averageGoalsConceded), tint: .orange),
+            ManagerMetric(label: "Avg possession", value: percentage(manager.averagePossession), tint: Color.accentColor),
+            ManagerMetric(label: "Clean sheets", value: percentage(manager.cleanSheetPercentage), tint: FootballSectionAccent.fantasy),
+        ]
+        let columns = Array(
+            repeating: GridItem(.flexible(minimum: 0), spacing: 0),
+            count: dynamicTypeSize.isAccessibilitySize ? 2 : 4
+        )
+        return LazyVGrid(columns: columns, spacing: 14) {
+            ForEach(metrics) { metric in
+                ManagerMetricView(metric: metric)
+            }
+        }
+        .padding(.horizontal, 8)
+    }
+
+    private func managerCareerDisclosure(_ manager: TeamManager) -> some View {
+        DisclosureGroup(isExpanded: $showsManagerCareer) {
+            managerCareerContent(manager)
+                .padding(.top, 14)
+        } label: {
+            HStack(spacing: 9) {
+                Image(systemName: "clock.arrow.circlepath")
+                    .foregroundStyle(FootballSectionAccent.fantasy)
+                    .accessibilityHidden(true)
+                Text("Previous clubs")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.white)
+                Spacer(minLength: 8)
+                if !viewModel.managerCareer.isEmpty {
+                    Text(String(viewModel.managerCareer.count))
+                        .font(.caption.monospacedDigit().weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.56))
+                }
+            }
+        }
+        .tint(.white.opacity(0.72))
+        .onChange(of: showsManagerCareer) { _, isExpanded in
+            guard isExpanded else { return }
+            Task {
+                await viewModel.loadManagerCareer(
+                    manager: manager,
+                    apiBaseURL: preferences.apiBaseURL
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func managerCareerContent(_ manager: TeamManager) -> some View {
+        if viewModel.isLoadingManagerCareer && viewModel.managerCareer.isEmpty {
+            HStack(spacing: 9) {
+                ProgressView().tint(FootballSectionAccent.fantasy)
+                Text("Loading previous clubs")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.62))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        } else if let errorMessage = viewModel.managerCareerErrorMessage,
+                  viewModel.managerCareer.isEmpty {
+            VStack(alignment: .leading, spacing: 9) {
+                Label("Previous clubs unavailable", systemImage: "exclamationmark.triangle")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.orange)
+                Button("Try again") {
+                    Task {
+                        await viewModel.loadManagerCareer(
+                            manager: manager,
+                            apiBaseURL: preferences.apiBaseURL,
+                            force: true
+                        )
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .accessibilityHint(errorMessage)
+            }
+        } else if viewModel.managerCareer.isEmpty {
+            Text("No previous clubs are available.")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.58))
+        } else {
+            LazyVStack(spacing: 0) {
+                ForEach(Array(viewModel.managerCareer.enumerated()), id: \.element.id) { index, tenure in
+                    ManagerCareerRow(tenure: tenure)
+                    if index < viewModel.managerCareer.count - 1 {
+                        Divider().overlay(Color.white.opacity(0.07))
+                    }
+                }
+            }
+        }
+    }
+
+    private func managerResult(_ count: Int?, _ percentage: Double?) -> String {
+        guard let count else { return "–" }
+        guard let percentage else { return String(count) }
+        return "\(count) · \(Self.percentageFormatter.string(from: NSNumber(value: percentage)) ?? "–")%"
+    }
+
+    private func decimal(_ value: Double?) -> String {
+        guard let value else { return "–" }
+        return value.formatted(.number.precision(.fractionLength(0 ... 2)))
+    }
+
+    private func percentage(_ value: Double?) -> String {
+        guard let value else { return "–" }
+        return "\(value.formatted(.number.precision(.fractionLength(0 ... 1))))%"
+    }
+
+    private static let percentageFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.minimumFractionDigits = 0
+        formatter.maximumFractionDigits = 1
+        return formatter
+    }()
+
+    private func lineupPlayer(from player: PlayerDetails) -> MatchLineupPlayer {
+        MatchLineupPlayer(
+            number: player.jerseyNumber,
+            name: player.name,
+            idPlayer: player.id,
+            positionCategory: player.positionCode,
+            position: player.position,
+            positionShort: player.positionCode,
+            cutoutURL: player.cutoutURL,
+            formationRowIndex: nil,
+            formationSlotIndex: nil,
+            formationRowSize: nil
+        )
+    }
+
     @ViewBuilder
     private func matchListSection(
         title: String,
@@ -1244,6 +1819,628 @@ struct TeamDetailsView: View {
 
     private static func signed(_ value: Int) -> String {
         value > 0 ? "+\(value)" : String(value)
+    }
+}
+
+private struct TeamSquadPlayerRow: View {
+    let player: PlayerDetails
+    let sortOrder: TeamSquadSortOrder
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(player.jerseyNumber.map(String.init) ?? "–")
+                .font(.subheadline.monospacedDigit().weight(.bold))
+                .foregroundStyle(.white.opacity(0.58))
+                .frame(width: 28, alignment: .trailing)
+
+            TeamSquadPlayerPortrait(player: player)
+
+            Text(PlayerNationalityPresentation.flag(for: player.nationality) ?? "🌐")
+                .font(.title3)
+                .accessibilityLabel(player.nationality ?? "Nationality unknown")
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(player.name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                Text(player.displayPosition)
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.55))
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 6)
+
+            if let trailingText {
+                Text(trailingText)
+                    .font(.caption.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.78))
+            }
+
+            if player.isUnavailable {
+                FantasyAvailabilityWarningIcon(
+                    label: "Availability warning: \(player.availabilityDisplayName)",
+                    size: 11
+                )
+            }
+
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.34))
+                .accessibilityHidden(true)
+        }
+        .padding(.vertical, 13)
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("View player details")
+    }
+
+    private var trailingText: String? {
+        switch sortOrder {
+        case .fplTotalPoints:
+            return player.fplTotalPoints.map { "\($0) pts" } ?? "–"
+        case .fplSelectedByCount:
+            return PlayerValuePresentation.compactCount(player.fplSelectedByCount) ?? "–"
+        case .fplSelectedByPercent:
+            return player.fplSelectedByPercent.map {
+                $0.formatted(.number.precision(.fractionLength(1))) + "%"
+            } ?? "–"
+        default:
+            return PlayerValuePresentation.compact(
+                marketValueEUR: player.marketValueEUR,
+                marketValueGBP: player.marketValueGBP
+            )
+        }
+    }
+}
+
+private struct TeamSquadPlayerPortrait: View {
+    let player: PlayerDetails
+
+    private var urls: [URL] {
+        [player.fplProfileURL, player.cutoutURL, player.renderURL, player.thumbURL]
+            .compactMap { value in
+                guard let value, !value.isEmpty else { return nil }
+                return URL(string: value)
+            }
+    }
+
+    var body: some View {
+        RemotePlayerPortraitImage(urls: urls) { image in
+            image
+                .resizable()
+                .scaledToFit()
+                .padding(.top, 3)
+        } placeholder: {
+            Image(systemName: "person.crop.circle.fill")
+                .resizable()
+                .scaledToFit()
+                .foregroundStyle(.white.opacity(0.28))
+                .padding(3)
+        }
+        .frame(width: 34, height: 34, alignment: .bottom)
+        .background(Color.white.opacity(0.07), in: Circle())
+        .clipShape(Circle())
+        .overlay {
+            Circle().stroke(Color.white.opacity(0.10), lineWidth: 0.5)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+private struct ManagerPortrait: View {
+    let manager: TeamManager
+
+    private var urls: [URL] {
+        [manager.imageURL].compactMap { value in
+            guard let value, !value.isEmpty else { return nil }
+            guard let url = URL(string: value) else { return nil }
+            return portraitURLForLocalBackgroundRemoval(url)
+        }
+    }
+
+    var body: some View {
+        RemotePlayerPortraitImage(urls: urls) { image in
+            image
+                .resizable()
+                .scaledToFit()
+                .padding(.top, 5)
+        } placeholder: {
+            Image(systemName: "person.crop.circle.fill")
+                .resizable()
+                .scaledToFit()
+                .foregroundStyle(.white.opacity(0.24))
+                .padding(10)
+        }
+        .frame(width: 84, height: 84, alignment: .bottom)
+        .background(
+            LinearGradient(
+                colors: [FootballSectionAccent.fantasy.opacity(0.28), Color.white.opacity(0.05)],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing
+            ),
+            in: RoundedRectangle(cornerRadius: 18, style: .continuous)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .stroke(Color.white.opacity(0.10), lineWidth: 0.5)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+private struct ManagerMetric: Identifiable {
+    let label: String
+    let value: String
+    let tint: Color
+
+    var id: String { label }
+}
+
+private struct ManagerMetricView: View {
+    let metric: ManagerMetric
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Text(metric.value)
+                .font(.subheadline.monospacedDigit().weight(.bold))
+                .foregroundStyle(metric.tint)
+                .multilineTextAlignment(.center)
+                .minimumScaleFactor(0.72)
+            Text(metric.label.uppercased())
+                .font(.caption2.weight(.semibold))
+                .tracking(0.35)
+                .foregroundStyle(.white.opacity(0.50))
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+        }
+        .frame(maxWidth: .infinity, minHeight: 48)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(metric.label), \(metric.value)")
+    }
+}
+
+private struct ManagerImpactComparison: Identifiable {
+    let label: String
+    let before: String
+    let after: String
+    let trend: ManagerImpactTrend?
+
+    var id: String { label }
+}
+
+private struct ManagerAppointmentImpactView: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    let effect: ManagerAppointmentEffect
+
+    private var comparisons: [ManagerImpactComparison] {
+        [
+            ManagerImpactComparison(
+                label: "Matches",
+                before: integer(effect.before.matches),
+                after: integer(effect.after.matches),
+                trend: ManagerImpactTrend.compare(
+                    before: effect.before.matches.map(Double.init),
+                    after: effect.after.matches.map(Double.init)
+                )
+            ),
+            ManagerImpactComparison(
+                label: "W-D-L",
+                before: record(effect.before),
+                after: record(effect.after),
+                trend: ManagerImpactTrend.compare(
+                    before: performanceRate(effect.before),
+                    after: performanceRate(effect.after)
+                )
+            ),
+            ManagerImpactComparison(
+                label: "Points",
+                before: integer(effect.before.points),
+                after: integer(effect.after.points),
+                trend: ManagerImpactTrend.compare(
+                    before: effect.before.points.map(Double.init),
+                    after: effect.after.points.map(Double.init)
+                )
+            ),
+            ManagerImpactComparison(
+                label: "Points per match",
+                before: decimal(effect.before.pointsPerMatch),
+                after: decimal(effect.after.pointsPerMatch),
+                trend: ManagerImpactTrend.compare(
+                    before: effect.before.pointsPerMatch,
+                    after: effect.after.pointsPerMatch
+                )
+            ),
+            ManagerImpactComparison(
+                label: "Win rate",
+                before: percentage(effect.before.winPercentage),
+                after: percentage(effect.after.winPercentage),
+                trend: ManagerImpactTrend.compare(
+                    before: effect.before.winPercentage,
+                    after: effect.after.winPercentage
+                )
+            ),
+            ManagerImpactComparison(
+                label: "Goals scored",
+                before: integer(effect.before.goalsFor),
+                after: integer(effect.after.goalsFor),
+                trend: ManagerImpactTrend.compare(
+                    before: effect.before.goalsFor.map(Double.init),
+                    after: effect.after.goalsFor.map(Double.init)
+                )
+            ),
+            ManagerImpactComparison(
+                label: "Goals conceded",
+                before: integer(effect.before.goalsAgainst),
+                after: integer(effect.after.goalsAgainst),
+                trend: ManagerImpactTrend.compare(
+                    before: effect.before.goalsAgainst.map(Double.init),
+                    after: effect.after.goalsAgainst.map(Double.init),
+                    lowerIsBetter: true
+                )
+            ),
+            ManagerImpactComparison(
+                label: "Goal difference",
+                before: signed(effect.before.goalDifference),
+                after: signed(effect.after.goalDifference),
+                trend: ManagerImpactTrend.compare(
+                    before: effect.before.goalDifference.map(Double.init),
+                    after: effect.after.goalDifference.map(Double.init)
+                )
+            ),
+        ].filter { $0.before != "–" || $0.after != "–" }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    impactTitle
+                    Spacer(minLength: 8)
+                    impactSummary
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    impactTitle
+                    impactSummary
+                }
+            }
+
+            if dynamicTypeSize.isAccessibilitySize {
+                accessibilityComparison
+            } else {
+                compactComparison
+            }
+        }
+    }
+
+    private var impactTitle: some View {
+        Text("APPOINTMENT IMPACT")
+            .font(.caption2.weight(.semibold))
+            .tracking(0.45)
+            .foregroundStyle(.white.opacity(0.50))
+    }
+
+    @ViewBuilder
+    private var impactSummary: some View {
+        HStack(spacing: 7) {
+            if let window = effect.window {
+                Text("Up to \(window) matches")
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.52))
+            }
+            if let change = effect.pointsPerMatchChange {
+                Text("\(signedDecimal(change)) PPM")
+                    .font(.caption2.monospacedDigit().weight(.bold))
+                    .foregroundStyle(changeTint(change))
+                    .padding(.horizontal, 7)
+                    .padding(.vertical, 4)
+                    .background(changeTint(change).opacity(0.14), in: Capsule())
+                    .accessibilityLabel("Points per match change, \(signedDecimal(change))")
+            }
+        }
+    }
+
+    private var compactComparison: some View {
+        Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 9) {
+            GridRow {
+                Text("STAT")
+                comparisonHeading("Before", color: .white.opacity(0.52))
+                comparisonHeading("After", color: FootballSectionAccent.fantasy)
+            }
+
+            ForEach(comparisons) { comparison in
+                GridRow {
+                    Text(comparison.label)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.62))
+                    comparisonValue(comparison.before, color: .white.opacity(0.78))
+                    comparisonAfterValue(comparison)
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(
+                    comparisonAccessibilityLabel(comparison)
+                )
+            }
+        }
+    }
+
+    private var accessibilityComparison: some View {
+        VStack(spacing: 8) {
+            ForEach(comparisons) { comparison in
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(comparison.label)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.62))
+
+                    HStack(alignment: .firstTextBaseline, spacing: 12) {
+                        accessibilityValue("Before", value: comparison.before, color: .white.opacity(0.78))
+                        trendIndicator(comparison.trend)
+                        accessibilityValue("After", value: comparison.after, color: .white)
+                    }
+                }
+                .padding(10)
+                .background(Color.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(
+                    comparisonAccessibilityLabel(comparison)
+                )
+            }
+        }
+    }
+
+    private func comparisonHeading(_ text: String, color: Color) -> some View {
+        Text(text.uppercased())
+            .font(.caption2.weight(.semibold))
+            .tracking(0.3)
+            .foregroundStyle(color)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    private func comparisonValue(_ text: String, color: Color) -> some View {
+        Text(text)
+            .font(.caption.monospacedDigit().weight(.semibold))
+            .foregroundStyle(color)
+            .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    private func comparisonAfterValue(_ comparison: ManagerImpactComparison) -> some View {
+        HStack(spacing: 5) {
+            Text(comparison.after)
+                .font(.caption.monospacedDigit().weight(.semibold))
+                .foregroundStyle(.white)
+            trendIndicator(comparison.trend)
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
+    @ViewBuilder
+    private func trendIndicator(_ trend: ManagerImpactTrend?) -> some View {
+        if let trend {
+            Image(systemName: trendSystemImage(trend.direction))
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(trendColor(trend.outcome))
+                .frame(width: 11)
+                .accessibilityHidden(true)
+        }
+    }
+
+    private func accessibilityValue(_ label: String, value: String, color: Color) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label.uppercased())
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.48))
+            Text(value)
+                .font(.body.monospacedDigit().weight(.semibold))
+                .foregroundStyle(color)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func integer(_ value: Int?) -> String {
+        value.map(String.init) ?? "–"
+    }
+
+    private func record(_ stats: ManagerImpactStats) -> String {
+        guard let wins = stats.wins, let draws = stats.draws, let losses = stats.losses else { return "–" }
+        return "\(wins)-\(draws)-\(losses)"
+    }
+
+    private func performanceRate(_ stats: ManagerImpactStats) -> Double? {
+        if let pointsPerMatch = stats.pointsPerMatch { return pointsPerMatch }
+        guard let matches = stats.matches, matches > 0,
+              let wins = stats.wins, let draws = stats.draws else { return nil }
+        return Double((wins * 3) + draws) / Double(matches)
+    }
+
+    private func decimal(_ value: Double?) -> String {
+        value?.formatted(.number.precision(.fractionLength(0 ... 2))) ?? "–"
+    }
+
+    private func percentage(_ value: Double?) -> String {
+        guard let value else { return "–" }
+        return "\(value.formatted(.number.precision(.fractionLength(0 ... 1))))%"
+    }
+
+    private func signed(_ value: Int?) -> String {
+        guard let value else { return "–" }
+        return value > 0 ? "+\(value)" : String(value)
+    }
+
+    private func signedDecimal(_ value: Double) -> String {
+        let formatted = value.formatted(.number.precision(.fractionLength(0 ... 2)))
+        return value > 0 ? "+\(formatted)" : formatted
+    }
+
+    private func changeTint(_ value: Double) -> Color {
+        if value > 0 { return .green }
+        if value < 0 { return .red }
+        return .white.opacity(0.68)
+    }
+
+    private func trendSystemImage(_ direction: ManagerImpactTrendDirection) -> String {
+        switch direction {
+        case .up: "arrow.up"
+        case .down: "arrow.down"
+        case .unchanged: "equal"
+        }
+    }
+
+    private func trendColor(_ outcome: ManagerImpactTrendOutcome) -> Color {
+        switch outcome {
+        case .improvement: .green
+        case .decline: .red
+        case .unchanged: .white.opacity(0.46)
+        }
+    }
+
+    private func comparisonAccessibilityLabel(_ comparison: ManagerImpactComparison) -> String {
+        let base = "\(comparison.label), before \(comparison.before), after \(comparison.after)"
+        guard let trend = comparison.trend else { return base }
+        let direction: String
+        switch trend.direction {
+        case .up: direction = "increased"
+        case .down: direction = "decreased"
+        case .unchanged: direction = "unchanged"
+        }
+        let outcome: String
+        switch trend.outcome {
+        case .improvement: outcome = "improvement"
+        case .decline: outcome = "decline"
+        case .unchanged: outcome = ""
+        }
+        return outcome.isEmpty ? "\(base), \(direction)" : "\(base), \(direction), \(outcome)"
+    }
+}
+
+private struct ManagerCareerRow: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    let tenure: ManagerTenure
+
+    private var statistics: [ManagerCareerStatistic] {
+        [
+            ManagerCareerStatistic(label: "Matches", value: tenure.matches.map(String.init)),
+            ManagerCareerStatistic(label: "Wins", value: tenure.wins.map(String.init)),
+            ManagerCareerStatistic(label: "Draws", value: tenure.draws.map(String.init)),
+            ManagerCareerStatistic(label: "Losses", value: tenure.losses.map(String.init)),
+            ManagerCareerStatistic(label: "Win %", value: tenure.winPercentage.map { percentage($0) }),
+            ManagerCareerStatistic(label: "Points", value: tenure.points.map(String.init)),
+            ManagerCareerStatistic(label: "PPM", value: tenure.pointsPerMatch.map { decimal($0) }),
+            ManagerCareerStatistic(label: "Goals for", value: tenure.goalsFor.map(String.init)),
+            ManagerCareerStatistic(label: "Goals against", value: tenure.goalsAgainst.map(String.init)),
+            ManagerCareerStatistic(label: "Goal diff.", value: tenure.goalDifference.map { $0 > 0 ? "+\($0)" : String($0) }),
+        ].filter { $0.value != nil }
+    }
+
+    private var columns: [GridItem] {
+        Array(
+            repeating: GridItem(.flexible(minimum: 0), spacing: 10, alignment: .leading),
+            count: dynamicTypeSize.isAccessibilitySize ? 2 : 3
+        )
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                ManagerCareerTeamLogo(tenure: tenure)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(tenure.teamName)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(2)
+                    if let dateRange {
+                        Text(dateRange)
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.52))
+                    }
+                }
+            }
+
+            if !statistics.isEmpty {
+                LazyVGrid(columns: columns, alignment: .leading, spacing: 10) {
+                    ForEach(statistics) { statistic in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(statistic.value ?? "–")
+                                .font(.caption.monospacedDigit().weight(.semibold))
+                                .foregroundStyle(.white.opacity(0.84))
+                            Text(statistic.label.uppercased())
+                                .font(.system(size: 9, weight: .semibold))
+                                .tracking(0.25)
+                                .foregroundStyle(.white.opacity(0.42))
+                        }
+                        .accessibilityElement(children: .combine)
+                    }
+                }
+                .padding(.leading, 44)
+            }
+        }
+        .padding(.vertical, 12)
+    }
+
+    private var dateRange: String? {
+        let start = PlayerDatePresentation.displayDate(tenure.dateFrom)
+        let end = PlayerDatePresentation.displayDate(tenure.dateTo)
+        switch (start, end) {
+        case let (start?, end?): return "\(start) – \(end)"
+        case let (start?, nil): return "From \(start)"
+        case let (nil, end?): return "Until \(end)"
+        case (nil, nil): return nil
+        }
+    }
+
+    private func decimal(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(0 ... 2)))
+    }
+
+    private func percentage(_ value: Double) -> String {
+        "\(value.formatted(.number.precision(.fractionLength(0 ... 1))))%"
+    }
+}
+
+private struct ManagerCareerStatistic: Identifiable {
+    let label: String
+    let value: String?
+
+    var id: String { label }
+}
+
+private struct ManagerCareerTeamLogo: View {
+    let tenure: ManagerTenure
+
+    private var remoteURL: URL? {
+        tenure.teamLogoURL.flatMap(URL.init)
+    }
+
+    var body: some View {
+        Group {
+            if let remoteURL {
+                AsyncImage(url: remoteURL) { phase in
+                    if let image = phase.image {
+                        image.resizable().scaledToFit()
+                    } else {
+                        fallback
+                    }
+                }
+            } else {
+                fallback
+            }
+        }
+        .frame(width: 34, height: 34)
+        .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var fallback: some View {
+        if let image = LogoResolver.shared.image(for: tenure.teamName, teamId: tenure.teamID) {
+            Image(uiImage: image)
+                .resizable()
+                .scaledToFit()
+        } else {
+            Image(systemName: "shield.fill")
+                .foregroundStyle(.white.opacity(0.30))
+        }
     }
 }
 

@@ -8,6 +8,8 @@ const {
     normalizeCacheStateDomains,
     scheduleEplSeasonStatusDailyRefresh,
     scheduleLeagueTablesDailyRefresh,
+    scheduleLiveFootballTvDailyRefresh,
+    hasValidLiveFootballTvAdminToken,
     updateFantasyBootstrapStatic,
     updateFantasyEventLive,
     updateFantasyFixtures,
@@ -67,12 +69,22 @@ test("server exports explicit api monitor and scraper runtime starters", () => {
 
 test("split runtimes retain working daily schedulers", async () => {
   assert.equal(typeof scheduleLeagueTablesDailyRefresh, "function");
+  assert.equal(typeof scheduleLiveFootballTvDailyRefresh, "function");
   assert.equal(typeof scheduleEplSeasonStatusDailyRefresh, "function");
   assert.doesNotThrow(() => {
     scheduleLeagueTablesDailyRefresh();
+    scheduleLiveFootballTvDailyRefresh();
     scheduleEplSeasonStatusDailyRefresh();
   });
   await shutdownRuntime();
+});
+
+test("TV listings admin refresh uses an exact bearer token", () => {
+  const request = (authorization) => ({ get: () => authorization });
+  assert.equal(hasValidLiveFootballTvAdminToken(request("Bearer secret"), "secret"), true);
+  assert.equal(hasValidLiveFootballTvAdminToken(request("Bearer wrong"), "secret"), false);
+  assert.equal(hasValidLiveFootballTvAdminToken(request("Basic secret"), "secret"), false);
+  assert.equal(hasValidLiveFootballTvAdminToken(request("Bearer secret"), ""), false);
 });
 
 test("API intervals retain their fantasy updaters", () => {

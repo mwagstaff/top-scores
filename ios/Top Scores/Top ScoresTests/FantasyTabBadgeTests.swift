@@ -50,3 +50,39 @@ struct FantasyTabBadgeTests {
         )
     }
 }
+
+struct LiveStandingsRowHighlightTests {
+    private let cycleStart = Date(timeIntervalSinceReferenceDate: 0)
+
+    @Test func inactiveRowIsTransparent() {
+        #expect(liveStandingsRowHighlightOpacity(
+            at: cycleStart,
+            isActive: false,
+            reduceMotion: false
+        ) == 0)
+    }
+
+    @Test func reducedMotionUsesStaticHighlight() {
+        #expect(liveStandingsRowHighlightOpacity(
+            at: cycleStart,
+            isActive: true,
+            reduceMotion: true
+        ) == 0.14)
+    }
+
+    @Test func liveHighlightPulsesWithinExpectedRange() {
+        let lowOpacity = liveStandingsRowHighlightOpacity(
+            at: cycleStart,
+            isActive: true,
+            reduceMotion: false
+        )
+        let highOpacity = liveStandingsRowHighlightOpacity(
+            at: cycleStart.addingTimeInterval(1.1),
+            isActive: true,
+            reduceMotion: false
+        )
+
+        #expect(abs(lowOpacity - 0.07) < 0.000_001)
+        #expect(abs(highOpacity - 0.20) < 0.000_001)
+    }
+}

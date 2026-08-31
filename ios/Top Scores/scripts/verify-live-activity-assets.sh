@@ -4,10 +4,22 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ASSET_CATALOG="$PROJECT_DIR/Media.xcassets"
+SOURCE_TEAM_MANIFEST="$PROJECT_DIR/Top Scores/team_logo_assets.json"
+SERVER_TEAM_MANIFEST="$PROJECT_DIR/../../api/team_logo_assets.json"
 TEAM_MANIFEST="$PROJECT_DIR/Top Scores Widgets/team_logo_assets.json"
 LIVE_MANIFEST="$PROJECT_DIR/Top Scores Widgets/live_activity_team_logo_assets.json"
 OUTPUT_DIR="$ASSET_CATALOG/LiveActivityGenerated"
 failures=0
+
+if ! cmp -s "$SOURCE_TEAM_MANIFEST" "$SERVER_TEAM_MANIFEST"; then
+  echo "App and server team-logo manifests are out of sync" >&2
+  failures=$((failures + 1))
+fi
+
+if ! cmp -s "$SOURCE_TEAM_MANIFEST" "$TEAM_MANIFEST"; then
+  echo "Widget team-logo manifest is out of sync with the app manifest" >&2
+  failures=$((failures + 1))
+fi
 
 check_variant() {
   local variant_name="$1"
@@ -51,9 +63,6 @@ fi
 
 expected_team_count=0
 while IFS= read -r team_name; do
-  if [[ ! -f "$ASSET_CATALOG/$team_name.imageset/Contents.json" ]]; then
-    continue
-  fi
   variant_name="$team_name Live Activity"
   expected_team_count=$((expected_team_count + 1))
   if ! jq -e --arg name "$variant_name" 'index($name) != null' "$LIVE_MANIFEST" >/dev/null; then
@@ -61,7 +70,7 @@ while IFS= read -r team_name; do
     failures=$((failures + 1))
   fi
   check_variant "$variant_name" 36 36
-done < <(jq -r '.[]' "$TEAM_MANIFEST")
+done < <(jq -r '.[]' "$SOURCE_TEAM_MANIFEST")
 
 actual_team_count="$(jq 'length' "$LIVE_MANIFEST")"
 if [[ "$actual_team_count" -ne "$expected_team_count" ]]; then
@@ -84,4 +93,3 @@ if [[ "$failures" -ne 0 ]]; then
 fi
 
 echo "Verified $actual_team_count team logos, 12 TV logos, and the fantasy icon for Live Activity presentation limits."
-

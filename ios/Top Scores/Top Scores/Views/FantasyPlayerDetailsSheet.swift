@@ -125,10 +125,15 @@ struct FantasyPlayerDetailsSheet: View {
                         .font(.caption.weight(.bold))
                         .foregroundStyle(Color.green)
 
-                    Text(details.playerName)
-                        .font(.system(.title2, design: .rounded, weight: .bold))
-                        .lineLimit(2)
-                        .minimumScaleFactor(0.8)
+                    HStack(spacing: 7) {
+                        Text(details.playerName)
+                            .font(.system(.title2, design: .rounded, weight: .bold))
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.8)
+                        if details.hasAvailabilityIssue {
+                            FantasyAvailabilityWarningIcon(size: 13)
+                        }
+                    }
 
                     HStack(spacing: 8) {
                         teamLogoView(teamName: details.teamName, size: 22)
@@ -928,9 +933,14 @@ struct FantasyPlayerDetailsSheet: View {
             .background(Color.green.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
             VStack(alignment: .leading, spacing: 4) {
-                Text(item.webName.isEmpty ? item.playerName : item.webName)
-                    .font(.subheadline.weight(.semibold))
-                    .lineLimit(1)
+                HStack(spacing: 5) {
+                    Text(item.webName.isEmpty ? item.playerName : item.webName)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                    if item.hasAvailabilityIssue {
+                        FantasyAvailabilityWarningIcon()
+                    }
+                }
                 Text("\(item.teamName) · £\(item.nowCostMillions.formatted(.number.precision(.fractionLength(1))))m")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -1059,9 +1069,14 @@ struct FantasyPlayerDetailsSheet: View {
                 Text(details.position)
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.secondary)
-                Text(details.playerName)
-                    .font(.title3.weight(.bold))
-                    .lineLimit(1)
+                HStack(spacing: 6) {
+                    Text(details.playerName)
+                        .font(.title3.weight(.bold))
+                        .lineLimit(1)
+                    if details.hasAvailabilityIssue {
+                        FantasyAvailabilityWarningIcon()
+                    }
+                }
                 Text(details.teamName)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -1686,6 +1701,9 @@ struct FantasyPlayerDetailsSheet: View {
                 Text(item.webName.isEmpty ? item.playerName : item.webName)
                     .font(.caption2.weight(.semibold))
                     .lineLimit(1)
+                if item.hasAvailabilityIssue {
+                    FantasyAvailabilityWarningIcon(size: 9)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 

@@ -134,8 +134,28 @@ async function ensureIndexes() {
     ]),
     collection("bsd_incidents").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
     collection("bsd_broadcasts").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
+    collection("live_football_tv_listings").createIndexes([
+      {
+        key: { snapshot_id: 1, source_key: 1 },
+        name: "snapshot_source_unique",
+        unique: true,
+        partialFilterExpression: {
+          snapshot_id: { $type: "string" },
+          source_key: { $type: "string" },
+        },
+      },
+      { key: { snapshot_id: 1, matched_event_id: 1 }, name: "snapshot_event" },
+      { key: { snapshot_id: 1, date_local: 1 }, name: "snapshot_date" },
+      { key: { updated_at: -1 }, name: "updatedAt_desc" },
+    ]),
     collection("bsd_lineups").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
     collection("bsd_players").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
+    collection("bsd_team_squads").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
+    collection("bsd_managers").createIndexes([
+      { key: { updated_at: -1 }, name: "updatedAt_desc" },
+      { key: { current_team_id: 1 }, name: "currentTeam" },
+    ]),
+    collection("bsd_manager_careers").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
     collection("gg_players").createIndexes([
       { key: { updated_at: -1 }, name: "updatedAt_desc" },
     ]),
@@ -709,6 +729,181 @@ async function saveBbcRequestHistory(record) {
 }
 
 // ---------------------------------------------------------------------------
+// Supplementary LiveFootballOnTV snapshots.
+//
+// Snapshot documents are immutable by source identity except for their
+// matching audit fields. The active snapshot pointer lives in
+// operational_datasets so a partial scrape can never replace good data.
+// ---------------------------------------------------------------------------
+
+async function acquireLiveFootballTvLease(owner, ttlMs = 5 * 60 * 1000) {
+  const mongoDb = await getDb();
+  const normalizedOwner = normalizeRecordId(owner);
+  if (!mongoDb) return null;
+  if (!normalizedOwner) return false;
+  const now = new Date();
+  const expiresAt = new Date(now.getTime() + Math.max(30_000, Number(ttlMs) || 0));
+  try {
+    const result = await collection("live_football_tv_listings").updateOne(
+      {
+        _id: "__lease__",
+        $or: [
+          { lease_owner: normalizedOwner },
+          { lease_expires_at: { $exists: false } },
+          { lease_expires_at: { $lte: now } },
+        ],
+      },
+      {
+        $set: {
+          lease_owner: normalizedOwner,
+          lease_expires_at: expiresAt,
+          updated_at: now.toISOString(),
+        },
+        $setOnInsert: { created_at: now.toISOString() },
+      },
+      { upsert: true }
+    );
+    return result.matchedCount > 0 || result.upsertedCount > 0;
+  } catch (error) {
+    if (error && error.code === 11000) return false;
+    throw error;
+  }
+}
+
+async function releaseLiveFootballTvLease(owner) {
+  const mongoDb = await getDb();
+  const normalizedOwner = normalizeRecordId(owner);
+  if (!mongoDb || !normalizedOwner) return false;
+  const result = await collection("live_football_tv_listings").updateOne(
+    { _id: "__lease__", lease_owner: normalizedOwner },
+    {
+      $set: {
+        lease_owner: null,
+        lease_expires_at: new Date(0),
+        updated_at: new Date().toISOString(),
+      },
+    }
+  );
+  return result.modifiedCount > 0;
+}
+
+async function saveLiveFootballTvSnapshot(snapshotId, records = [], metadata = {}) {
+  const mongoDb = await getDb();
+  const normalizedSnapshotId = normalizeRecordId(snapshotId);
+  if (!mongoDb || !normalizedSnapshotId || !Array.isArray(records) || records.length === 0) {
+    return null;
+  }
+  const nowIso = metadata.updated_at || new Date().toISOString();
+  const operations = records.map((record) => {
+    const sourceKey = normalizeRecordId(record && record.source_key);
+    return {
+      updateOne: {
+        filter: { _id: `${normalizedSnapshotId}:${sourceKey}` },
+        update: {
+          $set: {
+            ...record,
+            snapshot_id: normalizedSnapshotId,
+            source_key: sourceKey,
+            source: "live-footballontv.com",
+            source_url: metadata.source_url || null,
+            scraped_at: metadata.scraped_at || nowIso,
+            updated_at: nowIso,
+          },
+          $setOnInsert: { created_at: nowIso },
+        },
+        upsert: true,
+      },
+    };
+  }).filter((operation) => operation.updateOne.update.$set.source_key);
+  if (operations.length === 0) return null;
+  const result = await collection("live_football_tv_listings").bulkWrite(operations, {
+    ordered: false,
+  });
+  return {
+    snapshot_id: normalizedSnapshotId,
+    written: operations.length,
+    upserted: result.upsertedCount || 0,
+    modified: result.modifiedCount || 0,
+  };
+}
+
+async function getLiveFootballTvSnapshot(snapshotId, options = {}) {
+  const mongoDb = await getDb();
+  const normalizedSnapshotId = normalizeRecordId(snapshotId);
+  if (!mongoDb || !normalizedSnapshotId) return [];
+  const filter = { snapshot_id: normalizedSnapshotId };
+  if (options.matchedOnly) filter.matched_event_id = { $ne: null };
+  if (Array.isArray(options.eventIds) && options.eventIds.length > 0) {
+    filter.matched_event_id = {
+      $in: options.eventIds.map(normalizeRecordId).filter(Boolean),
+    };
+  }
+  const records = await collection("live_football_tv_listings")
+    .find(filter, options.projection ? { projection: options.projection } : {})
+    .sort({ date_local: 1, time_local: 1, source_key: 1 })
+    .toArray();
+  return records.map(stripMongoId);
+}
+
+async function getActiveLiveFootballTvListings(options = {}) {
+  const metadata = await getOperationalDataset("live_football_tv_listings_meta");
+  const snapshotId = normalizeRecordId(metadata && metadata.payload && metadata.payload.active_snapshot_id);
+  if (!snapshotId) return { metadata, snapshot_id: null, records: [] };
+  const records = await getLiveFootballTvSnapshot(snapshotId, options);
+  return { metadata, snapshot_id: snapshotId, records };
+}
+
+async function updateLiveFootballTvListingMatches(snapshotId, assignments = []) {
+  const mongoDb = await getDb();
+  const normalizedSnapshotId = normalizeRecordId(snapshotId);
+  if (!mongoDb || !normalizedSnapshotId || !Array.isArray(assignments) || assignments.length === 0) {
+    return null;
+  }
+  const nowIso = new Date().toISOString();
+  const operations = assignments.map((assignment) => ({
+    updateOne: {
+      filter: {
+        snapshot_id: normalizedSnapshotId,
+        source_key: normalizeRecordId(assignment && assignment.source_key),
+      },
+      update: {
+        $set: {
+          matched_event_id: assignment.matched_event_id || null,
+          match_status: assignment.match_status || "unmatched",
+          match_method: assignment.match_method || null,
+          match_confidence:
+            Number.isFinite(Number(assignment.match_confidence))
+              ? Number(assignment.match_confidence)
+              : null,
+          match_margin:
+            Number.isFinite(Number(assignment.match_margin))
+              ? Number(assignment.match_margin)
+              : null,
+          match_reason: assignment.match_reason || null,
+          matched_at: nowIso,
+          updated_at: nowIso,
+        },
+      },
+    },
+  })).filter((operation) => operation.updateOne.filter.source_key);
+  if (operations.length === 0) return null;
+  const result = await collection("live_football_tv_listings").bulkWrite(operations, {
+    ordered: false,
+  });
+  return { updated: result.modifiedCount || 0, attempted: operations.length };
+}
+
+async function pruneLiveFootballTvSnapshots(keepSnapshotIds = []) {
+  const mongoDb = await getDb();
+  if (!mongoDb) return 0;
+  const keep = keepSnapshotIds.map(normalizeRecordId).filter(Boolean);
+  const result = await collection("live_football_tv_listings").deleteMany({
+    snapshot_id: { $exists: true, ...(keep.length > 0 ? { $nin: keep } : {}) },
+  });
+  return result.deletedCount || 0;
+}
+
+// ---------------------------------------------------------------------------
 async function findPlayerCachesByNames(playerNames = []) {
   const mongoDb = await getDb();
   if (!mongoDb) return [];
@@ -992,6 +1187,13 @@ module.exports = {
   saveBbcMatchEventHistory,
   saveBbcNotificationHistory,
   saveBbcRequestHistory,
+  acquireLiveFootballTvLease,
+  releaseLiveFootballTvLease,
+  saveLiveFootballTvSnapshot,
+  getLiveFootballTvSnapshot,
+  getActiveLiveFootballTvListings,
+  updateLiveFootballTvListingMatches,
+  pruneLiveFootballTvSnapshots,
   findPlayerCachesByNames,
   upsertBsdRecord,
   upsertBsdRecords,

@@ -3043,8 +3043,8 @@ private struct LiveActivityPrecomputedTeamLogo: View {
 
     var body: some View {
         Group {
-            if let assetName = assetName {
-                Image(assetName)
+            if let image = image {
+                Image(uiImage: image)
                     .resizable()
                     .renderingMode(.original)
                     .scaledToFit()
@@ -3063,10 +3063,10 @@ private struct LiveActivityPrecomputedTeamLogo: View {
         .accessibilityHidden(true)
     }
 
-    private var assetName: String? {
+    private var image: UIImage? {
         let trimmedLogoKey = logoKey?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !trimmedLogoKey.isEmpty else { return nil }
-        return "\(trimmedLogoKey) Live Activity"
+        return UIImage(named: "\(trimmedLogoKey) Live Activity")
     }
 }
 

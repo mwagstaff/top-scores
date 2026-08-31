@@ -7,7 +7,7 @@ This document describes the current runtime architecture implemented in [`api/se
 ```mermaid
 flowchart LR
   subgraph Sources
-    LF[LiveFootballOnTV]
+    LF[LiveFootballOnTV supplementary TV listings]
     BBCL[BBC Live Scores]
     BBCR[BBC Scores/Fixtures Range]
     BBCD[BBC Match Details]
@@ -20,6 +20,7 @@ flowchart LR
   end
 
   subgraph Runtime
+    MONGO[(MongoDB)]
     MEM[In-Memory Runtime Cache]
     REDIS[Operational Redis]
     RECON[Redis Reconciliation]
@@ -33,7 +34,8 @@ flowchart LR
     MONITOR[Match Monitor / Push]
   end
 
-  LF --> MEM
+  LF --> MONGO
+  MONGO --> MEM
   BBCL --> MEM
   BBCR --> MEM
   BBCD --> MEM
@@ -61,7 +63,7 @@ flowchart LR
 
 | Source | What it provides | Default pull cadence | Retry behavior | What is updated |
 | --- | --- | --- | --- | --- |
-| LiveFootballOnTV | Scheduled TV fixtures and channel data | Every 30 minutes | No explicit retry in scheduler | `live_matches`, `recent_matches`, `merged_matches` |
+| LiveFootballOnTV | Supplementary UK TV channels for fixtures already trusted from BSD | Daily at 05:15 Europe/London, plus the authenticated on-demand endpoint | Retries network, HTTP 429, and 5xx failures with exponential backoff; an incomplete scrape never replaces the active snapshot | `live_football_tv_listings`, then the `bsd_current_matches` serving projection |
 | BSD | Fixtures, results, live scores, incidents, lineups, broadcasts, players, predictions, and standings | Live events every 10 seconds; incidents every 30 seconds; other datasets use the BSD poller cadence | HTTP 429-aware exponential backoff and retries | `bsd_*` Mongo collections and the `bsd_current_matches` serving projection |
 | BBC Scores/Fixtures Range | Broad past/future fixture coverage | Every 1 hour | No explicit retry in scheduler; multi-page fetch with configured concurrency | `bbc_range_matches`, `merged_matches` |
 | BBC Match Details | Detailed scorers/cards/lineups/aggregate state for in-progress matches | Every 10 seconds | Per-target failures are logged and skipped; remaining targets continue | `match_details` |
@@ -77,6 +79,7 @@ flowchart LR
 - `FootballDatabase` defaults to 4 attempts with backoff `500ms -> 8000ms`, factor `2`, jitter `250ms`.
 - `National Elo` defaults to 5 attempts with backoff `400ms -> 5000ms`, factor `2`, jitter `200ms`.
 - `BBC Match Details` is resilient in a different way: one failed match-detail fetch does not abort the whole poll cycle.
+- `LiveFootballOnTV` defaults to 3 attempts and honours `Retry-After` for rate limiting. Matching is restricted to allowlisted BSD fixtures; unmatched or ambiguous rows remain in Mongo for audit and are not exposed as fixtures.
 - Most other feeds are single-attempt per scheduled run. Freshness recovers on the next interval.
 
 ## 2. Which Functionality Uses Which Data Sources
@@ -85,10 +88,10 @@ flowchart LR
 
 | Functionality | Primary datasets | Backing sources | Failure effect |
 | --- | --- | --- | --- |
-| `/api/v1/matches` | `merged_matches`, `match_details`, `premier_league_teams` | LiveFootballOnTV, BBC range, BBC live, BBC match details, BBC tables | Lists go stale immediately if memory is stale; details become thinner if `match_details` lags |
+| `/api/v1/matches` | `bsd_current_matches`, `match_details`, `premier_league_teams` | BSD is the fixture and primary broadcast authority; matched LiveFootballOnTV channels are unioned after BSD channels | BSD match data remains available if supplementary TV ingestion fails; only added future TV coverage becomes stale |
 | `/api/v1/matches/:matchId` and `/api/v1/bbc/details` | `match_details` with in-memory fallback payload | BBC live, BBC match details, Club Elo fixtures | Detailed scorers/cards/lineups/aggregate data can be stale or missing |
 | `/api/v1/matches/states` | `match_details` | BBC live, BBC match details | Can still hydrate misses from Redis, but freshness depends on detail polling |
-| `/api/v1/competitions` and `/api/v1/channels` | `merged_matches` | LiveFootballOnTV + BBC range/live merged output | Lists become stale if merged cache or Redis copy drifts |
+| `/api/v1/competitions` and `/api/v1/channels` | `merged_matches` | BSD projection with matched supplementary LiveFootballOnTV channels | Lists become stale if merged cache or Redis copy drifts |
 | `/api/v1/teams*` | `merged_matches`, `club_elo_teams`, `football_database_teams`, `national_elo_teams`, `premier_league_teams` | Match feeds + ranking feeds + BBC tables | Team metadata and ranking overlays become stale; endpoint still works from older snapshots if available |
 | `/api/v1/tables*` | `league_tables` | BBC tables | Tables become stale or unavailable if both Redis and memory copies are bad |
 | Fantasy endpoints under `/api/v1/fantasy/*` | FPL bootstrap, fixtures, event live caches | FPL API | Fantasy gameweek/bootstrap/score/recommendation features return stale data or `503` when caches are missing |
@@ -98,7 +101,7 @@ flowchart LR
 
 | Source failure | User-visible impact |
 | --- | --- |
-| LiveFootballOnTV | TV channel listings and some fixture coverage degrade |
+| LiveFootballOnTV | BSD fixtures and BSD channels continue unchanged; only supplementary channel coverage stops advancing, with the last complete snapshot retained |
 | BBC Live Scores | Live scores/status updates lag; recent cache and initial detail seeding degrade |
 | BBC Range | Broad fixture/result coverage degrades; new fixtures may not appear |
 | BBC Match Details | Rich match detail pages degrade; monitor/event decisions lose detail |

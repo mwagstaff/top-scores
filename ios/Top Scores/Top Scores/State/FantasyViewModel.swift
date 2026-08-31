@@ -2,6 +2,67 @@ import Foundation
 import Combine
 import os
 
+let fantasyTemporaryUnavailableUserMessage = "Fantasy Premier League’s servers are temporarily unavailable, so we can’t load your team right now. We’ll keep trying and show your FPL data as soon as it’s available again."
+
+func fantasyLoadFailureShouldAutomaticallyRetry(_ error: Error) -> Bool {
+    if let fantasyError = error as? FantasyPublicAPIError {
+        switch fantasyError {
+        case .gameUpdating, .invalidHTTPResponse, .decodeFailed:
+            return true
+        case let .badStatus(statusCode, _, _):
+            return fantasyHTTPStatusShouldAutomaticallyRetry(statusCode)
+        case .invalidURL, .authenticationRequired:
+            return false
+        }
+    }
+
+    if let apiError = error as? APIClientError {
+        switch apiError {
+        case let .badStatus(statusCode, _, _):
+            return fantasyHTTPStatusShouldAutomaticallyRetry(statusCode)
+        case .invalidHTTPResponse:
+            return true
+        default:
+            return false
+        }
+    }
+
+    if let urlError = error as? URLError {
+        return [
+            .timedOut,
+            .cannotFindHost,
+            .cannotConnectToHost,
+            .networkConnectionLost,
+            .dnsLookupFailed,
+            .notConnectedToInternet,
+            .resourceUnavailable,
+            .internationalRoamingOff,
+            .dataNotAllowed,
+            .secureConnectionFailed,
+        ].contains(urlError.code)
+    }
+
+    return error is DecodingError
+}
+
+func fantasyUserFriendlyLoadErrorMessage(for error: Error) -> String {
+    if fantasyLoadFailureShouldAutomaticallyRetry(error) {
+        return fantasyTemporaryUnavailableUserMessage
+    }
+    return "We couldn’t load your Fantasy data right now. Please try again."
+}
+
+func fantasyAutomaticRetryDelay(forAttempt attempt: Int, jitter: Double) -> TimeInterval {
+    let boundedAttempt = min(max(attempt, 0), 5)
+    let baseDelay = min(60, 3 * pow(2, Double(boundedAttempt)))
+    let boundedJitter = min(max(jitter, 0), 1)
+    return min(60, baseDelay * (0.85 + (0.30 * boundedJitter)))
+}
+
+private func fantasyHTTPStatusShouldAutomaticallyRetry(_ statusCode: Int) -> Bool {
+    statusCode == 408 || statusCode == 425 || statusCode == 429 || (500...599).contains(statusCode)
+}
+
 func fantasyFixtureMatchesMatch(
     _ fixture: FantasyFixture,
     homeTeamID: Int,
@@ -21,8 +82,6 @@ func fantasyFixtureMatchesMatch(
 
 @MainActor
 final class FantasyViewModel: ObservableObject {
-    private static let gameUpdatingUserMessage = "Fantasy Premier League data is temporarily unavailable while the official game is being updated. Please try again in a few minutes."
-
     @Published private(set) var isLoading = false
     @Published private(set) var isRefreshing = false
     @Published private(set) var data: FantasySquadDisplayData?
@@ -39,6 +98,7 @@ final class FantasyViewModel: ObservableObject {
     @Published private(set) var isSeasonActive = false
     @Published private(set) var requiresAuthentication = false
     @Published private(set) var authenticatedEntryID: Int?
+    @Published private(set) var shouldAutomaticallyRetry = false
     @Published var errorMessage: String?
     @Published private(set) var matchHistoryRevision = 0
     /// Pre-computed context for MatchRow. Updated whenever squad data, expected points, or the
@@ -90,11 +150,6 @@ final class FantasyViewModel: ObservableObject {
     private let setupRivalPageWindowRadius = 1
     private let leagueStandingsPageSize = 50
     private let setupRivalCandidateLimit = 200
-
-    var isShowingGameUpdatingState: Bool {
-        guard let errorMessage else { return false }
-        return Self.containsGameUpdatingText(errorMessage)
-    }
 
     var activeFantasySeasonKey: String {
         let bootstrap = currentSquadBootstrap ?? cachedBootstrapLookup
@@ -195,6 +250,7 @@ final class FantasyViewModel: ObservableObject {
         lastUpdated = nil
         requiresAuthentication = false
         authenticatedEntryID = nil
+        shouldAutomaticallyRetry = false
         errorMessage = nil
         cachedBootstrapLookup = nil
         cachedBootstrapFetchedAt = nil
@@ -1021,11 +1077,13 @@ final class FantasyViewModel: ObservableObject {
         let refreshStartedAt = Date()
         let trimmedManagerID = managerEntryID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let entryID = Int(trimmedManagerID), entryID > 0 else {
+            shouldAutomaticallyRetry = false
             errorMessage = "Stored manager ID is invalid. Please relink your Fantasy account."
             return
         }
 
         guard let baseURL = URL(string: apiBaseURL) else {
+            shouldAutomaticallyRetry = false
             errorMessage = "Invalid API base URL in preferences."
             return
         }
@@ -1210,6 +1268,7 @@ final class FantasyViewModel: ObservableObject {
                 }
             }
             lastUpdated = Date()
+            shouldAutomaticallyRetry = false
             errorMessage = nil
             requiresAuthentication = false
             authenticatedEntryID = activeEntryID
@@ -1226,7 +1285,8 @@ final class FantasyViewModel: ObservableObject {
                case .authenticationRequired = fantasyError {
                 requiresAuthentication = true
             }
-            errorMessage = userFriendlyErrorMessage(for: error)
+            shouldAutomaticallyRetry = fantasyLoadFailureShouldAutomaticallyRetry(error)
+            errorMessage = fantasyUserFriendlyLoadErrorMessage(for: error)
         }
     }
 
@@ -2277,45 +2337,6 @@ final class FantasyViewModel: ObservableObject {
         } catch {
             return nil
         }
-    }
-
-    private func userFriendlyErrorMessage(for error: Error) -> String {
-        if let fantasyError = error as? FantasyPublicAPIError,
-           case .gameUpdating = fantasyError {
-            return Self.gameUpdatingUserMessage
-        }
-
-        if let apiError = error as? APIClientError,
-           case let .badStatus(_, _, bodySnippet) = apiError,
-           Self.containsGameUpdatingText(bodySnippet) {
-            return Self.gameUpdatingUserMessage
-        }
-
-        let message = error.localizedDescription
-        if Self.containsGameUpdatingText(message) {
-            return Self.gameUpdatingUserMessage
-        }
-        return message
-    }
-
-    private static func containsGameUpdatingText(_ value: String) -> Bool {
-        let normalized = value
-            .lowercased()
-            .replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-
-        if normalized.contains("the game is being updated") {
-            return true
-        }
-        if normalized.contains("game is being updated") {
-            return true
-        }
-        if normalized.contains("temporarily unavailable"),
-           normalized.contains("game"),
-           normalized.contains("updated") {
-            return true
-        }
-        return false
     }
 
     private func timed<T>(_ label: String, operation: () async throws -> T) async throws -> T {

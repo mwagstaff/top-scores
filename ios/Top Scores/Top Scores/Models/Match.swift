@@ -326,6 +326,7 @@ struct MatchLineupSubstitution: Codable, Hashable, Identifiable, Sendable {
 struct PlayerDetails: Codable, Hashable, Sendable {
     let id: String
     let name: String
+    let shortName: String?
     let team: String?
     let born: String?
     let description: String?
@@ -335,10 +336,135 @@ struct PlayerDetails: Codable, Hashable, Sendable {
     let cutoutURL: String?
     let thumbURL: String?
     let renderURL: String?
+    let positionCode: String?
+    let specificPosition: String?
+    let jerseyNumber: Int?
+    let dateOfBirth: String?
+    let heightCM: Double?
+    let weightKG: Double?
+    let preferredFoot: String?
+    let nationality: String?
+    let currentTeamID: String?
+    let nationalTeamID: String?
+    let currentTeam: PlayerTeamReference?
+    let nationalTeam: PlayerTeamReference?
+    let marketValueEUR: Double?
+    let marketValueGBP: Double?
+    let contractUntil: String?
+    let availability: String?
+    let injuryType: String?
+    let injuryExpectedReturn: String?
+    let attributes: PlayerAttributes?
+    let strengths: [String]?
+    let weaknesses: [String]?
+    let rating: Double?
+    let potential: String?
+    let injuryRisk: String?
+    let annualWageEUR: Double?
+    let fplElementID: Int?
+    let fplFirstName: String?
+    let fplLastName: String?
+    let fplTotalPoints: Int?
+    let fplSelectedByCount: Int?
+    let fplSelectedByPercent: Double?
+    let fplProfileURL: String?
+
+    init(
+        id: String,
+        name: String,
+        shortName: String? = nil,
+        team: String? = nil,
+        born: String? = nil,
+        description: String? = nil,
+        side: String? = nil,
+        position: String? = nil,
+        birthLocation: String? = nil,
+        cutoutURL: String? = nil,
+        thumbURL: String? = nil,
+        renderURL: String? = nil,
+        positionCode: String? = nil,
+        specificPosition: String? = nil,
+        jerseyNumber: Int? = nil,
+        dateOfBirth: String? = nil,
+        heightCM: Double? = nil,
+        weightKG: Double? = nil,
+        preferredFoot: String? = nil,
+        nationality: String? = nil,
+        currentTeamID: String? = nil,
+        nationalTeamID: String? = nil,
+        currentTeam: PlayerTeamReference? = nil,
+        nationalTeam: PlayerTeamReference? = nil,
+        marketValueEUR: Double? = nil,
+        marketValueGBP: Double? = nil,
+        contractUntil: String? = nil,
+        availability: String? = nil,
+        injuryType: String? = nil,
+        injuryExpectedReturn: String? = nil,
+        attributes: PlayerAttributes? = nil,
+        strengths: [String]? = nil,
+        weaknesses: [String]? = nil,
+        rating: Double? = nil,
+        potential: String? = nil,
+        injuryRisk: String? = nil,
+        annualWageEUR: Double? = nil,
+        fplElementID: Int? = nil,
+        fplFirstName: String? = nil,
+        fplLastName: String? = nil,
+        fplTotalPoints: Int? = nil,
+        fplSelectedByCount: Int? = nil,
+        fplSelectedByPercent: Double? = nil,
+        fplProfileURL: String? = nil
+    ) {
+        self.id = id
+        self.name = name
+        self.shortName = shortName
+        self.team = team
+        self.born = born
+        self.description = description
+        self.side = side
+        self.position = position
+        self.birthLocation = birthLocation
+        self.cutoutURL = cutoutURL
+        self.thumbURL = thumbURL
+        self.renderURL = renderURL
+        self.positionCode = positionCode
+        self.specificPosition = specificPosition
+        self.jerseyNumber = jerseyNumber
+        self.dateOfBirth = dateOfBirth
+        self.heightCM = heightCM
+        self.weightKG = weightKG
+        self.preferredFoot = preferredFoot
+        self.nationality = nationality
+        self.currentTeamID = currentTeamID
+        self.nationalTeamID = nationalTeamID
+        self.currentTeam = currentTeam
+        self.nationalTeam = nationalTeam
+        self.marketValueEUR = marketValueEUR
+        self.marketValueGBP = marketValueGBP
+        self.contractUntil = contractUntil
+        self.availability = availability
+        self.injuryType = injuryType
+        self.injuryExpectedReturn = injuryExpectedReturn
+        self.attributes = attributes
+        self.strengths = strengths
+        self.weaknesses = weaknesses
+        self.rating = rating
+        self.potential = potential
+        self.injuryRisk = injuryRisk
+        self.annualWageEUR = annualWageEUR
+        self.fplElementID = fplElementID
+        self.fplFirstName = fplFirstName
+        self.fplLastName = fplLastName
+        self.fplTotalPoints = fplTotalPoints
+        self.fplSelectedByCount = fplSelectedByCount
+        self.fplSelectedByPercent = fplSelectedByPercent
+        self.fplProfileURL = fplProfileURL
+    }
 
     enum CodingKeys: String, CodingKey {
         case id
         case name
+        case shortName = "short_name"
         case team
         case born
         case description
@@ -348,6 +474,82 @@ struct PlayerDetails: Codable, Hashable, Sendable {
         case cutoutURL = "cutout_url"
         case thumbURL = "thumb_url"
         case renderURL = "render_url"
+        case positionCode = "position_code"
+        case specificPosition = "specific_position"
+        case jerseyNumber = "jersey_number"
+        case dateOfBirth = "date_of_birth"
+        case heightCM = "height_cm"
+        case weightKG = "weight_kg"
+        case preferredFoot = "preferred_foot"
+        case nationality
+        case currentTeamID = "current_team_id"
+        case nationalTeamID = "national_team_id"
+        case currentTeam = "current_team"
+        case nationalTeam = "national_team"
+        case marketValueEUR = "market_value_eur"
+        case marketValueGBP = "market_value_gbp"
+        case contractUntil = "contract_until"
+        case availability
+        case injuryType = "injury_type"
+        case injuryExpectedReturn = "injury_expected_return"
+        case attributes
+        case strengths
+        case weaknesses
+        case rating
+        case potential
+        case injuryRisk = "injury_risk"
+        case annualWageEUR = "wage_eur_annual"
+        case fplElementID = "fpl_element_id"
+        case fplFirstName = "fpl_first_name"
+        case fplLastName = "fpl_last_name"
+        case fplTotalPoints = "fpl_total_points"
+        case fplSelectedByCount = "fpl_selected_by_count"
+        case fplSelectedByPercent = "fpl_selected_by_percent"
+        case fplProfileURL = "fpl_profile_url"
+    }
+}
+
+struct PlayerAttributes: Codable, Hashable, Sendable {
+    let attacking: Int?
+    let technical: Int?
+    let tactical: Int?
+    let defending: Int?
+    let creativity: Int?
+    let position: String?
+}
+
+struct PlayerTeamReference: Codable, Hashable, Sendable {
+    let id: String?
+    let name: String?
+    let shortName: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case shortName = "short_name"
+    }
+}
+
+struct TeamSquadResponse: Codable, Hashable, Sendable {
+    let teamID: String
+    let count: Int
+    let players: [PlayerDetails]
+    let exchangeRate: ExchangeRate?
+
+    struct ExchangeRate: Codable, Hashable, Sendable {
+        let base: String
+        let quote: String
+        let rate: Double
+        let date: String?
+        let stale: Bool
+        let source: String?
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case teamID = "team_id"
+        case count
+        case players
+        case exchangeRate = "exchange_rate"
     }
 }
 

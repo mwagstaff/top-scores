@@ -8,6 +8,7 @@
 //
 //   - leagues refresh                                   every 12h  (+ on start)
 //   - bounded current/recent events refresh             every 15m (+ on start)
+//   - managers for every supported league               every 1h  (+ on start)
 //   - live poll (/events/live)                           every 5s while a match
 //     is in progress, dropping to a 30s recon between matches
 //   - incidents poll for in-progress events             every 10s
@@ -37,18 +38,16 @@ const {
 } = require("./fetch_bsd_reference");
 const { refreshAllBroadcasts } = require("./fetch_bsd_broadcasts");
 const { refreshAllPredictions } = require("./fetch_bsd_predictions");
-const { projectBsdMatches } = require("./bsd_adapter");
+const { refreshAllManagers } = require("./fetch_bsd_managers");
+const { publishBsdCurrentMatchesProjection } = require("./bsd_current_matches");
+const { reconcileActiveLiveFootballTvListings } = require("./live_football_tv_listings");
 const { BSD_LEAGUE_ALLOWLIST } = require("./bsd_config");
 const {
   upsertBsdRecords,
   upsertBsdRecord,
   getBsdRecords,
-  saveOperationalDataset,
-  getOperationalDatasetMetadata,
   closeMongoConnection,
 } = require("./mongo_client");
-
-const BSD_CURRENT_MATCHES_DATASET = "bsd_current_matches";
 
 const LIVE_POLL_MS = Number(process.env.BSD_LIVE_POLL_MS || 5_000);
 // With no match in progress, /events/live is only checked at this lighter
@@ -60,6 +59,7 @@ const REFERENCE_REFRESH_MS = Number(process.env.BSD_REFERENCE_REFRESH_MS || 12 *
 const EVENTS_REFRESH_MS = Number(process.env.BSD_EVENTS_REFRESH_MS || 15 * 60 * 1000);
 const BROADCASTS_REFRESH_MS = Number(process.env.BSD_BROADCASTS_REFRESH_MS || 6 * 60 * 60 * 1000);
 const PREDICTIONS_REFRESH_MS = Number(process.env.BSD_PREDICTIONS_REFRESH_MS || 6 * 60 * 60 * 1000);
+const MANAGERS_REFRESH_MS = Number(process.env.BSD_MANAGERS_REFRESH_MS || 60 * 60 * 1000);
 // Standings (tables): poll cadence while an allowlisted league has a live match.
 const STANDINGS_LIVE_POLL_MS = Number(process.env.BSD_STANDINGS_LIVE_POLL_MS || 30_000);
 const DETAIL_FETCH_CONCURRENCY = Math.max(
@@ -99,6 +99,7 @@ let referenceRefreshInFlight = false;
 let eventsRefreshInFlight = false;
 let broadcastsRefreshInFlight = false;
 let predictionsRefreshInFlight = false;
+let managersRefreshInFlight = false;
 let standingsPollInFlight = false;
 let standingsDailyRefreshTimer = null;
 let metricsServer = null;
@@ -152,31 +153,13 @@ async function refreshCurrentMatchesProjection(reason) {
     do {
       projectionRefreshPending = false;
       const startedAt = Date.now();
-      const matches = await projectBsdMatches();
-      const payloadHash = hashPayload(matches);
-      if (!currentMatchesProjectionHash) {
-        const existingMetadata = await getOperationalDatasetMetadata([
-          BSD_CURRENT_MATCHES_DATASET,
-        ]);
-        currentMatchesProjectionHash =
-          existingMetadata && existingMetadata[BSD_CURRENT_MATCHES_DATASET]
-            ? existingMetadata[BSD_CURRENT_MATCHES_DATASET].payload_hash || null
-            : null;
-      }
-      if (payloadHash === currentMatchesProjectionHash) {
-        continue;
-      }
-      await saveOperationalDataset({
-        name: BSD_CURRENT_MATCHES_DATASET,
-        updated_at: new Date().toISOString(),
-        source: `bsd_poller:${reason}`,
-        payload: matches,
-        payload_count: matches.length,
-        payload_hash: payloadHash,
+      const result = await publishBsdCurrentMatchesProjection(reason, {
+        knownHash: currentMatchesProjectionHash,
       });
-      currentMatchesProjectionHash = payloadHash;
+      currentMatchesProjectionHash = result.payload_hash;
+      if (!result.changed) continue;
       console.log(
-        `[bsd-runtime] current match projection: ${matches.length} matches in ${Date.now() - startedAt}ms`
+        `[bsd-runtime] current match projection: ${result.matches.length} matches in ${Date.now() - startedAt}ms`
       );
     } while (projectionRefreshPending);
   } catch (error) {
@@ -709,6 +692,9 @@ async function refreshEvents() {
   try {
     await refreshIncrementalEvents();
     markPollSuccess("events");
+    await reconcileActiveLiveFootballTvListings().catch((error) => {
+      console.warn(`[bsd-runtime] supplementary TV reconciliation failed: ${error.message || error}`);
+    });
     void refreshCurrentMatchesProjection("events_refresh");
   } catch (error) {
     console.error(`[bsd-runtime] events refresh failed: ${error.message || error}`);
@@ -744,11 +730,25 @@ async function refreshPredictions() {
   }
 }
 
+async function refreshManagers() {
+  if (managersRefreshInFlight) return;
+  managersRefreshInFlight = true;
+  try {
+    await refreshAllManagers();
+    markPollSuccess("managers");
+  } catch (error) {
+    console.error(`[bsd-runtime] managers refresh failed: ${error.message || error}`);
+  } finally {
+    managersRefreshInFlight = false;
+  }
+}
+
 function start() {
   console.log(
     `[bsd-runtime] starting (live=${LIVE_POLL_MS}ms, live_idle=${LIVE_IDLE_POLL_MS}ms, incidents=${INCIDENTS_POLL_MS}ms, ` +
       `lineups=${LINEUPS_POLL_MS}ms, events=${EVENTS_REFRESH_MS}ms, reference=${REFERENCE_REFRESH_MS}ms, ` +
       `broadcasts=${BROADCASTS_REFRESH_MS}ms, predictions=${PREDICTIONS_REFRESH_MS}ms, ` +
+      `managers=${MANAGERS_REFRESH_MS}ms, ` +
       `standings_live=${STANDINGS_LIVE_POLL_MS}ms, standings_daily=${STANDINGS_DAILY_HOUR_UK}:${String(STANDINGS_DAILY_MINUTE_UK).padStart(2, "0")} Europe/London)`
   );
 
@@ -760,6 +760,7 @@ function start() {
   refreshEvents();
   refreshBroadcasts();
   refreshPredictions();
+  refreshManagers();
   pollLiveEvents();
   pollLineups();
   scheduleStandingsDailyRefresh();
@@ -772,6 +773,7 @@ function start() {
   timers.push(setInterval(refreshLeagues, REFERENCE_REFRESH_MS));
   timers.push(setInterval(refreshBroadcasts, BROADCASTS_REFRESH_MS));
   timers.push(setInterval(refreshPredictions, PREDICTIONS_REFRESH_MS));
+  timers.push(setInterval(refreshManagers, MANAGERS_REFRESH_MS));
 }
 
 async function stop(signal) {
@@ -814,6 +816,7 @@ module.exports = {
   refreshEvents,
   refreshBroadcasts,
   refreshPredictions,
+  refreshManagers,
   startMetricsServer,
   closeMetricsServer,
   start,

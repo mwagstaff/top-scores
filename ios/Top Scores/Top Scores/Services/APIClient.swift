@@ -289,7 +289,8 @@ struct APIClient {
             operation: "competition_season_matches"
         )
         try validateSuccess(http, data: data, operation: "competition_season_matches")
-        return try decodeMatches(from: data, operation: "competition_season_matches")
+        let matches = try decodeMatches(from: data, operation: "competition_season_matches")
+        return await hydrateInProgressMatchStatesBestEffort(matches)
     }
 
     func fetchTeamResults(
@@ -791,6 +792,40 @@ struct APIClient {
         return try JSONDecoder().decode(PlayerDetails.self, from: data)
     }
 
+    func fetchTeamSquad(teamId: String) async throws -> TeamSquadResponse {
+        let normalizedID = teamId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedID.isEmpty, normalizedID.allSatisfy(\.isNumber) else {
+            throw APIClientError.invalidTeamID(teamId)
+        }
+        let request = try buildRequest(path: "teams/\(normalizedID)/squad", queryItems: [])
+        let (data, http) = try await performRequest(request, operation: "team_squad")
+        try validateSuccess(http, data: data, operation: "team_squad")
+        return try JSONDecoder().decode(TeamSquadResponse.self, from: data)
+    }
+
+    func fetchTeamManager(teamId: String) async throws -> TeamManager? {
+        let normalizedID = teamId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedID.isEmpty, normalizedID.allSatisfy(\.isNumber) else {
+            throw APIClientError.invalidTeamID(teamId)
+        }
+        let request = try buildRequest(path: "teams/\(normalizedID)/manager", queryItems: [])
+        let (data, http) = try await performRequest(request, operation: "team_manager")
+        if http.statusCode == 404 { return nil }
+        try validateSuccess(http, data: data, operation: "team_manager")
+        return try JSONDecoder().decode(TeamManager.self, from: data)
+    }
+
+    func fetchManagerCareer(managerId: String) async throws -> ManagerCareerResponse {
+        let normalizedID = managerId.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !normalizedID.isEmpty, normalizedID.allSatisfy(\.isNumber) else {
+            throw APIClientError.invalidManagerID(managerId)
+        }
+        let request = try buildRequest(path: "managers/\(normalizedID)/career", queryItems: [])
+        let (data, http) = try await performRequest(request, operation: "manager_career")
+        try validateSuccess(http, data: data, operation: "manager_career")
+        return try JSONDecoder().decode(ManagerCareerResponse.self, from: data)
+    }
+
     func fetchMatchStates(
         matchIDs: [String],
         summaryOnly: Bool = false
@@ -1083,6 +1118,31 @@ struct APIClient {
         }
     }
 
+    private func hydrateInProgressMatchStatesBestEffort(_ matches: [Match]) async -> [Match] {
+        let ids = matches.filter(\.isInProgress).compactMap(\.matchDetailsID)
+        guard !ids.isEmpty else { return matches }
+
+        do {
+            let statesByID = try await fetchMatchStates(matchIDs: ids, summaryOnly: true)
+            return matches.map { match in
+                guard match.isInProgress,
+                      let matchDetailsID = match.matchDetailsID,
+                      let details = statesByID[matchDetailsID] else {
+                    return match
+                }
+                return match.withLiveState(details)
+            }
+        } catch is CancellationError {
+            return matches
+        } catch {
+            Self.log(
+                "WARN",
+                "fallback op=competition_season_matches using list state because live hydration failed"
+            )
+            return matches
+        }
+    }
+
     private static let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -1317,6 +1377,8 @@ enum APIClientError: LocalizedError {
     case invalidMatchesPayload(operation: String, reason: String)
     case invalidMatchDetailsID(String)
     case invalidPlayerID(String)
+    case invalidTeamID(String)
+    case invalidManagerID(String)
 
     var errorDescription: String? {
         switch self {
@@ -1333,6 +1395,10 @@ enum APIClientError: LocalizedError {
             return "Invalid match details id: \(matchId)"
         case let .invalidPlayerID(playerId):
             return "Invalid player id: \(playerId)"
+        case let .invalidTeamID(teamId):
+            return "Invalid team id: \(teamId)"
+        case let .invalidManagerID(managerId):
+            return "Invalid manager id: \(managerId)"
         }
     }
 }

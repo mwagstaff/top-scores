@@ -1605,6 +1605,38 @@ struct FantasyTransferRecommendation: Codable, Hashable, Identifiable {
     }
 }
 
+enum FantasyAvailabilityPresentation {
+    nonisolated static func hasIssue(
+        status: String? = nil,
+        availability: String? = nil,
+        chanceOfPlaying: Int? = nil
+    ) -> Bool {
+        if let chanceOfPlaying, chanceOfPlaying < 100 { return true }
+        let normalizedStatus = status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if ["i", "d", "s", "u", "injured", "doubtful", "suspended", "unavailable"].contains(normalizedStatus) {
+            return true
+        }
+        let normalizedAvailability = availability?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return ![nil, "", "a", "available"].contains(normalizedAvailability)
+    }
+}
+
+extension FantasyTransferRecommendation {
+    nonisolated var hasAvailabilityIssue: Bool {
+        FantasyAvailabilityPresentation.hasIssue(
+            status: status,
+            availability: availability,
+            chanceOfPlaying: min(chanceOfPlayingThisRound, chanceOfPlayingNextRound)
+        )
+    }
+}
+
+extension FantasyAssistantManagerResponse.CaptainRecommendation {
+    nonisolated var hasAvailabilityIssue: Bool {
+        FantasyAvailabilityPresentation.hasIssue(availability: availability)
+    }
+}
+
 struct FantasyRivalManager: Codable, Hashable, Identifiable {
     let entryID: Int
     let teamName: String
@@ -2760,6 +2792,16 @@ struct FantasyPlayerDetailsData: Hashable {
     let formItems: [FormItem]
     let upcomingFixtures: [UpcomingFixture]
     let historyRows: [HistoryRow]
+}
+
+extension FantasyPlayerDetailsData {
+    var hasAvailabilityIssue: Bool {
+        if let chance = [chanceOfPlayingThisRound, chanceOfPlayingNextRound].compactMap({ $0 }).min(),
+           chance < 100 {
+            return true
+        }
+        return statusUpdates.contains { $0.severity == .warning }
+    }
 }
 
 enum FantasyExpectedPointsEstimator {

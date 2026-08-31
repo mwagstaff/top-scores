@@ -11,7 +11,10 @@
 
 const { canonicalTeamName } = require("./team_identity");
 const { utcDateTimeToZonedDateTime } = require("./match_time");
-const { getBsdRecords } = require("./mongo_client");
+const {
+  getBsdRecords,
+  getActiveLiveFootballTvListings,
+} = require("./mongo_client");
 const { BSD_LEAGUE_ALLOWLIST } = require("./bsd_config");
 const { bsdPlayerImageUrl } = require("./player_images");
 const SunCalc = require("suncalc");
@@ -785,6 +788,39 @@ function bsdBroadcastChannels(broadcastsPayload) {
   return out;
 }
 
+function mergeBroadcastChannelSources(primaryChannels, supplementaryChannels) {
+  const output = [];
+  const seen = new Set();
+  [...(primaryChannels || []), ...(supplementaryChannels || [])].forEach((channel) => {
+    const name = String(channel && channel.name || "").trim();
+    if (!name) return;
+    const countryCode = String(channel && channel.countryCode || "GB").trim().toUpperCase();
+    const key = `${name.toLowerCase()}|${countryCode}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    output.push({
+      name,
+      country: String(channel && channel.country || "United Kingdom").trim() || "United Kingdom",
+      countryCode: countryCode || "GB",
+      logo: channel && channel.logo ? String(channel.logo) : null,
+    });
+  });
+  return output;
+}
+
+function supplementaryChannelsByEventId(records = []) {
+  const output = new Map();
+  records.forEach((record) => {
+    const eventId = String(record && record.matched_event_id || "").trim();
+    if (!eventId || !Array.isArray(record.channels)) return;
+    output.set(
+      eventId,
+      mergeBroadcastChannelSources(output.get(eventId) || [], record.channels)
+    );
+  });
+  return output;
+}
+
 // ---------------------------------------------------------------------------
 // Standings (league tables)
 // ---------------------------------------------------------------------------
@@ -1104,6 +1140,7 @@ function bsdEventToCanonicalMatch(event, options = {}) {
   } else if (options.broadcastsPayload) {
     tvChannels = bsdBroadcastChannels(options.broadcastsPayload);
   }
+  tvChannels = mergeBroadcastChannelSources(tvChannels, options.supplementaryChannels);
 
   const match = {
     id,
@@ -1435,15 +1472,20 @@ async function projectBsdMatches() {
     .map((doc) => doc && doc.payload && doc.payload.venue_id)
     .filter((id) => id != null)
     .map(String))];
-  const [broadcasts, incidentsDocs, venueDocs] = eventIds.length > 0
+  const [broadcasts, supplementaryListings, incidentsDocs, venueDocs] = eventIds.length > 0
     ? await Promise.all([
         getBsdRecords("bsd_broadcasts", { _id: { $in: eventIds } }),
+        getActiveLiveFootballTvListings({
+          matchedOnly: true,
+          eventIds,
+          projection: { matched_event_id: 1, channels: 1 },
+        }).then((result) => result.records),
         getBsdRecords("bsd_incidents", { _id: { $in: eventIds } }),
         venueIds.length > 0
           ? getBsdRecords("bsd_venues", { _id: { $in: venueIds } })
           : Promise.resolve([]),
       ])
-    : [[], [], []];
+    : [[], [], [], []];
   const leagueNameById = new Map();
   leagues.forEach((doc) => {
     const p = doc.payload || {};
@@ -1457,6 +1499,12 @@ async function projectBsdMatches() {
     if (!eventId) return;
     const channels = bsdBroadcastChannels(doc.payload);
     if (channels.length > 0) channelsByEventId.set(eventId, channels);
+  });
+  supplementaryChannelsByEventId(supplementaryListings).forEach((channels, eventId) => {
+    channelsByEventId.set(
+      eventId,
+      mergeBroadcastChannelSources(channelsByEventId.get(eventId) || [], channels)
+    );
   });
 
   const incidentsByEventId = new Map();
@@ -1505,10 +1553,15 @@ async function projectBsdMatchDetails(eventId, options = {}) {
   if (!eventDoc || !eventDoc.payload) return null;
   const previousLegId = String(eventDoc.payload.previous_leg_event_id || "").trim();
   const venueId = eventDoc.payload.venue_id != null ? String(eventDoc.payload.venue_id) : null;
-  const [incidentsDoc, lineupsDoc, broadcastsDoc, venueDoc, previousLegDoc, leagues] = await Promise.all([
+  const [incidentsDoc, lineupsDoc, broadcastsDoc, supplementaryListings, venueDoc, previousLegDoc, leagues] = await Promise.all([
     options.incidentsDoc || getBsdRecords("bsd_incidents", { _id: id }).then((r) => r[0] || null),
     options.lineupsDoc || getBsdRecords("bsd_lineups", { _id: id }).then((r) => r[0] || null),
     options.broadcastsDoc || getBsdRecords("bsd_broadcasts", { _id: id }).then((r) => r[0] || null),
+    getActiveLiveFootballTvListings({
+      matchedOnly: true,
+      eventIds: [id],
+      projection: { matched_event_id: 1, channels: 1 },
+    }).then((result) => result.records),
     options.venueDoc || (venueId
       ? getBsdRecords("bsd_venues", { _id: venueId }).then((r) => r[0] || null)
       : Promise.resolve(null)),
@@ -1527,6 +1580,7 @@ async function projectBsdMatchDetails(eventId, options = {}) {
     incidentsPayload: incidentsDoc ? incidentsDoc.payload : null,
     lineupsPayload: lineupsDoc ? lineupsDoc.payload : null,
     broadcastsPayload: broadcastsDoc ? broadcastsDoc.payload : null,
+    supplementaryChannels: supplementaryChannelsByEventId(supplementaryListings).get(id) || [],
     leagueNameById,
     venuesById: venueId && venueDoc
       ? new Map([[venueId, venueDoc.payload || null]])
@@ -1557,6 +1611,8 @@ module.exports = {
     bsdMinute,
     bsdPositionCategory,
     bsdBroadcastChannels,
+    mergeBroadcastChannelSources,
+    supplementaryChannelsByEventId,
     extractBsdPeriodSummary,
     buildPenaltyResultText,
     parseBsdFormString,

@@ -464,6 +464,14 @@ function getTeam(id, options = {}) {
   });
 }
 
+function getTeamSquad(id, options = {}) {
+  return _request(`/teams/${encodeURIComponent(id)}/squad`, {
+    source: "bsd_team_squad",
+    reason: "team_squad_fetch",
+    ...options,
+  });
+}
+
 function getVenue(id, options = {}) {
   return _request(`/venues/${encodeURIComponent(id)}`, {
     source: "bsd_venue",
@@ -536,6 +544,44 @@ function getPlayer(id, options = {}) {
   });
 }
 
+function getPlayers({ teamId } = {}, options = {}) {
+  return _requestAllPages("/players", {
+    source: "bsd_players",
+    reason: "players_fetch",
+    ...options,
+    query: { ...(options.query || {}), team_id: teamId },
+  });
+}
+
+function getManagers({ leagueId, teamId } = {}, options = {}) {
+  return _requestAllPages("/managers", {
+    source: "bsd_managers",
+    reason: "managers_fetch",
+    ...options,
+    query: {
+      ...(options.query || {}),
+      league_id: leagueId,
+      team_id: teamId,
+    },
+  });
+}
+
+function getManager(id, options = {}) {
+  return _request(`/managers/${encodeURIComponent(id)}`, {
+    source: "bsd_manager",
+    reason: "manager_lookup",
+    ...options,
+  });
+}
+
+function getManagerCareer(id, options = {}) {
+  return _request(`/managers/${encodeURIComponent(id)}/career`, {
+    source: "bsd_manager_career",
+    reason: "manager_career_fetch",
+    ...options,
+  });
+}
+
 // Predictions for a league (paginated). Returns the flat results array.
 function getPredictions({ leagueId } = {}, options = {}) {
   return _requestAllPages("/predictions", {
@@ -563,6 +609,7 @@ module.exports = {
   getLeague,
   getStandings,
   getTeam,
+  getTeamSquad,
   getVenue,
   getEvents,
   getBroadcasts,
@@ -571,6 +618,10 @@ module.exports = {
   getIncidents,
   getLineups,
   getPlayer,
+  getPlayers,
+  getManagers,
+  getManager,
+  getManagerCareer,
   getPredictions,
   getSocial,
 

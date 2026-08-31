@@ -196,32 +196,44 @@ struct LiveStandingsRowBackground: View {
     let isActive: Bool
 
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
-    @State private var pulsing = false
 
     var body: some View {
-        Rectangle()
-            .fill(Color.liveMatch.opacity(highlightOpacity))
-            .animation(pulseAnimation, value: pulsing)
-            .onAppear { updatePulseState() }
-            .onChange(of: isActive) { _, _ in updatePulseState() }
-            .onChange(of: accessibilityReduceMotion) { _, _ in updatePulseState() }
-            .accessibilityHidden(true)
+        TimelineView(
+            .animation(
+                minimumInterval: 1.0 / 30.0,
+                paused: !isActive || accessibilityReduceMotion
+            )
+        ) { context in
+            Rectangle()
+                .fill(Color.liveMatch)
+                .opacity(liveStandingsRowHighlightOpacity(
+                    at: context.date,
+                    isActive: isActive,
+                    reduceMotion: accessibilityReduceMotion
+                ))
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .transaction { transaction in
+            transaction.animation = nil
+        }
+        .accessibilityHidden(true)
     }
+}
 
-    private var highlightOpacity: Double {
-        guard isActive else { return 0 }
-        guard !accessibilityReduceMotion else { return 0.14 }
-        return pulsing ? 0.20 : 0.07
-    }
+func liveStandingsRowHighlightOpacity(
+    at date: Date,
+    isActive: Bool,
+    reduceMotion: Bool
+) -> Double {
+    guard isActive else { return 0 }
+    guard !reduceMotion else { return 0.14 }
 
-    private var pulseAnimation: Animation? {
-        guard isActive, !accessibilityReduceMotion else { return .default }
-        return .easeInOut(duration: 1.1).repeatForever(autoreverses: true)
-    }
-
-    private func updatePulseState() {
-        pulsing = isActive && !accessibilityReduceMotion
-    }
+    let cycleDuration = 2.2
+    let cyclePosition = date.timeIntervalSinceReferenceDate
+        .truncatingRemainder(dividingBy: cycleDuration) / cycleDuration
+    let pulse = (1 - cos(cyclePosition * 2 * .pi)) / 2
+    return 0.07 + (0.13 * pulse)
 }
 
 struct FootballPitchSegmentOption<Value: Hashable>: Identifiable {

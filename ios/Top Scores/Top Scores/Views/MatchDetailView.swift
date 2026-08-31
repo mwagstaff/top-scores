@@ -1343,18 +1343,20 @@ private struct MatchDetailScoreboardHero: View {
                         HStack(spacing: 5) {
                             if isTrailing {
                                 goalMinute(summary.minute)
-                                goalScorer(summary.scorer)
+                                goalScorer(summary.scorer, player: summary.scorerPlayer)
                             } else {
-                                goalScorer(summary.scorer)
+                                goalScorer(summary.scorer, player: summary.scorerPlayer)
                                 goalMinute(summary.minute)
                             }
                         }
 
                         if let assister = summary.assister {
-                            Text("Assist: \(assister)")
-                                .font(.caption2)
-                                .foregroundStyle(.white.opacity(0.68))
-                                .lineLimit(1)
+                            playerLink(
+                                text: "Assist: \(assister)",
+                                player: summary.assisterPlayer,
+                                font: .caption2,
+                                color: .white.opacity(0.68)
+                            )
                         }
                     }
 
@@ -1370,10 +1372,40 @@ private struct MatchDetailScoreboardHero: View {
         .frame(maxWidth: .infinity, alignment: isTrailing ? .trailing : .leading)
     }
 
-    private func goalScorer(_ scorer: String) -> some View {
-        Text(scorer)
-            .font(.caption.weight(.semibold))
-            .lineLimit(1)
+    private func goalScorer(_ scorer: String, player: MatchLineupPlayer?) -> some View {
+        playerLink(
+            text: scorer,
+            player: player,
+            font: .caption.weight(.semibold),
+            color: .white
+        )
+    }
+
+    @ViewBuilder
+    private func playerLink(
+        text: String,
+        player: MatchLineupPlayer?,
+        font: Font,
+        color: Color
+    ) -> some View {
+        if let player, player.idPlayer != nil {
+            NavigationLink {
+                PlayerDetailsView(player: player, apiBaseURL: preferences.apiBaseURL)
+            } label: {
+                Text(text)
+                    .font(font)
+                    .foregroundStyle(color)
+                    .underline(pattern: .dot, color: color.opacity(0.7))
+                    .lineLimit(1)
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("View player details")
+        } else {
+            Text(text)
+                .font(font)
+                .foregroundStyle(color)
+                .lineLimit(1)
+        }
     }
 
     private func goalMinute(_ minute: String) -> some View {
@@ -1618,7 +1650,9 @@ private struct MatchScoreboardGoalSummary: Identifiable {
     let id: String
     let minute: String
     let scorer: String
+    let scorerPlayer: MatchLineupPlayer?
     let assister: String?
+    let assisterPlayer: MatchLineupPlayer?
     let sortOrder: Int
 
     var text: String {
@@ -1638,18 +1672,22 @@ private struct MatchScoreboardGoalSummary: Identifiable {
         return make(
             scorers: credits.scorers,
             ownGoalScorers: credits.ownGoalScorers,
-            assists: credits.assists
+            assists: credits.assists,
+            creditedSide: side,
+            match: match
         )
     }
 
     private static func make(
         scorers: [MatchGoalScorer],
         ownGoalScorers: [MatchGoalScorer],
-        assists: [MatchAssistProvider]
+        assists: [MatchAssistProvider],
+        creditedSide: MatchCompetitionTeamSide,
+        match: Match
     ) -> [MatchScoreboardGoalSummary] {
-        let assistLookup = assists.reduce(into: [String: String]()) { lookup, assist in
+        let assistLookup = assists.reduce(into: [String: MatchAssistProvider]()) { lookup, assist in
             for minute in assist.assistTimes {
-                lookup[minuteKey(minute)] = lastName(assist.player)
+                lookup[minuteKey(minute)] = assist
             }
         }
         var summaries: [MatchScoreboardGoalSummary] = []
@@ -1657,12 +1695,22 @@ private struct MatchScoreboardGoalSummary: Identifiable {
         for (scorerIndex, scorer) in scorers.enumerated() {
             let scorerName = lastName(scorer.player)
             for (minuteIndex, minute) in scorer.goalTimes.enumerated() {
+                let assist = assistLookup[minuteKey(minute)]
                 summaries.append(
                     MatchScoreboardGoalSummary(
                         id: "goal-\(scorerIndex)-\(minuteIndex)-\(minute)",
                         minute: displayMinute(minute),
                         scorer: scorerName,
-                        assister: assistLookup[minuteKey(minute)],
+                        scorerPlayer: player(
+                            id: scorer.idPlayer,
+                            name: scorer.player,
+                            side: creditedSide,
+                            match: match
+                        ),
+                        assister: assist.map { lastName($0.player) },
+                        assisterPlayer: assist.flatMap {
+                            reliablyMatchedPlayer(named: $0.player, side: creditedSide, match: match)
+                        },
                         sortOrder: minuteSortOrder(minute)
                     )
                 )
@@ -1677,7 +1725,14 @@ private struct MatchScoreboardGoalSummary: Identifiable {
                         id: "own-goal-\(scorerIndex)-\(minuteIndex)-\(minute)",
                         minute: displayMinute(minute),
                         scorer: "\(scorerName) (OG)",
+                        scorerPlayer: player(
+                            id: scorer.idPlayer,
+                            name: scorer.player,
+                            side: creditedSide == .home ? .away : .home,
+                            match: match
+                        ),
                         assister: nil,
+                        assisterPlayer: nil,
                         sortOrder: minuteSortOrder(minute)
                     )
                 )
@@ -1690,6 +1745,52 @@ private struct MatchScoreboardGoalSummary: Identifiable {
             }
             return lhs.id < rhs.id
         }
+    }
+
+    private static func player(
+        id: String?,
+        name: String,
+        side: MatchCompetitionTeamSide,
+        match: Match
+    ) -> MatchLineupPlayer? {
+        let primary = side == .home ? match.teamLineups?.home : match.teamLineups?.away
+        if let matched = preferredMatchEventLineupPlayer(
+            named: name,
+            idPlayer: id,
+            primaryLineup: primary,
+            secondaryLineup: nil
+        ) {
+            return matched
+        }
+        guard let id = id?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty else {
+            return nil
+        }
+        return MatchLineupPlayer(
+            number: nil,
+            name: name,
+            idPlayer: id,
+            positionCategory: nil,
+            formationRowIndex: nil,
+            formationSlotIndex: nil,
+            formationRowSize: nil
+        )
+    }
+
+    private static func reliablyMatchedPlayer(
+        named name: String,
+        side: MatchCompetitionTeamSide,
+        match: Match
+    ) -> MatchLineupPlayer? {
+        let lineup = side == .home ? match.teamLineups?.home : match.teamLineups?.away
+        let lookup = MatchPlayerNameLookup(name: name)
+        let candidates = lineup.map(lineupPlayerCandidates) ?? []
+        let scored = candidates
+            .filter { $0.idPlayer != nil }
+            .map { ($0, lookup.matchScore(against: MatchPlayerNameLookup(name: $0.name))) }
+            .filter { $0.1 >= 2 }
+        guard let bestScore = scored.map(\.1).max() else { return nil }
+        let best = scored.filter { $0.1 == bestScore }
+        return best.count == 1 ? best[0].0 : nil
     }
 
     private static func lastName(_ fullName: String) -> String {
@@ -4148,6 +4249,23 @@ private struct MatchLineupSubstituteRow: Identifiable {
 
 private struct PlayerDetailsSheet: View {
     @Environment(\.dismiss) private var dismiss
+
+    let player: MatchLineupPlayer
+    let apiBaseURL: String
+
+    var body: some View {
+        NavigationStack {
+            PlayerDetailsView(player: player, apiBaseURL: apiBaseURL)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button("Done") { dismiss() }
+                    }
+                }
+        }
+    }
+}
+
+struct PlayerDetailsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     let player: MatchLineupPlayer
@@ -4157,6 +4275,12 @@ private struct PlayerDetailsSheet: View {
     @State private var errorMessage: String?
     @State private var isLoadingDetails = false
     @State private var heroIsPresented = false
+
+    init(player: MatchLineupPlayer, apiBaseURL: String, initialDetails: PlayerDetails? = nil) {
+        self.player = player
+        self.apiBaseURL = apiBaseURL
+        _details = State(initialValue: initialDetails)
+    }
 
     private var imageURLs: [URL] {
         let candidates: [String?] = [
@@ -4180,59 +4304,52 @@ private struct PlayerDetailsSheet: View {
     }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(spacing: 14) {
-                    hero
+        ScrollView {
+            VStack(spacing: 14) {
+                hero
 
-                    if isLoadingDetails {
-                        ProgressView("Loading more player details")
-                            .frame(maxWidth: .infinity, minHeight: 80)
-                    }
+                if isLoadingDetails {
+                    ProgressView("Loading more player details")
+                        .frame(maxWidth: .infinity, minHeight: 80)
+                }
 
-                    if let errorMessage {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text(errorMessage)
-                                .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                if let errorMessage {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(errorMessage)
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
 
-                            Button("Try Again") {
-                                Task { await loadDetails() }
-                            }
-                            .buttonStyle(.bordered)
+                        Button("Try Again") {
+                            Task { await loadDetails() }
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(16)
-                        .background(cardBackground)
+                        .buttonStyle(.bordered)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16)
+                    .background(cardBackground)
+                }
 
-                    if let details {
-                        factStrip(details)
-                        aboutCard(details)
-                        informationCard(details)
-                    }
-                }
-                .padding()
-            }
-            .background(
-                LinearGradient(
-                    colors: [
-                        Color(red: 0.02, green: 0.11, blue: 0.19),
-                        Color(red: 0.01, green: 0.05, blue: 0.10)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .ignoresSafeArea()
-            )
-            .navigationTitle("Player")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
+                if let details {
+                    factStrip(details)
+                    aboutCard(details)
+                    informationCard(details)
                 }
             }
+            .padding()
         }
+        .background(
+            LinearGradient(
+                colors: [
+                    Color(red: 0.02, green: 0.11, blue: 0.19),
+                    Color(red: 0.01, green: 0.05, blue: 0.10)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+        )
+        .navigationTitle("Player")
+        .navigationBarTitleDisplayMode(.inline)
         .task(id: player.idPlayer) {
             await loadDetails()
         }
@@ -4434,12 +4551,30 @@ private struct PlayerDetailsSheet: View {
     }
 
     private func factStrip(_ details: PlayerDetails) -> some View {
-        HStack(spacing: 0) {
-            PlayerDetailsFact(title: "Age", value: ageText(from: details.born), subtitle: bornDateText(from: details.born))
-            Divider().background(Color.white.opacity(0.12))
-            PlayerDetailsFact(title: "Side", value: details.side ?? "Unknown", subtitle: nil)
-            Divider().background(Color.white.opacity(0.12))
-            PlayerDetailsFact(title: "Position", value: details.position ?? "Unknown", subtitle: nil)
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 0) {
+            PlayerDetailsFact(
+                title: "Age",
+                value: ageText(from: details.displayDateOfBirth),
+                subtitle: bornDateText(from: details.displayDateOfBirth)
+            )
+            PlayerDetailsFact(
+                title: "Squad No.",
+                value: details.jerseyNumber.map(String.init) ?? "Unknown",
+                subtitle: nil
+            )
+            PlayerDetailsFact(
+                title: "Nationality",
+                value: nationalityText(details.nationality),
+                subtitle: nil
+            )
+            PlayerDetailsFact(
+                title: "Value",
+                value: PlayerValuePresentation.compact(
+                    marketValueEUR: details.marketValueEUR,
+                    marketValueGBP: details.marketValueGBP
+                ) ?? "Unknown",
+                subtitle: details.marketValueGBP == nil && details.marketValueEUR != nil ? "EUR estimate" : nil
+            )
         }
         .padding(.vertical, 12)
         .background(cardBackground)
@@ -4469,11 +4604,33 @@ private struct PlayerDetailsSheet: View {
 
     private func informationCard(_ details: PlayerDetails) -> some View {
         VStack(spacing: 0) {
-            PlayerDetailsInfoRow(title: "Position", value: details.position ?? "Unknown")
+            PlayerDetailsInfoRow(title: "Position", value: details.displayPosition)
             Divider().background(Color.white.opacity(0.12))
             PlayerDetailsInfoRow(title: "Preferred Foot", value: details.side ?? "Unknown")
             Divider().background(Color.white.opacity(0.12))
-            PlayerDetailsInfoRow(title: "Birth Location", value: details.birthLocation ?? "Unknown")
+            PlayerDetailsInfoRow(
+                title: "Date of Birth",
+                value: bornDateText(from: details.displayDateOfBirth) ?? "Unknown"
+            )
+            Divider().background(Color.white.opacity(0.12))
+            PlayerDetailsInfoRow(
+                title: "Availability",
+                value: details.availabilityDisplayName,
+                warningMessage: details.isUnavailable
+                    ? "Availability warning: \(details.availabilityDisplayName)"
+                    : nil
+            )
+            if details.isUnavailable,
+               let injuryType = details.injuryType,
+               !injuryType.isEmpty {
+                Divider().background(Color.white.opacity(0.12))
+                PlayerDetailsInfoRow(title: "Issue", value: injuryType)
+            }
+            if details.isUnavailable,
+               let expectedReturn = PlayerDatePresentation.displayDate(details.injuryExpectedReturn) {
+                Divider().background(Color.white.opacity(0.12))
+                PlayerDetailsInfoRow(title: "Expected Return", value: expectedReturn)
+            }
         }
         .background(cardBackground)
     }
@@ -4544,24 +4701,20 @@ private struct PlayerDetailsSheet: View {
     }
 
     private func ageText(from born: String?) -> String {
-        guard let date = playerBirthDate(from: born) else { return "Unknown" }
-        let years = Calendar.current.dateComponents([.year], from: date, to: Date()).year
-        return years.map(String.init) ?? "Unknown"
+        PlayerDatePresentation.age(from: born).map(String.init) ?? "Unknown"
     }
 
     private func bornDateText(from born: String?) -> String? {
-        guard let date = playerBirthDate(from: born) else { return nil }
-        let formatter = DateFormatter()
-        formatter.dateFormat = "d MMM yyyy"
-        return formatter.string(from: date)
+        PlayerDatePresentation.displayDate(born)
     }
 
-    private func playerBirthDate(from value: String?) -> Date? {
-        guard let value, !value.isEmpty else { return nil }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.date(from: value)
+    private func nationalityText(_ nationality: String?) -> String {
+        let components = [PlayerNationalityPresentation.flag(for: nationality), nationality]
+            .compactMap { value -> String? in
+                guard let value, !value.isEmpty else { return nil }
+                return value
+            }
+        return components.isEmpty ? "Unknown" : components.joined(separator: " ")
     }
 }
 
@@ -4595,6 +4748,7 @@ private struct PlayerDetailsFact: View {
 private struct PlayerDetailsInfoRow: View {
     let title: String
     let value: String
+    var warningMessage: String? = nil
 
     var body: some View {
         HStack(spacing: 16) {
@@ -4602,6 +4756,9 @@ private struct PlayerDetailsInfoRow: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.white.opacity(0.78))
             Spacer(minLength: 12)
+            if let warningMessage {
+                FantasyAvailabilityWarningIcon(label: warningMessage, size: 12)
+            }
             Text(value)
                 .font(.subheadline.weight(.bold))
                 .foregroundStyle(.white)

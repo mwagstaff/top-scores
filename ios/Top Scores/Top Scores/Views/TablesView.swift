@@ -78,7 +78,13 @@ struct TablesView: View {
         .environment(\.colorScheme, .dark)
         .onAppear {
             isVisible = true
-            guard !hasLoaded else { return }
+            guard !hasLoaded else {
+                Task {
+                    await liveRefreshTables()
+                    await refreshSelectedCompetitionMatchesIfLive()
+                }
+                return
+            }
             hasLoaded = true
             screenOpenedAt = Date()
             applyCachedTables(for: preferences.apiBaseURL, clearWhenMissing: false)
@@ -91,6 +97,7 @@ struct TablesView: View {
                 // Pull fresh (server-recomputed) standings right away so any live
                 // match shows immediately, rather than waiting for the first timer tick.
                 await liveRefreshTables()
+                await refreshSelectedCompetitionMatchesIfLive()
             }
         }
         .onDisappear {
@@ -418,6 +425,9 @@ struct TablesView: View {
             return
         }
         guard force || !loadedMatchSectionLeagueIDs.contains(league.leagueID) else {
+            return
+        }
+        guard !loadingMatchSectionLeagueIDs.contains(league.leagueID) else {
             return
         }
 

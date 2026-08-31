@@ -9,9 +9,26 @@ func playerPortraitPixelSizeIsRenderable(width: Int, height: Int) -> Bool {
     width > 1 && height > 1
 }
 
-func playerPortraitURLNeedsBackgroundRemoval(_ url: URL) -> Bool {
-    url.host?.lowercased() == "sports.bzzoiro.com"
-        && url.path.hasPrefix("/img/player/")
+func portraitURLNeedsBackgroundRemoval(_ url: URL) -> Bool {
+    guard url.host?.lowercased() == "sports.bzzoiro.com" else { return false }
+    return url.path.hasPrefix("/img/player/") || url.path.hasPrefix("/img/manager/")
+}
+
+func portraitURLForLocalBackgroundRemoval(_ url: URL) -> URL {
+    guard url.host?.lowercased() == "sports.bzzoiro.com",
+          url.path.hasPrefix("/img/manager/"),
+          var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+    else {
+        return url
+    }
+
+    components.queryItems = components.queryItems?.filter {
+        $0.name.caseInsensitiveCompare("bg") != .orderedSame
+    }
+    if components.queryItems?.isEmpty == true {
+        components.queryItems = nil
+    }
+    return components.url ?? url
 }
 
 private func isRenderablePlayerPortrait(_ image: UIImage) -> Bool {
@@ -240,7 +257,7 @@ struct RemotePlayerPortraitImage<Content: View, Placeholder: View>: View {
                 }
 
                 let image: UIImage
-                if playerPortraitURLNeedsBackgroundRemoval(url),
+                if portraitURLNeedsBackgroundRemoval(url),
                    let transparentData = await PlayerPortraitBackgroundRemover.transparentPNGData(
                        from: data
                    ),
