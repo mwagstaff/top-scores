@@ -4,7 +4,8 @@ The competition marks bundled in `Media.xcassets/CompetitionLogo*.imageset` are
 used for identification in the Tables competition picker. They remain the
 property of their respective rights holders.
 
-Source files were retrieved from Wikimedia-hosted copies on 29 August 2026:
+Source files were retrieved from Wikimedia-hosted copies on 29 August and
+4 and 6 September 2026:
 
 | BSD league ID | Competition | Source |
 |---|---|---|
@@ -13,6 +14,7 @@ Source files were retrieved from Wikimedia-hosted copies on 29 August 2026:
 | 12 | Championship | https://en.wikipedia.org/wiki/File:EFL_Championship_Logo.svg |
 | 86 | League One | https://en.wikipedia.org/wiki/File:EFL_League_One_Logo.svg |
 | 87 | League Two | https://en.wikipedia.org/wiki/File:EFL_League_Two_Logo.svg |
+| 91 | National League | https://commons.wikimedia.org/wiki/File:Enterprise-National-League-Colour-Badged.png |
 | 39 | FA Cup | https://en.wikipedia.org/wiki/File:FA_Cup_logo_(2020).svg |
 | 7 | UEFA Champions League | https://commons.wikimedia.org/wiki/File:UEFA_Champions_League_logo_no_text.svg |
 | 8 | UEFA Europa League | https://commons.wikimedia.org/wiki/File:UEFA_Europa_League_logo_(2024_version).svg |
@@ -29,8 +31,12 @@ Source files were retrieved from Wikimedia-hosted copies on 29 August 2026:
 | 13 | Scottish Premiership | https://en.wikipedia.org/wiki/File:Scottish_Premiership_logo.svg |
 | 41 | Copa del Rey | https://commons.wikimedia.org/wiki/File:Copa_del_Rey_logo_(2021).svg |
 | 3 | La Liga | https://commons.wikimedia.org/wiki/File:LaLiga_EA_Sports_2023_Vertical_Logo.svg |
+| Configured `german-super-cup` | Franz Beckenbauer Supercup | https://en.wikipedia.org/wiki/File:Franz_Beckenbauer_Supercup_logo.svg |
 
 The existing `FantasyPremierLeagueLion` asset supplies the Premier League mark.
+The SPFL mark bundled for the Scottish Premiership also identifies the Scottish
+Championship, League One and League Two, all of which are SPFL competitions.
 World Cup qualifying competitions reuse the FIFA World Cup 2026 emblem because
-no distinct competition mark is available. International Friendlies retains the
-generic football fallback for the same reason.
+no distinct competition mark is available. International Friendlies uses a
+neutral in-app international football badge because it is not a single branded
+competition with an official mark.

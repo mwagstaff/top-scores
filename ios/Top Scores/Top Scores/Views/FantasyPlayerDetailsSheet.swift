@@ -70,7 +70,7 @@ struct FantasyPlayerDetailsSheet: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 16) {
                             premiumPlayerHeader(details)
-                            if !details.statusUpdates.isEmpty {
+                            if details.hasStatusUpdateContent {
                                 availabilitySection(details)
                             }
                             expectedPointsSummary(details)
@@ -1103,6 +1103,21 @@ struct FantasyPlayerDetailsSheet: View {
                         .foregroundStyle(update.severity == .warning ? Color.yellow : Color.secondary)
                         .padding(.top, 2)
                     Text(update.message)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let expectedReturn = PlayerDatePresentation.expectedReturnDisplayDate(
+                details.injuryExpectedReturn
+            ) {
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: "calendar")
+                        .font(.caption)
+                        .foregroundStyle(Color.secondary)
+                        .padding(.top, 2)
+                        .accessibilityHidden(true)
+                    Text("Expected return date: \(expectedReturn)")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }

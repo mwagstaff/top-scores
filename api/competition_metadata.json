@@ -113,6 +113,11 @@
     "region": "england",
     "aliases": ["English League 2"]
   },
+  "National League": {
+    "id": "national-league",
+    "region": "england",
+    "aliases": ["English National League", "Enterprise National League"]
+  },
   "International Friendly": {
     "id": "international-friendly",
     "region": "world",

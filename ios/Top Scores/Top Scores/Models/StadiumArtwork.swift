@@ -1,5 +1,11 @@
 import Foundation
 
+nonisolated struct StadiumArtworkFocalPoint: Codable, Hashable, Sendable {
+    var x: Double
+    var y: Double
+    static let center = Self(x: 0.5, y: 0.5)
+}
+
 enum StadiumArtworkRole: String, Codable, Hashable, Sendable {
     case genericBackdrop = "generic_backdrop"
     case genericMatch = "generic_match"
@@ -56,6 +62,7 @@ struct StadiumArtworkAsset: Identifiable, Codable, Hashable, Sendable {
     let width: Int
     let height: Int
     let credit: StadiumArtworkCredit
+    var focalPoint: StadiumArtworkFocalPoint? = nil
 
     enum CodingKeys: String, CodingKey {
         case id, role, stadium, sha256, width, height, credit
@@ -65,6 +72,7 @@ struct StadiumArtworkAsset: Identifiable, Codable, Hashable, Sendable {
         case assetURL = "asset_url"
         case contentType = "content_type"
         case byteSize = "byte_size"
+        case focalPoint = "focal_point"
     }
 
     nonisolated func remoteURL(apiBaseURL: String) -> URL? {

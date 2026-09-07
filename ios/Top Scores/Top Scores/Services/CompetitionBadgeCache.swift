@@ -2,6 +2,125 @@ import Foundation
 import SwiftUI
 import UIKit
 
+enum BundledCompetitionLogo {
+    private static let assetNamesByCompetitionID: [String: String] = [
+        "1": "FantasyPremierLeagueLion",
+        "3": "CompetitionLogo3",
+        "4": "CompetitionLogo4",
+        "5": "CompetitionLogo5",
+        "6": "CompetitionLogo6",
+        "7": "CompetitionLogo7",
+        "8": "CompetitionLogo8",
+        "10": "CompetitionLogo10",
+        "12": "CompetitionLogo12",
+        "13": "CompetitionLogo13",
+        "27": "CompetitionLogo27",
+        "31": "CompetitionLogoInternationalFriendly",
+        "39": "CompetitionLogo39",
+        "40": "CompetitionLogo40",
+        "41": "CompetitionLogo41",
+        "42": "CompetitionLogo42",
+        "43": "CompetitionLogo43",
+        "44": "CompetitionLogo44",
+        "58": "CompetitionLogo27",
+        "59": "CompetitionLogo27",
+        "62": "CompetitionLogo27",
+        "63": "CompetitionLogo27",
+        "64": "CompetitionLogo64",
+        "83": "CompetitionLogo83",
+        "86": "CompetitionLogo86",
+        "87": "CompetitionLogo87",
+        "90": "CompetitionLogo90",
+        "91": "CompetitionLogo91",
+        "bundesliga": "CompetitionLogo5",
+        "championship": "CompetitionLogo12",
+        "copa-del-rey": "CompetitionLogo41",
+        "english-league-cup": "CompetitionLogo40",
+        "fa-cup": "CompetitionLogo39",
+        "fifa-world-cup-2026": "CompetitionLogo27",
+        "german-super-cup": "CompetitionLogoGermanSuperCup",
+        "international-friendly": "CompetitionLogoInternationalFriendly",
+        "la-liga": "CompetitionLogo3",
+        "league-one": "CompetitionLogo86",
+        "league-two": "CompetitionLogo87",
+        "national-league": "CompetitionLogo91",
+        "ligue-1": "CompetitionLogo6",
+        "premier-league": "FantasyPremierLeagueLion",
+        "scottish-championship": "CompetitionLogo13",
+        "scottish-league-one": "CompetitionLogo13",
+        "scottish-league-two": "CompetitionLogo13",
+        "scottish-premiership": "CompetitionLogo13",
+        "serie-a": "CompetitionLogo4",
+        "uefa-champions-league": "CompetitionLogo7",
+        "uefa-conference-league": "CompetitionLogo83",
+        "uefa-europa-league": "CompetitionLogo8",
+        "uefa-nations-league": "CompetitionLogo64",
+        "uefa-super-cup": "CompetitionLogo90"
+    ]
+
+    private static let assetNamesByCompetitionName: [String: String] = [
+        "bundesliga": "CompetitionLogo5",
+        "champions league": "CompetitionLogo7",
+        "championship": "CompetitionLogo12",
+        "copa del rey": "CompetitionLogo41",
+        "coppa italia": "CompetitionLogo42",
+        "coupe de france": "CompetitionLogo44",
+        "dfb pokal": "CompetitionLogo43",
+        "dfl supercup": "CompetitionLogoGermanSuperCup",
+        "dutch eredivisie": "CompetitionLogo10",
+        "efl cup": "CompetitionLogo40",
+        "efl league one": "CompetitionLogo86",
+        "efl league two": "CompetitionLogo87",
+        "english league cup": "CompetitionLogo40",
+        "english premier league": "FantasyPremierLeagueLion",
+        "english national league": "CompetitionLogo91",
+        "enterprise national league": "CompetitionLogo91",
+        "fa cup": "CompetitionLogo39",
+        "fifa world cup": "CompetitionLogo27",
+        "fifa world cup 2026": "CompetitionLogo27",
+        "german super cup": "CompetitionLogoGermanSuperCup",
+        "international friendlies": "CompetitionLogoInternationalFriendly",
+        "international friendly": "CompetitionLogoInternationalFriendly",
+        "international friendly games": "CompetitionLogoInternationalFriendly",
+        "la liga": "CompetitionLogo3",
+        "league one": "CompetitionLogo86",
+        "league two": "CompetitionLogo87",
+        "national league": "CompetitionLogo91",
+        "ligue 1": "CompetitionLogo6",
+        "premier league": "FantasyPremierLeagueLion",
+        "scottish championship": "CompetitionLogo13",
+        "scottish league one": "CompetitionLogo13",
+        "scottish league two": "CompetitionLogo13",
+        "scottish premiership": "CompetitionLogo13",
+        "serie a": "CompetitionLogo4",
+        "spanish la liga": "CompetitionLogo3",
+        "uefa champions league": "CompetitionLogo7",
+        "uefa conference league": "CompetitionLogo83",
+        "uefa europa conference league": "CompetitionLogo83",
+        "uefa europa league": "CompetitionLogo8",
+        "uefa nations league": "CompetitionLogo64",
+        "uefa super cup": "CompetitionLogo90",
+        "world cup qualifying concacaf": "CompetitionLogo27",
+        "world cup qualifying conmebol": "CompetitionLogo27",
+        "world cup qualifying ofc": "CompetitionLogo27",
+        "world cup qualifying uefa": "CompetitionLogo27"
+    ]
+
+    static func assetName(competitionID: String?, competitionName: String) -> String? {
+        competitionID.flatMap { assetNamesByCompetitionID[$0] }
+            ?? assetNamesByCompetitionName[normalizedName(competitionName)]
+    }
+
+    private static func normalizedName(_ value: String) -> String {
+        value
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased()
+            .replacingOccurrences(of: "-", with: " ")
+            .split(whereSeparator: \Character.isWhitespace)
+            .joined(separator: " ")
+    }
+}
+
 nonisolated final class CompetitionBadgeCache: @unchecked Sendable {
     static let shared = CompetitionBadgeCache()
     static let badgesUpdatedNotification = Notification.Name("CompetitionBadgeCacheDidUpdate")

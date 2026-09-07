@@ -7,6 +7,7 @@ const { __private } = require("./server");
 const {
   applyLiveResultsToBsdTable,
   bsdMatchesForTable,
+  buildBsdTableOperationalWrites,
   withNormalizedTableLeagueName,
 } = __private;
 
@@ -173,4 +174,27 @@ test("withNormalizedTableLeagueName: leaves an already-correct name untouched (s
 test("withNormalizedTableLeagueName: passes through a table with no league_name", () => {
   const table = { league_id: "1", league_name: null, rows: [] };
   assert.equal(withNormalizedTableLeagueName(table), table);
+});
+
+test("BSD table refresh writes BSD-backed league and Premier League team snapshots", () => {
+  const updatedAt = "2026-09-02T12:00:00.000Z";
+  const tables = [
+    flatTable([
+      row(1, "Arsenal"),
+      row(2, "Aston Villa"),
+    ]),
+  ];
+
+  assert.deepEqual(buildBsdTableOperationalWrites(tables, updatedAt), [
+    {
+      name: "league_tables",
+      payload: tables,
+      options: { updated_at: updatedAt, source: "bsd_league_tables" },
+    },
+    {
+      name: "premier_league_teams",
+      payload: ["Arsenal", "Aston Villa"],
+      options: { updated_at: updatedAt, source: "bsd_premier_league_teams" },
+    },
+  ]);
 });

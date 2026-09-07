@@ -11,6 +11,12 @@ struct MatchDay: Identifiable, Hashable, Sendable {
     let leagues: [MatchLeague]
 }
 
+struct FixtureBrowsePageGroupingResult: Sendable {
+    let filtered: [String: [MatchDay]]
+    let unfiltered: [String: [MatchDay]]
+    let durationMilliseconds: Int
+}
+
 enum MatchScoreResolver {
     private struct NameVariant: Hashable {
         let key: String
@@ -252,6 +258,17 @@ enum MatchScoreResolver {
 
 }
 
+nonisolated enum MatchGroupingPolicy {
+    static func shouldPrepareFullDataset(
+        mode: MatchesViewMode,
+        isVisible: Bool,
+        fixtureBrowserOwnsVisibleFixtures: Bool
+    ) -> Bool {
+        guard isVisible else { return false }
+        return mode != .fixtures || !fixtureBrowserOwnsVisibleFixtures
+    }
+}
+
 struct MatchLeague: Identifiable, Hashable, Sendable {
     let id: String
     let league: String
@@ -355,7 +372,8 @@ private enum MatchGroupingEngine {
         descendingDates: Bool = false,
         sortOrder: MatchGroupSortOrder,
         ratingLookup: TeamRatingLookup,
-        premierLeagueMatchesFirst: Bool = false
+        premierLeagueMatchesFirst: Bool = false,
+        premierLeagueTeamMatcher: PremierLeagueTeamMatcher = .empty
     ) -> [MatchDay] {
         let memo = GroupingMemo()
         let groupedByDate = Dictionary(grouping: matches) { $0.date }
@@ -366,6 +384,7 @@ private enum MatchGroupingEngine {
         let calendar = Calendar.current
 
         let dateDays: [MatchDay] = dateKeys.compactMap { dateKey -> MatchDay? in
+            guard !Task.isCancelled else { return nil }
             guard let matchesForDate = groupedByDate[dateKey] else { return nil }
             let displayDate: String
             let parsedDate = MatchDateParser.parse(date: dateKey, time: "00:00")
@@ -396,7 +415,8 @@ private enum MatchGroupingEngine {
                     sortOrder: sortOrder,
                     ratingLookup: ratingLookup,
                     memo: memo,
-                    premierLeagueMatchesFirst: premierLeagueMatchesFirst
+                    premierLeagueMatchesFirst: premierLeagueMatchesFirst,
+                    premierLeagueTeamMatcher: premierLeagueTeamMatcher
                 )
                 guard let leadingMatch = sortedLeagueMatches.first else { return nil }
                 return (
@@ -472,16 +492,13 @@ private enum MatchGroupingEngine {
         match.competitionWeight ?? 0
     }
 
-    private nonisolated static func matchIncludesPremierLeagueTeam(_ match: Match) -> Bool {
-        MatchesStore.matchIncludesPremierLeagueTeam(match)
-    }
-
     private nonisolated static func sortMatchesWithinLeague(
         _ matches: [Match],
         sortOrder: MatchGroupSortOrder,
         ratingLookup: TeamRatingLookup,
         memo: GroupingMemo,
-        premierLeagueMatchesFirst: Bool = false
+        premierLeagueMatchesFirst: Bool = false,
+        premierLeagueTeamMatcher: PremierLeagueTeamMatcher
     ) -> [Match] {
         matches.sorted { lhs, rhs in
             if lhs.isPostponed != rhs.isPostponed {
@@ -491,8 +508,8 @@ private enum MatchGroupingEngine {
             switch sortOrder {
             case .teamScore:
                 if premierLeagueMatchesFirst {
-                    let lhsEPL = matchIncludesPremierLeagueTeam(lhs)
-                    let rhsEPL = matchIncludesPremierLeagueTeam(rhs)
+                    let lhsEPL = premierLeagueTeamMatcher.matches(lhs)
+                    let rhsEPL = premierLeagueTeamMatcher.matches(rhs)
                     if lhsEPL != rhsEPL { return lhsEPL && !rhsEPL }
                 }
                 let leftScore = memo.totalTeamRating(for: lhs, ratingLookup: ratingLookup)
@@ -502,8 +519,8 @@ private enum MatchGroupingEngine {
                 }
             case .alphabetical:
                 if premierLeagueMatchesFirst {
-                    let lhsEPL = matchIncludesPremierLeagueTeam(lhs)
-                    let rhsEPL = matchIncludesPremierLeagueTeam(rhs)
+                    let lhsEPL = premierLeagueTeamMatcher.matches(lhs)
+                    let rhsEPL = premierLeagueTeamMatcher.matches(rhs)
                     if lhsEPL != rhsEPL { return lhsEPL && !rhsEPL }
                 }
                 let homeCompare = lhs.homeTeam.localizedCaseInsensitiveCompare(rhs.homeTeam)
@@ -521,8 +538,8 @@ private enum MatchGroupingEngine {
                     return leftDate < rightDate
                 }
                 if premierLeagueMatchesFirst {
-                    let lhsEPL = matchIncludesPremierLeagueTeam(lhs)
-                    let rhsEPL = matchIncludesPremierLeagueTeam(rhs)
+                    let lhsEPL = premierLeagueTeamMatcher.matches(lhs)
+                    let rhsEPL = premierLeagueTeamMatcher.matches(rhs)
                     if lhsEPL != rhsEPL { return lhsEPL && !rhsEPL }
                 }
                 let leftScore = memo.totalTeamRating(for: lhs, ratingLookup: ratingLookup)
@@ -537,8 +554,8 @@ private enum MatchGroupingEngine {
                     return leftDate < rightDate
                 }
                 if premierLeagueMatchesFirst {
-                    let lhsEPL = matchIncludesPremierLeagueTeam(lhs)
-                    let rhsEPL = matchIncludesPremierLeagueTeam(rhs)
+                    let lhsEPL = premierLeagueTeamMatcher.matches(lhs)
+                    let rhsEPL = premierLeagueTeamMatcher.matches(rhs)
                     if lhsEPL != rhsEPL { return lhsEPL && !rhsEPL }
                 }
                 let homeCompare = lhs.homeTeam.localizedCaseInsensitiveCompare(rhs.homeTeam)
@@ -603,25 +620,108 @@ final class MatchesStore: ObservableObject {
 
     let fixturesViewState = MatchesModeViewState()
     let resultsViewState = MatchesModeViewState()
+    private var premierLeagueTeamMatcher: PremierLeagueTeamMatcher
+    private var premierLeagueTeamsCancellable: AnyCancellable?
+
+    init() {
+        let premierLeagueTeamsStore = PremierLeagueTeamsStore.shared
+        premierLeagueTeamMatcher = premierLeagueTeamsStore.matcher
+        premierLeagueTeamsCancellable = premierLeagueTeamsStore.$matcher
+            .dropFirst()
+            .sink { [weak self] matcher in
+                self?.applyPremierLeagueTeamMatcher(matcher)
+            }
+    }
 
     func viewState(for mode: MatchesViewMode) -> MatchesModeViewState {
         mode == .fixtures ? fixturesViewState : resultsViewState
     }
 
-    func groupFixtureBrowseMatches(
-        _ matches: [Match],
+    func groupFixtureBrowsePages(
+        filteredMatchesByDate: [String: [Match]],
+        unfilteredMatchesByDate: [String: [Match]],
         preferences: PreferencesSnapshot,
-        pinningContext: String = "fixture-browser"
-    ) -> [MatchDay] {
-        let signpost = PerformanceSignposter.matches.beginInterval("FixtureBrowseGrouping")
-        defer { PerformanceSignposter.matches.endInterval("FixtureBrowseGrouping", signpost) }
-        let grouped = MatchGroupingEngine.groupMatches(
-            matches,
-            sortOrder: preferences.matchGroupSortOrder,
-            ratingLookup: teamRatingLookup,
-            premierLeagueMatchesFirst: preferences.premierLeagueMatchesFirst
+        filteredPinningContext: String = "fixture-browser",
+        unfilteredPinningContext: String = "fixture-browser-unfiltered",
+        priority: TaskPriority = .utility
+    ) async -> FixtureBrowsePageGroupingResult? {
+        let sortOrder = preferences.matchGroupSortOrder
+        let premierLeagueMatchesFirst = preferences.premierLeagueMatchesFirst
+        let ratingLookup = teamRatingLookup
+        let premierLeagueTeamMatcher = premierLeagueTeamMatcher
+        let groupingTask = Task.detached(priority: priority) { () -> FixtureBrowsePageGroupingResult? in
+            let signpost = PerformanceSignposter.matches.beginInterval("FixtureBrowseGrouping")
+            defer { PerformanceSignposter.matches.endInterval("FixtureBrowseGrouping", signpost) }
+            let startedAt = Date()
+            let filtered = Self.groupFixtureBrowseMatchesByDate(
+                filteredMatchesByDate,
+                sortOrder: sortOrder,
+                ratingLookup: ratingLookup,
+                premierLeagueMatchesFirst: premierLeagueMatchesFirst,
+                premierLeagueTeamMatcher: premierLeagueTeamMatcher
+            )
+            guard !Task.isCancelled else { return nil }
+            let unfiltered = filteredMatchesByDate == unfilteredMatchesByDate
+                ? filtered
+                : Self.groupFixtureBrowseMatchesByDate(
+                unfilteredMatchesByDate,
+                sortOrder: sortOrder,
+                ratingLookup: ratingLookup,
+                premierLeagueMatchesFirst: premierLeagueMatchesFirst,
+                premierLeagueTeamMatcher: premierLeagueTeamMatcher
+            )
+            guard !Task.isCancelled else { return nil }
+            return FixtureBrowsePageGroupingResult(
+                filtered: filtered,
+                unfiltered: unfiltered,
+                durationMilliseconds: Int(Date().timeIntervalSince(startedAt) * 1000)
+            )
+        }
+        let rawResult = await withTaskCancellationHandler {
+            await groupingTask.value
+        } onCancel: {
+            groupingTask.cancel()
+        }
+        guard !Task.isCancelled, let rawResult else { return nil }
+
+        let stabilizedFiltered = rawResult.filtered.mapValues {
+            matchOrderPinning.stabilize($0, context: filteredPinningContext)
+        }
+        let stabilizedUnfiltered = rawResult.unfiltered.mapValues {
+            matchOrderPinning.stabilize($0, context: unfilteredPinningContext)
+        }
+        return FixtureBrowsePageGroupingResult(
+            filtered: stabilizedFiltered,
+            unfiltered: stabilizedUnfiltered,
+            durationMilliseconds: rawResult.durationMilliseconds
         )
-        return matchOrderPinning.stabilize(grouped, context: pinningContext)
+    }
+
+    private nonisolated static func groupFixtureBrowseMatchesByDate(
+        _ matchesByDate: [String: [Match]],
+        sortOrder: MatchGroupSortOrder,
+        ratingLookup: TeamRatingLookup,
+        premierLeagueMatchesFirst: Bool,
+        premierLeagueTeamMatcher: PremierLeagueTeamMatcher
+    ) -> [String: [MatchDay]] {
+        var result: [String: [MatchDay]] = [:]
+        result.reserveCapacity(matchesByDate.count)
+        for dateKey in matchesByDate.keys.sorted() {
+            guard !Task.isCancelled, let matches = matchesByDate[dateKey], !matches.isEmpty else {
+                continue
+            }
+            let grouped = MatchGroupingEngine.groupMatches(
+                matches,
+                sortOrder: sortOrder,
+                ratingLookup: ratingLookup,
+                premierLeagueMatchesFirst: premierLeagueMatchesFirst,
+                premierLeagueTeamMatcher: premierLeagueTeamMatcher
+            )
+            if !grouped.isEmpty {
+                result[dateKey] = grouped
+            }
+        }
+        return result
     }
 
     private struct ModeState {
@@ -710,6 +810,7 @@ final class MatchesStore: ObservableObject {
         }
         currentSnapshot = snapshot
         activeMode = mode
+        ensurePremierLeagueTeamsAreFreshIfNeeded(for: snapshot)
 
         Self.log(
             "configure mode=\(mode.rawValue) selected_snapshot=\(Self.snapshotDebugSummary(snapshot)) " +
@@ -721,7 +822,7 @@ final class MatchesStore: ObservableObject {
         if dataSourceChanged || previousSnapshot == nil {
             loadCache(snapshot: snapshot)
         } else if snapshotChanged {
-            reapplyLocalFilters(using: snapshot)
+            reapplyLocalFilters(using: snapshot, previousSnapshot: previousSnapshot)
         }
 
         if mode == .fixtures, fixturesDeferredVisibleUpdatePending {
@@ -797,9 +898,22 @@ final class MatchesStore: ObservableObject {
     }
 
     func prepareForPreferencesChange(_ snapshot: PreferencesSnapshot, publishVisibleState: Bool) {
+        guard publishVisibleState else {
+            ensurePremierLeagueTeamsAreFreshIfNeeded(for: snapshot)
+            groupingTasks.values.forEach { $0.cancel() }
+            groupingTasks.removeAll()
+            groupingTaskIDs.removeAll()
+            Self.log(
+                "prepare_preferences_change deferred snapshot=\(Self.snapshotDebugSummary(snapshot)) " +
+                "reason=fixture_browser_owns_visible_state"
+            )
+            return
+        }
+
         let previousSnapshot = currentSnapshot
         let dataSourceChanged = previousSnapshot?.apiBaseURL != snapshot.apiBaseURL
         currentSnapshot = snapshot
+        ensurePremierLeagueTeamsAreFreshIfNeeded(for: snapshot)
 
         Self.log(
             "prepare_preferences_change snapshot=\(Self.snapshotDebugSummary(snapshot)) " +
@@ -810,7 +924,7 @@ final class MatchesStore: ObservableObject {
         if dataSourceChanged || previousSnapshot == nil {
             loadCache(snapshot: snapshot)
         } else {
-            reapplyLocalFilters(using: snapshot)
+            reapplyLocalFilters(using: snapshot, previousSnapshot: previousSnapshot)
         }
 
         // Always publish per-mode view state so hidden tabs stay warm; the
@@ -830,6 +944,10 @@ final class MatchesStore: ObservableObject {
 
         Self.log("mode_visibility mode=\(mode.rawValue) visible=\(isVisible)")
 
+        if isVisible {
+            publishState(for: mode)
+        }
+
         if mode == .fixtures {
             if isVisible {
                 fixturesBackgroundLoadTask?.cancel()
@@ -843,6 +961,11 @@ final class MatchesStore: ObservableObject {
     func setFixtureBrowserLiveRefreshActive(_ isActive: Bool) {
         guard fixtureBrowserOwnsLiveRefresh != isActive else { return }
         fixtureBrowserOwnsLiveRefresh = isActive
+        if isActive {
+            groupingTasks[.fixtures]?.cancel()
+            groupingTasks[.fixtures] = nil
+            groupingTaskIDs[.fixtures] = nil
+        }
         if let snapshot = currentSnapshot {
             updateRefreshTimer(using: snapshot, matches: combinedLoadedMatches())
         }
@@ -1301,7 +1424,8 @@ final class MatchesStore: ObservableObject {
             let prepared = await Self.preparedResultsState(
                 existing: nextState.unfilteredMatches,
                 incoming: batch.matches,
-                snapshot: effectiveSnapshot
+                snapshot: effectiveSnapshot,
+                premierLeagueTeamMatcher: premierLeagueTeamMatcher
             )
             nextState.unfilteredMatches = prepared.unfilteredMatches
             nextState.matches = prepared.visibleMatches
@@ -1404,7 +1528,8 @@ final class MatchesStore: ObservableObject {
     private nonisolated static func preparedResultsState(
         existing: [Match],
         incoming: [Match],
-        snapshot: PreferencesSnapshot
+        snapshot: PreferencesSnapshot,
+        premierLeagueTeamMatcher: PremierLeagueTeamMatcher
     ) async -> PreparedResultsState {
         await Task.detached(priority: .utility) {
             let unfiltered = Self.sortedMatches(
@@ -1415,7 +1540,12 @@ final class MatchesStore: ObservableObject {
             )
             let visible = Self.sortedMatches(
                 Self.deduplicatedMatches(
-                    Self.applyPreferenceFilters(to: unfiltered, snapshot: snapshot, mode: .results)
+                    Self.applyPreferenceFilters(
+                        to: unfiltered,
+                        snapshot: snapshot,
+                        mode: .results,
+                        premierLeagueTeamMatcher: premierLeagueTeamMatcher
+                    )
                 ),
                 descendingDates: true
             )
@@ -1641,7 +1771,20 @@ final class MatchesStore: ObservableObject {
         )
     }
 
-    private func reapplyLocalFilters(using snapshot: PreferencesSnapshot) {
+    private func reapplyLocalFilters(
+        using snapshot: PreferencesSnapshot,
+        previousSnapshot: PreferencesSnapshot? = nil,
+        force: Bool = false
+    ) {
+        let usedPremierLeaguePreset = previousSnapshot.map(Self.usesPremierLeagueTeamsPreset) ?? false
+        guard force || usedPremierLeaguePreset || Self.usesPremierLeagueTeamsPreset(snapshot) else {
+            // Other fixture-view filters are applied by the server (or by the
+            // fixture browser). The currently prepared arrays therefore remain
+            // valid until the matching server refresh arrives.
+            Self.log("reapply_local_filters skipped=no_local_filter_change")
+            return
+        }
+
         for mode in modeStates.keys {
             var current = state(for: mode)
             guard !current.unfilteredMatches.isEmpty else { continue }
@@ -1660,12 +1803,33 @@ final class MatchesStore: ObservableObject {
         }
     }
 
+    private func ensurePremierLeagueTeamsAreFreshIfNeeded(for snapshot: PreferencesSnapshot) {
+        guard Self.usesPremierLeagueTeamsPreset(snapshot) else { return }
+        Task {
+            await PremierLeagueTeamsStore.shared.ensureFresh(apiBaseURL: snapshot.apiBaseURL)
+        }
+    }
+
+    private func applyPremierLeagueTeamMatcher(_ matcher: PremierLeagueTeamMatcher) {
+        guard premierLeagueTeamMatcher != matcher else { return }
+        premierLeagueTeamMatcher = matcher
+        groupingRevision &+= 1
+        guard let snapshot = currentSnapshot else { return }
+        reapplyLocalFilters(using: snapshot, force: true)
+        publishAllModes(priorityMode: activeMode)
+    }
+
     private func visibleMatches(
         from matches: [Match],
         snapshot: PreferencesSnapshot,
         mode: MatchesViewMode
     ) -> [Match] {
-        let filtered = Self.applyPreferenceFilters(to: matches, snapshot: snapshot, mode: mode)
+        let filtered = Self.applyPreferenceFilters(
+            to: matches,
+            snapshot: snapshot,
+            mode: mode,
+            premierLeagueTeamMatcher: premierLeagueTeamMatcher
+        )
         let deduplicated = Self.deduplicatedMatches(filtered)
         return Self.sortedMatches(deduplicated, descendingDates: mode == .results)
     }
@@ -2017,6 +2181,12 @@ final class MatchesStore: ObservableObject {
         // Cancel any previous grouping task so stale results can't overwrite newer ones.
         groupingTasks[mode]?.cancel()
         groupingTaskIDs[mode] = nil
+        let needsGroupedMatches = MatchGroupingPolicy.shouldPrepareFullDataset(
+            mode: mode,
+            isVisible: visibleModes.contains(mode),
+            fixtureBrowserOwnsVisibleFixtures: fixtureBrowserOwnsLiveRefresh
+        )
+        guard needsGroupedMatches else { return }
         if current.groupedMatchesRevision == groupingRevision {
             update(\.groupedMatches, current.groupedMatches)
             if mirrorsActiveMode {
@@ -2042,6 +2212,7 @@ final class MatchesStore: ObservableObject {
         let sortOrder = currentSnapshot?.matchGroupSortOrder ?? PreferencesStore.defaultMatchGroupSortOrder
         let premierLeagueMatchesFirst = currentSnapshot?.premierLeagueMatchesFirst ?? PreferencesStore.defaultPremierLeagueMatchesFirst
         let ratingLookup = teamRatingLookup
+        let premierLeagueTeamMatcherSnapshot = premierLeagueTeamMatcher
         let groupingRevisionAtStart = groupingRevision
         let taskID = UUID()
         groupingTaskIDs[mode] = taskID
@@ -2055,7 +2226,8 @@ final class MatchesStore: ObservableObject {
                 descendingDates: descendingDates,
                 sortOrder: sortOrder,
                 ratingLookup: ratingLookup,
-                premierLeagueMatchesFirst: premierLeagueMatchesFirst
+                premierLeagueMatchesFirst: premierLeagueMatchesFirst,
+                premierLeagueTeamMatcher: premierLeagueTeamMatcherSnapshot
             )
             let durationMs = Int(Date().timeIntervalSince(startedAt) * 1000)
             guard !Task.isCancelled else { return }
@@ -2262,52 +2434,6 @@ final class MatchesStore: ObservableObject {
         return value.uppercased()
     }
 
-    fileprivate nonisolated static let premierLeagueTeamKeys: Set<String> = [
-        "Arsenal",
-        "Aston Villa",
-        "Bournemouth",
-        "AFC Bournemouth",
-        "Brentford",
-        "Brighton",
-        "Brighton and Hove Albion",
-        "Brighton & Hove Albion",
-        "Burnley",
-        "Chelsea",
-        "Crystal Palace",
-        "Everton",
-        "Fulham",
-        "Leeds",
-        "Leeds United",
-        "Liverpool",
-        "Manchester City",
-        "Man City",
-        "Manchester United",
-        "Man United",
-        "Newcastle",
-        "Newcastle United",
-        "Nottingham Forest",
-        "Nottm Forest",
-        "Sunderland",
-        "Tottenham",
-        "Tottenham Hotspur",
-        "Spurs",
-        "West Ham",
-        "West Ham United",
-        "Wolverhampton Wanderers",
-        "Wolves",
-    ].map(TeamIdentityStore.normalizedKey).reduce(into: Set<String>()) { partialResult, key in
-        if !key.isEmpty {
-            partialResult.insert(key)
-        }
-    }
-
-    nonisolated static func matchIncludesPremierLeagueTeam(_ match: Match) -> Bool {
-        let homeKeys = TeamIdentityStore.shared.normalizedKeys(for: match.homeTeam)
-        let awayKeys = TeamIdentityStore.shared.normalizedKeys(for: match.awayTeam)
-        return !homeKeys.isDisjoint(with: premierLeagueTeamKeys) ||
-            !awayKeys.isDisjoint(with: premierLeagueTeamKeys)
-    }
-
     nonisolated static func filterMatches(_ matches: [Match], for mode: MatchesViewMode) -> [Match] {
         let calendar = Calendar.current
         let today = startOfToday()
@@ -2353,10 +2479,19 @@ final class MatchesStore: ObservableObject {
     nonisolated static func applyPreferenceFilters(
         to matches: [Match],
         snapshot: PreferencesSnapshot,
-        mode: MatchesViewMode
+        mode: MatchesViewMode,
+        premierLeagueTeamMatcher: PremierLeagueTeamMatcher = .empty
     ) -> [Match] {
-        _ = snapshot
-        return filterMatches(matches, for: mode)
+        let dateFiltered = filterMatches(matches, for: mode)
+        guard usesPremierLeagueTeamsPreset(snapshot) else { return dateFiltered }
+        return dateFiltered.filter(premierLeagueTeamMatcher.matches)
+    }
+
+    private nonisolated static func usesPremierLeagueTeamsPreset(
+        _ snapshot: PreferencesSnapshot
+    ) -> Bool {
+        Set(snapshot.effectiveFixtureViewOptionIDs) ==
+            FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs
     }
 
     private final class MatchSortMemo: @unchecked Sendable {

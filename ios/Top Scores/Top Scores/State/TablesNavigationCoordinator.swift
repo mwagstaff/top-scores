@@ -11,7 +11,7 @@ final class TablesNavigationCoordinator: ObservableObject {
 
     struct Target: Equatable {
         let leagueID: String
-        let teamName: String
+        let teamName: String?
     }
 
     @Published private(set) var pendingTarget: Target?
@@ -29,7 +29,7 @@ final class TablesNavigationCoordinator: ObservableObject {
 
     private init() {}
 
-    func navigate(leagueID: String, teamName: String, returnTitle: String = "Back to match") {
+    func navigate(leagueID: String, teamName: String? = nil, returnTitle: String = "Back to match") {
         self.returnTitle = returnTitle
         pendingTarget = Target(leagueID: leagueID, teamName: teamName)
     }

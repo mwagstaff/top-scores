@@ -1,5 +1,10 @@
 schema_version: 1
 
+# Sync removals before touching local originals or building a deployable bundle.
+deletion_sync:
+  host: sky
+  path: /home/mwagstaff/.local/share/top-scores/stadium-artwork.deletions.json
+
 # Created by collector/promote_reviewed.py after human review. It is optional
 # so the bundled fallback catalogue can still be published on a clean checkout.
 optional_include_files:
@@ -8,6 +13,17 @@ optional_include_files:
 # Every remote image must retain enough information to render its credit in
 # Profile > About > Data sources > Image credits. Override this block per asset
 # when publishing third-party photography from the collector output.
+# Optional framing overrides: original-image coordinates, 0=left/top, 1=right/bottom.
+# Review/copy these in Profile > About > Stadium artwork > Review in hero.
+focal_points:
+  emirates-stadium-any-074dc8de02: {x: 0.62, y: 0.60}
+  emirates-stadium-any-1e2ea61fdb: {x: 0.40, y: 0.50}
+  emirates-stadium-any-64b404dc5e: {x: 0.56, y: 0.58}
+  emirates-stadium-any-88fba76265: {x: 0.65, y: 0.65}
+  emirates-stadium-any-9bf8c04b91: {x: 0.70, y: 0.50}
+  emirates-stadium-any-bdb45ca579: {x: 0.67, y: 0.52}
+  emirates-stadium-any-bf41e6cce7: {x: 0.50, y: 0.60}
+
 credit_defaults:
   author: Top Scores
   source: Top Scores

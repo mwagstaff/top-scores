@@ -1,10 +1,14 @@
 #if DEBUG
 import SwiftUI
 import UIKit
+import Security
 
 struct DebugStadiumArtworkView: View {
     @EnvironmentObject private var preferences: PreferencesStore
     @EnvironmentObject private var stadiumArtworkStore: StadiumArtworkStore
+
+    @State private var adminKey = ""
+    @State private var adminMessage: String?
 
     @State private var isRefreshing = false
     @State private var refreshMessage: String?
@@ -44,6 +48,22 @@ struct DebugStadiumArtworkView: View {
                     }
                 }
 
+                Section("Image administration") {
+                    SecureField("Artwork admin key", text: $adminKey)
+                        .textContentType(.password)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    Button("Save admin key") {
+                        do {
+                            try DebugArtworkAdminKey.save(adminKey, server: preferences.apiBaseURL)
+                            adminMessage = adminKey.isEmpty ? "Admin key removed." : "Admin key saved on this device."
+                        } catch { adminMessage = error.localizedDescription }
+                    }
+                    if let adminMessage { Text(adminMessage).font(.footnote).foregroundStyle(.secondary) }
+                    Text("Use the server's artwork admin key to delete images. Deleted photographs stay excluded from future deployments.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+
                 Section("Browse") {
                     NavigationLink {
                         DebugStadiumArtworkCollectionsView()
@@ -72,6 +92,10 @@ struct DebugStadiumArtworkView: View {
             }
             .scrollContentBackground(.hidden)
             .background(Color.clear)
+        }
+        .task(id: preferences.apiBaseURL) {
+            adminKey = DebugArtworkAdminKey.load(server: preferences.apiBaseURL)
+            adminMessage = nil
         }
         .navigationTitle("Stadium artwork")
         .navigationBarTitleDisplayMode(.inline)
@@ -231,16 +255,24 @@ private struct DebugStadiumArtworkCollectionsView: View {
 }
 
 private struct DebugStadiumArtworkGalleryView: View {
-    @EnvironmentObject private var preferences: PreferencesStore
     @EnvironmentObject private var stadiumArtworkStore: StadiumArtworkStore
 
     let title: String
     let subtitle: String
     let assets: [StadiumArtworkAsset]
+    @State private var previewMode = "Match"
+
+    private var visibleAssets: [StadiumArtworkAsset] {
+        guard let catalog = stadiumArtworkStore.catalog else { return assets }
+        let ids = Set(assets.map(\.id))
+        return catalog.assets.filter { ids.contains($0.id) }.sorted(by: DebugStadiumArtworkSort.assets)
+    }
+
+    private var showsHeroes: Bool { visibleAssets.contains { $0.role == .team } }
 
     var body: some View {
         FootballNavigationScreen(title: title, subtitle: subtitle) {
-            if assets.isEmpty {
+            if visibleAssets.isEmpty {
                 ContentUnavailableView(
                     "No images assigned",
                     systemImage: "photo.badge.exclamationmark",
@@ -249,16 +281,30 @@ private struct DebugStadiumArtworkGalleryView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 16) {
-                        ForEach(assets) { asset in
+                        if showsHeroes {
+                            Picker("Hero preview", selection: $previewMode) {
+                                Text("Match").tag("Match")
+                                Text("Team").tag("Team")
+                            }
+                            .pickerStyle(.segmented)
+                            .padding(.horizontal, 16)
+
+                            Text("Sample content • rotation paused")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        ForEach(visibleAssets) { asset in
                             DebugStadiumArtworkCard(
                                 asset: asset,
                                 teamNames: teamNames(for: asset),
-                                apiBaseURL: preferences.apiBaseURL
+                                galleryAssets: visibleAssets,
+                                previewMode: showsHeroes ? previewMode : "Original"
                             )
                         }
                     }
                     .frame(maxWidth: .infinity)
-                    .padding(16)
+                    .padding(.vertical, 16)
+                    .padding(.horizontal, showsHeroes ? 0 : 16)
                 }
             }
         }
@@ -273,48 +319,98 @@ private struct DebugStadiumArtworkGalleryView: View {
 }
 
 private struct DebugStadiumArtworkCard: View {
+    @EnvironmentObject private var preferences: PreferencesStore
+    @EnvironmentObject private var artworkStore: StadiumArtworkStore
+    @State private var confirmDeletion = false
+    @State private var isDeleting = false
+    @State private var deletionError: String?
+
     let asset: StadiumArtworkAsset
     let teamNames: [String]
-    let apiBaseURL: String
+    let galleryAssets: [StadiumArtworkAsset]
+    let previewMode: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            DebugStadiumArtworkThumbnail(asset: asset, apiBaseURL: apiBaseURL)
-                .frame(maxWidth: .infinity)
-                .aspectRatio(asset.previewAspectRatio, contentMode: .fit)
-                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            DebugStadiumArtworkHeroPreview(asset: asset, mode: previewMode)
 
-            VStack(alignment: .leading, spacing: 7) {
-                Text(asset.id)
-                    .font(.headline)
-                    .textSelection(.enabled)
+            VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(asset.id)
+                        .font(.headline)
+                        .textSelection(.enabled)
 
-                HStack(spacing: 6) {
-                    DebugArtworkBadge(text: asset.role.debugTitle)
-                    DebugArtworkBadge(text: asset.lightContext.rawValue.capitalized)
+                    HStack(spacing: 6) {
+                        DebugArtworkBadge(text: asset.role.debugTitle)
+                    }
+
+                    if let stadium = asset.stadium, !stadium.isEmpty {
+                        Label(stadium, systemImage: "sportscourt")
+                    }
+                    if !teamNames.isEmpty {
+                        Label(teamNames.joined(separator: ", "), systemImage: "person.3")
+                    }
+
+                    Text("\(asset.width) × \(asset.height) • \(ByteCountFormatter.string(fromByteCount: Int64(asset.byteSize), countStyle: .file))")
+                    Text("SHA-256 \(asset.sha256.prefix(16))…")
+                        .textSelection(.enabled)
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+
+                NavigationLink {
+                    DebugStadiumArtworkHeroReview(assets: galleryAssets, initialAssetID: asset.id,
+                                                 initialMode: "Original")
+                        .id(asset.id)
+                } label: {
+                    Label("View original", systemImage: "photo")
                 }
 
-                if let stadium = asset.stadium, !stadium.isEmpty {
-                    Label(stadium, systemImage: "sportscourt")
-                }
-                if !teamNames.isEmpty {
-                    Label(teamNames.joined(separator: ", "), systemImage: "person.3")
+                NavigationLink {
+                    DebugStadiumArtworkHeroReview(assets: galleryAssets, initialAssetID: asset.id,
+                                                 initialMode: previewMode == "Original" ? "Match" : previewMode)
+                        .id(asset.id)
+                } label: {
+                    Label("Adjust framing", systemImage: "crop")
                 }
 
-                Text("\(asset.width) × \(asset.height) • \(ByteCountFormatter.string(fromByteCount: Int64(asset.byteSize), countStyle: .file))")
-                Text("SHA-256 \(asset.sha256.prefix(16))…")
-                    .textSelection(.enabled)
+                Button(role: .destructive) { confirmDeletion = true } label: {
+                    Label(isDeleting ? "Deleting…" : "Delete image", systemImage: "trash")
+                }
+                .disabled(isDeleting)
+                if let deletionError {
+                    Text(deletionError).font(.footnote).foregroundStyle(.red)
+                }
+
+                if let sourceURL = asset.credit.sourcePage.flatMap(URL.init(string:)) {
+                    Link("Open source credit", destination: sourceURL)
+                        .font(.footnote.weight(.semibold))
+                }
             }
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-
-            if let sourceURL = asset.credit.sourcePage.flatMap(URL.init(string:)) {
-                Link("Open source credit", destination: sourceURL)
-                    .font(.footnote.weight(.semibold))
+            .padding(14)
+        }
+        .confirmationDialog("Delete this photograph from the server?", isPresented: $confirmDeletion, titleVisibility: .visible) {
+            Button("Delete image", role: .destructive) { isDeleting = true }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("It will be removed from every team's rotation. Local approved and staged copies are moved aside the next time artwork is published from your Mac.")
+        }
+        .task(id: isDeleting) {
+            guard isDeleting else { return }
+            defer { isDeleting = false }
+            deletionError = nil
+            let token = DebugArtworkAdminKey.load(server: preferences.apiBaseURL)
+            guard !token.isEmpty else {
+                deletionError = "Save your artwork admin key on the Stadium artwork screen first."
+                return
+            }
+            do {
+                try await artworkStore.deleteArtwork(asset, apiBaseURL: preferences.apiBaseURL, adminToken: token)
+            } catch {
+                deletionError = "\(error.localizedDescription) Refresh the catalogue before retrying if the connection was interrupted."
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
         .background {
             FootballCardSurface(accentColor: Color.accentColor)
         }
@@ -418,9 +514,6 @@ private struct DebugStadiumArtworkCollection: Identifiable {
 private enum DebugStadiumArtworkSort {
     static func assets(_ lhs: StadiumArtworkAsset, _ rhs: StadiumArtworkAsset) -> Bool {
         if lhs.role != rhs.role { return lhs.role.rawValue < rhs.role.rawValue }
-        if lhs.lightContext != rhs.lightContext {
-            return lhs.lightContext.rawValue < rhs.lightContext.rawValue
-        }
         return lhs.id < rhs.id
     }
 }
@@ -441,4 +534,197 @@ private extension StadiumArtworkAsset {
         return CGFloat(width) / CGFloat(height)
     }
 }
+
+/// Shares the real hero layout between the gallery and the framing editor.
+private struct DebugStadiumArtworkHeroPreview: View {
+    @EnvironmentObject private var preferences: PreferencesStore
+    @EnvironmentObject private var artworkStore: StadiumArtworkStore
+    let asset: StadiumArtworkAsset
+    let mode: String
+    var predictions = true
+
+    private var teamName: String {
+        asset.teamIDs.compactMap { artworkStore.catalog?.teams[$0]?.name }.first ?? "Arsenal"
+    }
+    private var match: Match {
+        Match(date: "2026-09-06", time: "16:30", homeTeam: teamName,
+              awayTeam: teamName == "Chelsea" ? "Arsenal" : "Chelsea",
+              league: "Premier League", leagueId: "premier-league", tvChannels: [])
+    }
+    private var context: TeamDetailsContext {
+        TeamDetailsContext(teamID: nil, teamName: teamName, displayName: teamName,
+                           alternateNames: [], originatingLeagueID: "premier-league",
+                           originatingLeagueName: "Premier League", originatingMatch: nil)
+    }
+
+    var body: some View {
+        Group {
+            if mode == "Match" {
+                MatchDetailScoreboardHero(
+                    match: match, kickoffText: "Sun 6 Sep, 16:30",
+                    predictionDisplay: predictions
+                        ? .available(homeGoals: 1, awayGoals: 2, homeWinProbability: 0.57,
+                                     drawProbability: 0.24, awayWinProbability: 0.19) : .hidden,
+                    teamCompetitionEntries: []
+                )
+            } else if mode == "Team" {
+                TeamDetailsHero(context: context, competitionID: "premier-league",
+                                competitionName: "Premier League")
+            } else {
+                DebugStadiumArtworkThumbnail(asset: asset, apiBaseURL: preferences.apiBaseURL)
+                    .id(asset.sha256)
+                    .aspectRatio(asset.previewAspectRatio, contentMode: .fit)
+            }
+        }
+        .environment(\.stadiumArtworkReviewAsset, asset)
+        .allowsHitTesting(false)
+        .coordinateSpace(name: "TeamDetailsScroll")
+    }
+}
+
+private struct DebugStadiumArtworkHeroReview: View {
+    @EnvironmentObject private var artworkStore: StadiumArtworkStore
+    let assets: [StadiumArtworkAsset]
+    let initialAssetID: String
+    @State private var selection: String?
+    @State private var mode: String
+    @State private var predictions = true
+    @State private var largerText = false
+    @State private var drafts: [String: StadiumArtworkFocalPoint] = [:]
+    @State private var copied = false
+
+    init(assets: [StadiumArtworkAsset], initialAssetID: String, initialMode: String = "Match") {
+        self.assets = assets
+        self.initialAssetID = initialAssetID
+        _mode = State(initialValue: initialMode)
+    }
+
+    private var index: Int { assets.firstIndex { $0.id == (selection ?? initialAssetID) } ?? 0 }
+    private var asset: StadiumArtworkAsset {
+        var value = assets[index]
+        value.focalPoint = drafts[value.id] ?? value.focalPoint
+        return value
+    }
+    private var teamName: String {
+        asset.teamIDs.compactMap { artworkStore.catalog?.teams[$0]?.name }.first ?? "Arsenal"
+    }
+    var body: some View {
+        FootballNavigationScreen(title: "Hero review", subtitle: teamName) {
+            ScrollView {
+                VStack(spacing: 16) {
+                    Picker("Preview", selection: $mode) {
+                        Text("Match").tag("Match")
+                        Text("Team").tag("Team")
+                        Text("Original").tag("Original")
+                    }
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal)
+
+                    DebugStadiumArtworkHeroPreview(asset: asset, mode: mode, predictions: predictions)
+                        .environment(\.dynamicTypeSize, largerText ? .accessibility1 : .large)
+
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack {
+                            Button("Previous", systemImage: "chevron.left") { step(-1) }
+                                .disabled(index == 0)
+                            Spacer()
+                            Text("\(index + 1) of \(assets.count)").monospacedDigit()
+                            Spacer()
+                            Button("Next", systemImage: "chevron.right") { step(1) }
+                                .disabled(index == assets.count - 1)
+                        }
+                        Text(asset.id).font(.caption).textSelection(.enabled)
+                        Text("Sample content • rotation paused").font(.caption).foregroundStyle(.secondary)
+                        Toggle("Show predictions", isOn: $predictions)
+                        Toggle("Larger text", isOn: $largerText)
+                        Text("Framing").font(.headline)
+                        Text("Choose the part of the photograph to keep centred. Movement stops at the image edges.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                        Slider(value: coordinate(\.x), in: 0...1) { Text("Horizontal focal point") }
+                        HStack { Text("Left"); Spacer(); Text("Right") }.font(.caption)
+                        Slider(value: coordinate(\.y), in: 0...1) { Text("Vertical focal point") }
+                        HStack { Text("Top"); Spacer(); Text("Bottom") }.font(.caption)
+                        HStack {
+                            Button("Reset framing") { drafts[asset.id] = assets[index].focalPoint ?? .center }
+                            Spacer()
+                            Button(copied ? "Copied" : "Copy framing settings") {
+                                UIPasteboard.general.string = framingSettings
+                                copied = true
+                            }
+                        }
+                        Text("Preview changes are not published. Copy settings before leaving, then merge them into focal_points in config/publishing.yaml and publish the artwork.")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal)
+                }
+                .padding(.vertical)
+            }
+        }
+    }
+
+    private func step(_ amount: Int) {
+        selection = assets[min(assets.count - 1, max(0, index + amount))].id
+        copied = false
+    }
+
+    private func coordinate(_ keyPath: WritableKeyPath<StadiumArtworkFocalPoint, Double>) -> Binding<Double> {
+        Binding(get: { (asset.focalPoint ?? .center)[keyPath: keyPath] }, set: { value in
+            var point = asset.focalPoint ?? .center
+            point[keyPath: keyPath] = value
+            drafts[asset.id] = point
+            copied = false
+        })
+    }
+
+    private var framingSettings: String {
+        var values = drafts
+        values[asset.id] = asset.focalPoint ?? .center
+        return "focal_points:\n" + values.keys.sorted().map { id in
+            let point = values[id]!
+            return "  \(id): {x: \(String(format: "%.3f", point.x)), y: \(String(format: "%.3f", point.y))}"
+        }.joined(separator: "\n") + "\n"
+    }
+}
+
+/// Credentials are scoped to the selected server and never stored in preferences or the app bundle.
+private enum DebugArtworkAdminKey {
+    private static func query(server: String) -> [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword,
+         kSecAttrService as String: "top-scores.stadium-artwork-admin",
+         kSecAttrAccount as String: server]
+    }
+
+    static func load(server: String) -> String {
+        var values = query(server: server)
+        values[kSecReturnData as String] = true
+        values[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(values as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data else { return "" }
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    static func save(_ token: String, server: String) throws {
+        let values = query(server: server)
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            let status = SecItemDelete(values as CFDictionary)
+            guard status == errSecSuccess || status == errSecItemNotFound else { throw failure(status) }
+            return
+        }
+        let update = [kSecValueData as String: Data(trimmed.utf8),
+                      kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly] as [String: Any]
+        var status = SecItemUpdate(values as CFDictionary, update as CFDictionary)
+        if status == errSecItemNotFound {
+            status = SecItemAdd(values.merging(update) { _, new in new } as CFDictionary, nil)
+        }
+        guard status == errSecSuccess else { throw failure(status) }
+    }
+
+    private static func failure(_ status: OSStatus) -> NSError {
+        NSError(domain: NSOSStatusErrorDomain, code: Int(status),
+                userInfo: [NSLocalizedDescriptionKey: "Could not save the artwork admin key securely."])
+    }
+}
+
 #endif

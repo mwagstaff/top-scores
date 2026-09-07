@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import os
 
 struct FixtureBrowseBucket: Codable, Hashable, Sendable {
     let matches: [Match]
@@ -23,6 +24,11 @@ struct FixtureCalendarCompetitionSummary: Equatable, Identifiable, Sendable {
     let name: String
     let matchCount: Int
     let weight: Double
+}
+
+struct FixtureBrowseMatchAvailability: Equatable, Sendable {
+    let matchCount: Int
+    let containsNextScheduledMatch: Bool
 }
 
 private actor FixtureBrowseCacheWriter {
@@ -83,6 +89,34 @@ nonisolated enum FixtureBrowsePrefetchPlanner {
     }
 }
 
+nonisolated enum FixtureBrowseAvailabilityPlanner {
+    static let immediateFutureDayLimit = 14
+
+    static func immediateDateKeys(
+        calendarDays: [FixtureCalendarDay],
+        selectedDateKey: String?,
+        todayKey: String,
+        selectedDateRadius: Int = 3
+    ) -> Set<String> {
+        let orderedDays = calendarDays.sorted { $0.date < $1.date }
+        var dateKeys = Set(
+            orderedDays
+                .lazy
+                .filter { $0.date >= todayKey && $0.matchCount > 0 }
+                .prefix(immediateFutureDayLimit)
+                .map(\.date)
+        )
+        if let selectedDateKey {
+            dateKeys.formUnion(FixtureBrowsePrefetchPlanner.dateKeys(
+                in: orderedDays,
+                centeredOn: selectedDateKey,
+                radius: selectedDateRadius
+            ))
+        }
+        return dateKeys
+    }
+}
+
 nonisolated enum FixtureBrowseWarmPlanner {
     static func batches(
         in days: [FixtureCalendarDay],
@@ -137,9 +171,13 @@ nonisolated enum FixtureBrowseSelectionResolver {
         topMatchesOnly: Bool,
         selectedCompetitionIDs: Set<String>,
         selectionApplied: Bool = false,
-        showAllMatches: Bool = false
+        showAllMatches: Bool = false,
+        knownMatchCountsByDate: [String: Int] = [:]
     ) -> [FixtureCalendarDay] {
         calendarDays.filter { day in
+            if knownMatchCountsByDate[day.date] == 0 {
+                return false
+            }
             if selectionApplied || showAllMatches {
                 return day.matchCount > 0
             }
@@ -197,6 +235,16 @@ nonisolated enum FixtureBrowseSelectionResolver {
             return nil
         }
         return targetDateKey < selectedDateKey ? .earlier : .later
+    }
+
+    static func containsNextScheduledMatch(
+        _ matches: [Match],
+        dateKey: String,
+        todayKey: String
+    ) -> Bool {
+        guard dateKey >= todayKey, !matches.isEmpty else { return false }
+        if dateKey > todayKey { return true }
+        return matches.contains { !$0.isFinished && !$0.isPostponed }
     }
 
     static func competitionSummaries(
@@ -281,7 +329,101 @@ nonisolated enum FixtureBrowseSelectionResolver {
         fixtureViewOptionIDs: Set<String> = [],
         showAllMatches: Bool = false,
         includePostponed: Bool,
-        topTeamsMatcher: TopTeamsPresetMatcher = TopTeamsPresetMatcher(definition: .fallback)
+        topTeamsMatcher: TopTeamsPresetMatcher = TopTeamsPresetMatcher(definition: .fallback),
+        premierLeagueTeamMatcher: PremierLeagueTeamMatcher = .empty
+    ) -> [Match] {
+        filterMatches(
+            matches,
+            topMatchesOnly: topMatchesOnly,
+            selectedCompetitionIDs: selectedCompetitionIDs,
+            competitions: competitions,
+            fixtureViewOptionIDs: fixtureViewOptionIDs,
+            showAllMatches: showAllMatches,
+            includePostponed: includePostponed,
+            topTeamsMatcher: topTeamsMatcher,
+            premierLeagueTeamMatcher: premierLeagueTeamMatcher,
+            competitionLookup: nil
+        )
+    }
+
+    static func matchAvailabilityByDate(
+        matchesByDate: [String: [Match]],
+        todayKey: String,
+        topMatchesOnly: Bool,
+        selectedCompetitionIDs: Set<String>,
+        competitions: [CompetitionCatalogEntry],
+        fixtureViewOptionIDs: Set<String>,
+        showAllMatches: Bool,
+        includePostponed: Bool,
+        topTeamsMatcher: TopTeamsPresetMatcher,
+        premierLeagueTeamMatcher: PremierLeagueTeamMatcher
+    ) -> [String: FixtureBrowseMatchAvailability] {
+        let filteredMatchesByDate = filterMatchesByDate(
+            matchesByDate,
+            topMatchesOnly: topMatchesOnly,
+            selectedCompetitionIDs: selectedCompetitionIDs,
+            competitions: competitions,
+            fixtureViewOptionIDs: fixtureViewOptionIDs,
+            showAllMatches: showAllMatches,
+            includePostponed: includePostponed,
+            topTeamsMatcher: topTeamsMatcher,
+            premierLeagueTeamMatcher: premierLeagueTeamMatcher
+        )
+        return Dictionary(uniqueKeysWithValues: filteredMatchesByDate.map { dateKey, filtered in
+            (
+                dateKey,
+                FixtureBrowseMatchAvailability(
+                    matchCount: filtered.count,
+                    containsNextScheduledMatch: containsNextScheduledMatch(
+                        filtered,
+                        dateKey: dateKey,
+                        todayKey: todayKey
+                    )
+                )
+            )
+        })
+    }
+
+    static func filterMatchesByDate(
+        _ matchesByDate: [String: [Match]],
+        topMatchesOnly: Bool,
+        selectedCompetitionIDs: Set<String>,
+        competitions: [CompetitionCatalogEntry],
+        fixtureViewOptionIDs: Set<String>,
+        showAllMatches: Bool,
+        includePostponed: Bool,
+        topTeamsMatcher: TopTeamsPresetMatcher,
+        premierLeagueTeamMatcher: PremierLeagueTeamMatcher
+    ) -> [String: [Match]] {
+        let lookup = competitionLookup(competitions)
+        return Dictionary(uniqueKeysWithValues: matchesByDate.map { dateKey, matches in
+            let filtered = filterMatches(
+                matches,
+                topMatchesOnly: topMatchesOnly,
+                selectedCompetitionIDs: selectedCompetitionIDs,
+                competitions: competitions,
+                fixtureViewOptionIDs: fixtureViewOptionIDs,
+                showAllMatches: showAllMatches,
+                includePostponed: includePostponed,
+                topTeamsMatcher: topTeamsMatcher,
+                premierLeagueTeamMatcher: premierLeagueTeamMatcher,
+                competitionLookup: lookup
+            )
+            return (dateKey, filtered)
+        })
+    }
+
+    private static func filterMatches(
+        _ matches: [Match],
+        topMatchesOnly: Bool,
+        selectedCompetitionIDs: Set<String>,
+        competitions: [CompetitionCatalogEntry],
+        fixtureViewOptionIDs: Set<String>,
+        showAllMatches: Bool,
+        includePostponed: Bool,
+        topTeamsMatcher: TopTeamsPresetMatcher,
+        premierLeagueTeamMatcher: PremierLeagueTeamMatcher,
+        competitionLookup preparedCompetitionLookup: [String: String]?
     ) -> [Match] {
         let displayableMatches: [Match]
         #if DEBUG
@@ -294,7 +436,7 @@ nonisolated enum FixtureBrowseSelectionResolver {
         if showAllMatches {
             competitionFiltered = displayableMatches
         } else if fixtureViewOptionIDs == Set([FixtureViewOptionID.topTeamsPreset]) {
-            let lookup = competitionLookup(competitions)
+            let lookup = preparedCompetitionLookup ?? competitionLookup(competitions)
             competitionFiltered = displayableMatches.filter { match in
                 topTeamsMatcher.matches(
                     match,
@@ -306,21 +448,22 @@ nonisolated enum FixtureBrowseSelectionResolver {
             }
         } else if fixtureViewOptionIDs == FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs {
             competitionFiltered = displayableMatches.filter(
-                MatchesStore.matchIncludesPremierLeagueTeam
+                premierLeagueTeamMatcher.matches
             )
         } else if !fixtureViewOptionIDs.isEmpty {
-            let lookup = competitionLookup(competitions)
+            let lookup = preparedCompetitionLookup ?? competitionLookup(competitions)
             competitionFiltered = displayableMatches.filter { match in
                 matchesFixtureViewOption(
                     match,
                     optionIDs: fixtureViewOptionIDs,
-                    competitionLookup: lookup
+                    competitionLookup: lookup,
+                    premierLeagueTeamMatcher: premierLeagueTeamMatcher
                 )
             }
         } else if topMatchesOnly {
             competitionFiltered = displayableMatches
         } else {
-            let lookup = competitionLookup(competitions)
+            let lookup = preparedCompetitionLookup ?? competitionLookup(competitions)
             competitionFiltered = displayableMatches.filter { match in
                 guard let competitionID = lookup[normalizedKey(match.league)] else { return false }
                 return selectedCompetitionIDs.contains(competitionID)
@@ -398,7 +541,8 @@ nonisolated enum FixtureBrowseSelectionResolver {
     private static func matchesFixtureViewOption(
         _ match: Match,
         optionIDs: Set<String>,
-        competitionLookup: [String: String]
+        competitionLookup: [String: String],
+        premierLeagueTeamMatcher: PremierLeagueTeamMatcher
     ) -> Bool {
         let competitionID = competitionLookup[normalizedKey(match.league)]
         let teamRuleIDs = optionIDs.intersection(
@@ -433,7 +577,11 @@ nonisolated enum FixtureBrowseSelectionResolver {
             )
         }
         let passesTeamRule = teamRuleIDs.contains {
-            matchesUEFATeamRule(match, optionID: $0)
+            matchesUEFATeamRule(
+                match,
+                optionID: $0,
+                premierLeagueTeamMatcher: premierLeagueTeamMatcher
+            )
         }
 
         if !selectedUEFACompetitionIDs.isEmpty {
@@ -474,13 +622,17 @@ nonisolated enum FixtureBrowseSelectionResolver {
         return false
     }
 
-    private static func matchesUEFATeamRule(_ match: Match, optionID: String) -> Bool {
+    private static func matchesUEFATeamRule(
+        _ match: Match,
+        optionID: String,
+        premierLeagueTeamMatcher: PremierLeagueTeamMatcher
+    ) -> Bool {
         if optionID == FixtureViewOptionID.topUEFAClubs {
             return fallbackTopUEFAClubs.contains(normalizedKey(match.homeTeam)) ||
                 fallbackTopUEFAClubs.contains(normalizedKey(match.awayTeam))
         }
         if optionID == FixtureViewOptionID.premierLeagueTeams {
-            return MatchesStore.matchIncludesPremierLeagueTeam(match)
+            return premierLeagueTeamMatcher.matches(match)
         }
         return false
     }
@@ -551,21 +703,33 @@ final class FixtureBrowserStore: ObservableObject {
     @Published private(set) var hasLoadedCalendar = false
     @Published private(set) var lastUpdated: Date?
     @Published private(set) var errorMessage: String?
+    @Published private(set) var todayDateKey: String
+    @Published private(set) var nextMatchDateKey: String?
 
     let pageCache = FixtureBrowsePageCache()
 
     private let apiSession: URLSession?
     private var topTeamsMatcher: TopTeamsPresetMatcher
     private var topTeamsPresetCancellable: AnyCancellable?
+    private var premierLeagueTeamMatcher: PremierLeagueTeamMatcher
+    private var premierLeagueTeamsCancellable: AnyCancellable?
 
     init(apiSession: URLSession? = nil) {
         self.apiSession = apiSession
+        todayDateKey = Self.dateFormatter.string(from: Date())
         let presetStore = TopTeamsPresetStore.shared
         topTeamsMatcher = TopTeamsPresetMatcher(definition: presetStore.preset)
+        let premierLeagueTeamsStore = PremierLeagueTeamsStore.shared
+        premierLeagueTeamMatcher = premierLeagueTeamsStore.matcher
         topTeamsPresetCancellable = presetStore.$preset
             .dropFirst()
             .sink { [weak self] preset in
                 self?.applyTopTeamsPreset(preset)
+            }
+        premierLeagueTeamsCancellable = premierLeagueTeamsStore.$matcher
+            .dropFirst()
+            .sink { [weak self] matcher in
+                self?.applyPremierLeagueTeamMatcher(matcher)
             }
     }
 
@@ -602,6 +766,8 @@ final class FixtureBrowserStore: ObservableObject {
     private static let cacheFormatVersion = 2
     private static let maximumCachedBuckets = 512
     private static let prefetchRadius = 3
+    private static let pageCacheRadius = 1
+    private static let maximumPreparedPageCount = 15
     private static let catalogFreshnessInterval: TimeInterval = 24 * 60 * 60
     private var snapshot: PreferencesSnapshot?
     private var contextKey: String?
@@ -612,38 +778,102 @@ final class FixtureBrowserStore: ObservableObject {
     private var selectedDateTaskDateKey: String?
     private var prefetchTask: Task<Void, Never>?
     private var allFixturesWarmTask: Task<Void, Never>?
+    private var availabilityRefinementTask: Task<Void, Never>?
+    private var pageCacheRebuildTask: Task<Void, Never>?
     private var autoRefreshTask: Task<Void, Never>?
+    private var dateSwipeWorkReleaseTask: Task<Void, Never>?
     private var autoRefreshTaskID = UUID()
     private var isAutoRefreshEnabled = false
     private var refreshRequestID = UUID()
     private var selectedDateRequestID = UUID()
     private var prefetchRequestID = UUID()
     private var allFixturesWarmRequestID = UUID()
+    private var availabilityRefinementRequestID = UUID()
+    private var pageCacheRebuildRequestID = UUID()
+    private var isTVListingsModeEnabled = false
+    private var isDateSwipeInteractionActive = false
+
+    func setDateSwipeInteractionActive(_ isActive: Bool) {
+        dateSwipeWorkReleaseTask?.cancel()
+        dateSwipeWorkReleaseTask = nil
+        if isActive {
+            isDateSwipeInteractionActive = true
+            dateSwipeWorkReleaseTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(2))
+                guard !Task.isCancelled, let self else { return }
+                isDateSwipeInteractionActive = false
+                dateSwipeWorkReleaseTask = nil
+            }
+            return
+        }
+
+        dateSwipeWorkReleaseTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled, let self else { return }
+            isDateSwipeInteractionActive = false
+            dateSwipeWorkReleaseTask = nil
+        }
+    }
+
+    private func waitUntilDateSwipeWorkMayPublish() async throws {
+        while isDateSwipeInteractionActive {
+            try Task.checkCancellation()
+            try await Task.sleep(for: .milliseconds(25))
+        }
+    }
 
     func configure(
         preferences: PreferencesSnapshot,
         forceRefresh: Bool = false,
         resetSelectedDate: Bool = false
     ) {
+        let previousSnapshot = snapshot
         let nextContextKey = Self.contextKey(for: preferences)
         let contextChanged = contextKey != nextContextKey
         snapshot = preferences
+
+        let cacheAge = cachePayload?.calendarFetchedAt.map { Date().timeIntervalSince($0) }
+        let calendarNeedsRefresh = forceRefresh || contextChanged || (
+            refreshTask == nil && (cacheAge == nil || (cacheAge ?? .infinity) > 15 * 60)
+        )
+        if previousSnapshot == preferences,
+           !resetSelectedDate,
+           !calendarNeedsRefresh,
+           selectedDateKey != nil {
+            return
+        }
+
+        if Set(preferences.effectiveFixtureViewOptionIDs) ==
+            FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs {
+            Task {
+                await PremierLeagueTeamsStore.shared.ensureFresh(
+                    apiBaseURL: preferences.apiBaseURL
+                )
+            }
+        }
 
         if contextChanged {
             refreshTask?.cancel()
             refreshTask = nil
             selectedDateTask?.cancel()
             selectedDateTask = nil
+            pageCacheRebuildTask?.cancel()
+            pageCacheRebuildTask = nil
+            pageCacheRebuildRequestID = UUID()
             selectedDateTaskDateKey = nil
             prefetchTask?.cancel()
             prefetchTask = nil
             allFixturesWarmTask?.cancel()
             allFixturesWarmTask = nil
+            availabilityRefinementTask?.cancel()
+            availabilityRefinementTask = nil
             isLoadingSelectedDate = false
             refreshRequestID = UUID()
             selectedDateRequestID = UUID()
             prefetchRequestID = UUID()
             allFixturesWarmRequestID = UUID()
+            availabilityRefinementRequestID = UUID()
+            nextMatchDateKey = nil
             contextKey = nextContextKey
             cachePayload = Self.loadCache(matching: nextContextKey)
             if let cachedCompetitions = cachePayload?.competitions,
@@ -660,8 +890,7 @@ final class FixtureBrowserStore: ObservableObject {
         recomputeAvailableDays(keepCurrentDate: !contextChanged && !resetSelectedDate)
         loadSelectedDateIfNeeded(force: false)
 
-        let cacheAge = cachePayload?.calendarFetchedAt.map { Date().timeIntervalSince($0) }
-        if forceRefresh || contextChanged || cacheAge == nil || (cacheAge ?? .infinity) > 15 * 60 {
+        if calendarNeedsRefresh {
             refreshCatalogAndCalendar(force: forceRefresh)
         }
         scheduleAllUpcomingFixturesWarm()
@@ -671,20 +900,42 @@ final class FixtureBrowserStore: ObservableObject {
         guard availableDays.contains(where: { $0.date == dateKey }), selectedDateKey != dateKey else {
             return
         }
+        let signpost = PerformanceSignposter.matches.beginInterval("FixtureBrowserSelectDate")
+        let startedAt = Date()
+        defer {
+            PerformanceSignposter.matches.endInterval("FixtureBrowserSelectDate", signpost)
+            let durationMilliseconds = Int(Date().timeIntervalSince(startedAt) * 1000)
+            if durationMilliseconds >= 16 {
+                diagnosticLog(
+                    "[FixtureBrowserStore] select_date_sync_complete date=%@ duration_ms=%d",
+                    dateKey,
+                    durationMilliseconds
+                )
+            }
+        }
         prefetchTask?.cancel()
         prefetchTask = nil
         prefetchRequestID = UUID()
         selectedDateKey = dateKey
-        rebuildCachedMatchesByDate()
         let cachedMatches = pageCache.matchesByDate[dateKey] ?? []
         if visibleMatches != cachedMatches {
             visibleMatches = cachedMatches
         }
-        refreshSelectedDateUnfilteredMatches()
+        if isTVListingsModeEnabled {
+            refreshSelectedDateUnfilteredMatches()
+        }
+        schedulePageCacheRebuild()
         loadSelectedDateIfNeeded(force: false)
         if isAutoRefreshEnabled {
             startAutoRefreshLoop(refreshImmediately: true)
         }
+    }
+
+    func setTVListingsModeEnabled(_ enabled: Bool) {
+        guard isTVListingsModeEnabled != enabled else { return }
+        isTVListingsModeEnabled = enabled
+        recomputeAvailableDays(keepCurrentDate: true)
+        loadSelectedDateIfNeeded(force: false)
     }
 
     func adjacentDateKey(offset: Int) -> String? {
@@ -695,17 +946,11 @@ final class FixtureBrowserStore: ObservableObject {
         )
     }
 
-    var nextMatchDateKey: String? {
-        guard let snapshot else { return nil }
-        let selectedIDs = selectedCompetitionIDs(for: snapshot)
-        return FixtureBrowseSelectionResolver.upcomingDateKey(
-            from: availableDays,
-            todayKey: Self.dateFormatter.string(from: Date()),
-            topMatchesOnly: calendarUsesTopMatches(snapshot),
-            selectedCompetitionIDs: selectedIDs,
-            selectionApplied: calendarRequiresMatchLevelFiltering(snapshot),
-            showAllMatches: snapshot.fixtureViewShowsAll
-        )
+    func refreshToday(now: Date = Date()) {
+        let currentDateKey = Self.dateFormatter.string(from: now)
+        guard todayDateKey != currentDateKey else { return }
+        todayDateKey = currentDateKey
+        recomputeAvailableDays(keepCurrentDate: true)
     }
 
     var nextMatchDateJumpDirection: FixtureBrowseSelectionResolver.DateJumpDirection? {
@@ -817,38 +1062,254 @@ final class FixtureBrowserStore: ObservableObject {
     }
 
     private func recomputeAvailableDays(keepCurrentDate: Bool) {
+        let signpost = PerformanceSignposter.matches.beginInterval("FixtureBrowserImmediateAvailability")
+        defer { PerformanceSignposter.matches.endInterval("FixtureBrowserImmediateAvailability", signpost) }
         guard let snapshot else { return }
         let selectedIDs = selectedCompetitionIDs(for: snapshot)
+        let requiresMatchLevelFiltering = !isTVListingsModeEnabled &&
+            calendarRequiresMatchLevelFiltering(snapshot)
+        let canValidateCachedDates = !requiresMatchLevelFiltering ||
+            Set(snapshot.effectiveFixtureViewOptionIDs) !=
+                FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs ||
+            !premierLeagueTeamMatcher.isEmpty
+        let immediateAvailability: [String: FixtureBrowseMatchAvailability]
+        if requiresMatchLevelFiltering, canValidateCachedDates {
+            let immediateDateKeys = FixtureBrowseAvailabilityPlanner.immediateDateKeys(
+                calendarDays: cachePayload?.calendarDays ?? [],
+                selectedDateKey: selectedDateKey,
+                todayKey: todayDateKey,
+                selectedDateRadius: Self.prefetchRadius
+            )
+            let matchesByDate: [String: [Match]] = Dictionary(
+                uniqueKeysWithValues: immediateDateKeys.compactMap { dateKey in
+                    guard let bucket = cachePayload?.buckets[Self.bucketKey(dateKey: dateKey)],
+                          Self.isFresh(bucket: bucket, dateKey: dateKey) else {
+                        return nil
+                    }
+                    return (dateKey, bucket.matches)
+                }
+            )
+            immediateAvailability = matchAvailabilityByDate(
+                matchesByDate,
+                snapshot: snapshot,
+                selectedCompetitionIDs: selectedIDs
+            )
+        } else {
+            immediateAvailability = [:]
+        }
+
+        applyAvailableDays(
+            snapshot: snapshot,
+            selectedCompetitionIDs: selectedIDs,
+            requiresMatchLevelFiltering: requiresMatchLevelFiltering,
+            knownAvailability: immediateAvailability,
+            keepCurrentDate: keepCurrentDate
+        )
+
+        availabilityRefinementTask?.cancel()
+        availabilityRefinementTask = nil
+        availabilityRefinementRequestID = UUID()
+        if requiresMatchLevelFiltering, canValidateCachedDates {
+            scheduleAvailabilityRefinement(
+                snapshot: snapshot,
+                selectedCompetitionIDs: selectedIDs,
+                immediateDateKeys: Set(immediateAvailability.keys)
+            )
+        }
+    }
+
+    private func applyAvailableDays(
+        snapshot: PreferencesSnapshot,
+        selectedCompetitionIDs: Set<String>,
+        requiresMatchLevelFiltering: Bool,
+        knownAvailability: [String: FixtureBrowseMatchAvailability],
+        keepCurrentDate: Bool
+    ) {
+        guard self.snapshot == snapshot else { return }
+        let knownMatchCountsByDate = knownAvailability.mapValues(\.matchCount)
         let days = FixtureBrowseSelectionResolver.availableDays(
             calendarDays: cachePayload?.calendarDays ?? [],
             topMatchesOnly: calendarUsesTopMatches(snapshot),
-            selectedCompetitionIDs: selectedIDs,
-            selectionApplied: calendarRequiresMatchLevelFiltering(snapshot),
-            showAllMatches: snapshot.fixtureViewShowsAll
+            selectedCompetitionIDs: selectedCompetitionIDs,
+            selectionApplied: requiresMatchLevelFiltering,
+            showAllMatches: calendarShowsAllMatches(snapshot),
+            knownMatchCountsByDate: knownMatchCountsByDate
         )
         if availableDays != days {
             availableDays = days
         }
 
+        let resolvedNextMatchDateKey: String?
+        if requiresMatchLevelFiltering {
+            resolvedNextMatchDateKey = knownAvailability
+                .filter { $0.value.containsNextScheduledMatch }
+                .map(\.key)
+                .min()
+        } else {
+            resolvedNextMatchDateKey = FixtureBrowseSelectionResolver.upcomingDateKey(
+                from: days,
+                todayKey: todayDateKey,
+                topMatchesOnly: calendarUsesTopMatches(snapshot),
+                selectedCompetitionIDs: selectedCompetitionIDs,
+                selectionApplied: false,
+                showAllMatches: calendarShowsAllMatches(snapshot)
+            )
+        }
+        if nextMatchDateKey != resolvedNextMatchDateKey {
+            nextMatchDateKey = resolvedNextMatchDateKey
+        }
+
         if keepCurrentDate,
            let selectedDateKey,
            days.contains(where: { $0.date == selectedDateKey }) {
-            rebuildCachedMatchesByDate()
             applyCachedBucketIfAvailable()
+            schedulePageCacheRebuild()
             return
         }
 
-        selectedDateKey = FixtureBrowseSelectionResolver.defaultDateKey(
+        selectedDateKey = resolvedNextMatchDateKey ?? FixtureBrowseSelectionResolver.defaultDateKey(
             from: days,
-            todayKey: Self.dateFormatter.string(from: Date()),
+            todayKey: todayDateKey,
             topMatchesOnly: calendarUsesTopMatches(snapshot),
-            selectedCompetitionIDs: selectedIDs,
-            selectionApplied: calendarRequiresMatchLevelFiltering(snapshot),
-            showAllMatches: snapshot.fixtureViewShowsAll
+            selectedCompetitionIDs: selectedCompetitionIDs,
+            selectionApplied: requiresMatchLevelFiltering,
+            showAllMatches: calendarShowsAllMatches(snapshot)
         )
-        rebuildCachedMatchesByDate()
         visibleMatches = []
         applyCachedBucketIfAvailable()
+        schedulePageCacheRebuild()
+    }
+
+    private func matchAvailabilityByDate(
+        _ matchesByDate: [String: [Match]],
+        snapshot: PreferencesSnapshot,
+        selectedCompetitionIDs: Set<String>
+    ) -> [String: FixtureBrowseMatchAvailability] {
+        FixtureBrowseSelectionResolver.matchAvailabilityByDate(
+            matchesByDate: matchesByDate,
+            todayKey: todayDateKey,
+            topMatchesOnly: calendarUsesTopMatches(snapshot),
+            selectedCompetitionIDs: selectedCompetitionIDs,
+            competitions: competitions,
+            fixtureViewOptionIDs: Set(snapshot.effectiveFixtureViewOptionIDs),
+            showAllMatches: snapshot.fixtureViewShowsAll,
+            includePostponed: snapshot.showPostponedGames,
+            topTeamsMatcher: topTeamsMatcher,
+            premierLeagueTeamMatcher: premierLeagueTeamMatcher
+        )
+    }
+
+    private func scheduleAvailabilityRefinement(
+        snapshot: PreferencesSnapshot,
+        selectedCompetitionIDs: Set<String>,
+        immediateDateKeys: Set<String>
+    ) {
+        guard let payload = cachePayload else { return }
+        let matchesByDate: [String: [Match]] = Dictionary(
+            uniqueKeysWithValues: payload.buckets.compactMap { dateKey, bucket in
+                guard !immediateDateKeys.contains(dateKey),
+                      Self.isFresh(bucket: bucket, dateKey: dateKey) else {
+                    return nil
+                }
+                return (dateKey, bucket.matches)
+            }
+        )
+        guard !matchesByDate.isEmpty else { return }
+
+        let requestID = UUID()
+        availabilityRefinementRequestID = requestID
+        let todayKey = todayDateKey
+        let topMatchesOnly = calendarUsesTopMatches(snapshot)
+        let fixtureViewOptionIDs = Set(snapshot.effectiveFixtureViewOptionIDs)
+        let showAllMatches = snapshot.fixtureViewShowsAll
+        let includePostponed = snapshot.showPostponedGames
+        let competitionSnapshot = competitions
+        let topTeamsMatcherSnapshot = topTeamsMatcher
+        let premierLeagueTeamMatcherSnapshot = premierLeagueTeamMatcher
+
+        availabilityRefinementTask = Task.detached(priority: .utility) { [weak self] in
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled,
+                  let store = self,
+                  await store.shouldContinueAvailabilityRefinement(
+                    requestID: requestID,
+                    snapshot: snapshot
+                  ) else {
+                return
+            }
+
+            let signpost = PerformanceSignposter.matches.beginInterval("FixtureBrowserAvailabilityRefinement")
+            defer { PerformanceSignposter.matches.endInterval("FixtureBrowserAvailabilityRefinement", signpost) }
+            let refinedAvailability = FixtureBrowseSelectionResolver.matchAvailabilityByDate(
+                matchesByDate: matchesByDate,
+                todayKey: todayKey,
+                topMatchesOnly: topMatchesOnly,
+                selectedCompetitionIDs: selectedCompetitionIDs,
+                competitions: competitionSnapshot,
+                fixtureViewOptionIDs: fixtureViewOptionIDs,
+                showAllMatches: showAllMatches,
+                includePostponed: includePostponed,
+                topTeamsMatcher: topTeamsMatcherSnapshot,
+                premierLeagueTeamMatcher: premierLeagueTeamMatcherSnapshot
+            )
+            guard !Task.isCancelled else { return }
+            await store.applyRefinedAvailability(
+                refinedAvailability,
+                immediateDateKeys: immediateDateKeys,
+                requestID: requestID,
+                snapshot: snapshot,
+                selectedCompetitionIDs: selectedCompetitionIDs
+            )
+        }
+    }
+
+    private func shouldContinueAvailabilityRefinement(
+        requestID: UUID,
+        snapshot: PreferencesSnapshot
+    ) -> Bool {
+        availabilityRefinementRequestID == requestID &&
+            self.snapshot == snapshot &&
+            allFixturesWarmTask == nil
+    }
+
+    private func applyRefinedAvailability(
+        _ refinedAvailability: [String: FixtureBrowseMatchAvailability],
+        immediateDateKeys: Set<String>,
+        requestID: UUID,
+        snapshot: PreferencesSnapshot,
+        selectedCompetitionIDs: Set<String>
+    ) async {
+        do {
+            try await waitUntilDateSwipeWorkMayPublish()
+        } catch {
+            return
+        }
+        guard availabilityRefinementRequestID == requestID,
+              self.snapshot == snapshot else {
+            return
+        }
+        let immediateMatchesByDate: [String: [Match]] = Dictionary(
+            uniqueKeysWithValues: immediateDateKeys.compactMap { dateKey in
+                guard let bucket = cachePayload?.buckets[Self.bucketKey(dateKey: dateKey)],
+                      Self.isFresh(bucket: bucket, dateKey: dateKey) else {
+                    return nil
+                }
+                return (dateKey, bucket.matches)
+            }
+        )
+        let immediateAvailability = matchAvailabilityByDate(
+            immediateMatchesByDate,
+            snapshot: snapshot,
+            selectedCompetitionIDs: selectedCompetitionIDs
+        )
+        applyAvailableDays(
+            snapshot: snapshot,
+            selectedCompetitionIDs: selectedCompetitionIDs,
+            requiresMatchLevelFiltering: true,
+            knownAvailability: refinedAvailability.merging(immediateAvailability) { _, latest in latest },
+            keepCurrentDate: true
+        )
+        availabilityRefinementTask = nil
     }
 
     private func loadSelectedDateIfNeeded(force: Bool) {
@@ -882,6 +1343,7 @@ final class FixtureBrowserStore: ObservableObject {
         isLoadingSelectedDate = true
         selectedDateTask = Task { [weak self] in
             guard let self else { return }
+            var removedUnavailableDate = false
             do {
                 let targetDateKeys = Self.dateKeysToRefresh(
                     in: availableDays,
@@ -899,18 +1361,21 @@ final class FixtureBrowserStore: ObservableObject {
                     preferences: snapshot,
                     hydrateStates: false
                 )
+                try await waitUntilDateSwipeWorkMayPublish()
                 guard !Task.isCancelled, selectedDateRequestID == requestID else { return }
                 let buckets = storeRangeResponse(
                     response,
                     for: targetDateKeys
                 )
-                var removedUnavailableDate = false
                 if selectedDateKey == dateKey,
                    let bucket = buckets[dateKey] {
                     if publishCurrentSelection(bucket: bucket, dateKey: dateKey) {
                         removedUnavailableDate = true
-                        loadSelectedDateIfNeeded(force: false)
                     }
+                }
+                recomputeAvailableDays(keepCurrentDate: true)
+                if selectedDateKey != dateKey {
+                    removedUnavailableDate = true
                 }
                 errorMessage = nil
                 persistCache()
@@ -926,6 +1391,9 @@ final class FixtureBrowserStore: ObservableObject {
                 isLoadingSelectedDate = false
                 selectedDateTask = nil
                 selectedDateTaskDateKey = nil
+                if removedUnavailableDate {
+                    loadSelectedDateIfNeeded(force: false)
+                }
             }
         }
     }
@@ -981,7 +1449,11 @@ final class FixtureBrowserStore: ObservableObject {
         if isAutoRefreshEnabled, autoRefreshTask == nil {
             startAutoRefreshLoop(refreshImmediately: false)
         }
-        guard filtered.isEmpty, selectedDateKey == dateKey else { return false }
+        guard !isTVListingsModeEnabled,
+              filtered.isEmpty,
+              selectedDateKey == dateKey else {
+            return false
+        }
         removeUnavailableDate(dateKey)
         return true
     }
@@ -1051,6 +1523,7 @@ final class FixtureBrowserStore: ObservableObject {
                     preferences: snapshot,
                     hydrateStates: false
                 )
+                try await waitUntilDateSwipeWorkMayPublish()
                 guard !Task.isCancelled,
                       isAutoRefreshEnabled,
                       selectedDateKey == dateKey else {
@@ -1087,6 +1560,7 @@ final class FixtureBrowserStore: ObservableObject {
                 matchIDs: matchIDs,
                 summaryOnly: true
             )
+            try await waitUntilDateSwipeWorkMayPublish()
             guard !Task.isCancelled,
                   isAutoRefreshEnabled,
                   selectedDateKey == dateKey,
@@ -1166,6 +1640,7 @@ final class FixtureBrowserStore: ObservableObject {
                     preferences: snapshot,
                     hydrateStates: false
             ) {
+                try? await waitUntilDateSwipeWorkMayPublish()
                 guard !Task.isCancelled,
                       prefetchRequestID == requestID else {
                     return
@@ -1174,6 +1649,11 @@ final class FixtureBrowserStore: ObservableObject {
                     response,
                     for: targets
                 )
+                let previousDateKey = selectedDateKey
+                recomputeAvailableDays(keepCurrentDate: true)
+                if selectedDateKey != previousDateKey {
+                    loadSelectedDateIfNeeded(force: false)
+                }
             }
             if prefetchRequestID == requestID {
                 persistCache()
@@ -1229,6 +1709,7 @@ final class FixtureBrowserStore: ObservableObject {
                         preferences: snapshot,
                         hydrateStates: false
                     )
+                    try await waitUntilDateSwipeWorkMayPublish()
                     guard !Task.isCancelled,
                           allFixturesWarmRequestID == requestID else {
                         return
@@ -1238,6 +1719,11 @@ final class FixtureBrowserStore: ObservableObject {
                         for: batch.map(\.date),
                         updatePageCache: false
                     )
+                    let previousDateKey = selectedDateKey
+                    recomputeAvailableDays(keepCurrentDate: true)
+                    if selectedDateKey != previousDateKey {
+                        loadSelectedDateIfNeeded(force: false)
+                    }
                     persistCache()
                     await Task.yield()
                 } catch {
@@ -1251,13 +1737,20 @@ final class FixtureBrowserStore: ObservableObject {
 
             if allFixturesWarmRequestID == requestID {
                 allFixturesWarmTask = nil
+                recomputeAvailableDays(keepCurrentDate: true)
             }
         }
     }
 
     private func store(bucket: FixtureBrowseBucket, for key: String) {
-        guard var payload = cachePayload else { return }
-        payload.buckets[key] = bucket
+        store(buckets: [key: bucket])
+    }
+
+    private func store(buckets: [String: FixtureBrowseBucket]) {
+        guard !buckets.isEmpty, var payload = cachePayload else { return }
+        for (key, bucket) in buckets {
+            payload.buckets[key] = bucket
+        }
         if payload.buckets.count > Self.maximumCachedBuckets {
             let overflow = payload.buckets.count - Self.maximumCachedBuckets
             let oldestKeys = payload.buckets
@@ -1269,41 +1762,99 @@ final class FixtureBrowserStore: ObservableObject {
         cachePayload = payload
     }
 
-    private func rebuildCachedMatchesByDate() {
-        guard let snapshot, let payload = cachePayload else {
-            if !pageCache.matchesByDate.isEmpty {
-                pageCache.replace(with: [:])
-            }
+    private func schedulePageCacheRebuild() {
+        pageCacheRebuildTask?.cancel()
+        guard let snapshot, let payload = cachePayload, let selectedDateKey else {
+            pageCacheRebuildTask = nil
             return
         }
-        let topMatchesOnly = snapshot.fixtureAllMajorMatchesEnabled
-        guard let selectedDateKey else {
-            if !pageCache.matchesByDate.isEmpty {
-                pageCache.replace(with: [:])
-            }
-            return
-        }
-        let availableDateKeys = Set(FixtureBrowsePrefetchPlanner.dateKeys(
+
+        let dateKeys = Set(FixtureBrowsePrefetchPlanner.dateKeys(
             in: availableDays,
             centeredOn: selectedDateKey,
-            radius: Self.prefetchRadius
+            radius: Self.pageCacheRadius
         ))
-        var rebuilt: [String: [Match]] = [:]
-        for dateKey in availableDateKeys {
-            let key = Self.bucketKey(dateKey: dateKey)
-            guard let bucket = payload.buckets[key] else { continue }
-            let filtered = filteredMatches(
-                in: bucket,
-                snapshot: snapshot,
-                topMatchesOnly: topMatchesOnly
+        let matchesByDate: [String: [Match]] = Dictionary(
+            uniqueKeysWithValues: dateKeys.compactMap { dateKey in
+                guard let bucket = payload.buckets[Self.bucketKey(dateKey: dateKey)] else {
+                    return nil
+                }
+                return (dateKey, bucket.matches)
+            }
+        )
+        let requestID = UUID()
+        pageCacheRebuildRequestID = requestID
+        let topMatchesOnly = snapshot.fixtureAllMajorMatchesEnabled
+        let selectedCompetitionIDs = selectedCompetitionIDs(for: snapshot)
+        let competitionSnapshot = competitions
+        let fixtureViewOptionIDs = Set(snapshot.effectiveFixtureViewOptionIDs)
+        let showAllMatches = snapshot.fixtureViewShowsAll
+        let includePostponed = snapshot.showPostponedGames
+        let topTeamsMatcherSnapshot = topTeamsMatcher
+        let premierLeagueTeamMatcherSnapshot = premierLeagueTeamMatcher
+
+        pageCacheRebuildTask = Task.detached(priority: .utility) { [weak self] in
+            let rebuilt = FixtureBrowseSelectionResolver.filterMatchesByDate(
+                matchesByDate,
+                topMatchesOnly: topMatchesOnly,
+                selectedCompetitionIDs: selectedCompetitionIDs,
+                competitions: competitionSnapshot,
+                fixtureViewOptionIDs: fixtureViewOptionIDs,
+                showAllMatches: showAllMatches,
+                includePostponed: includePostponed,
+                topTeamsMatcher: topTeamsMatcherSnapshot,
+                premierLeagueTeamMatcher: premierLeagueTeamMatcherSnapshot
+            ).filter { !$0.value.isEmpty }
+            guard !Task.isCancelled else { return }
+            await self?.applyPageCacheRebuild(
+                rebuilt,
+                requestID: requestID,
+                selectedDateKey: selectedDateKey,
+                snapshot: snapshot
             )
-            if !filtered.isEmpty {
-                rebuilt[dateKey] = filtered
+        }
+    }
+
+    private func applyPageCacheRebuild(
+        _ rebuilt: [String: [Match]],
+        requestID: UUID,
+        selectedDateKey: String,
+        snapshot: PreferencesSnapshot
+    ) async {
+        do {
+            try await waitUntilDateSwipeWorkMayPublish()
+        } catch {
+            return
+        }
+        guard pageCacheRebuildRequestID == requestID,
+              self.selectedDateKey == selectedDateKey,
+              self.snapshot == snapshot else {
+            return
+        }
+        var merged = pageCache.matchesByDate
+        var hasChanges = false
+        for (dateKey, matches) in rebuilt where merged[dateKey] != matches {
+            merged[dateKey] = matches
+            hasChanges = true
+        }
+
+        if merged.count > Self.maximumPreparedPageCount {
+            let retainedDateKeys = Set(FixtureBrowsePrefetchPlanner.dateKeys(
+                in: availableDays,
+                centeredOn: selectedDateKey,
+                radius: Self.maximumPreparedPageCount / 2
+            ))
+            let pruned = merged.filter { retainedDateKeys.contains($0.key) }
+            if pruned.count != merged.count {
+                merged = pruned
+                hasChanges = true
             }
         }
-        if pageCache.matchesByDate != rebuilt {
-            pageCache.replace(with: rebuilt)
+
+        if hasChanges {
+            pageCache.replace(with: merged)
         }
+        pageCacheRebuildTask = nil
     }
 
     private func storeRangeResponse(
@@ -1314,6 +1865,7 @@ final class FixtureBrowserStore: ObservableObject {
         let matchesByDate = Dictionary(grouping: response.matches, by: \.date)
         let fetchedAt = Date()
         var bucketsByDate: [String: FixtureBrowseBucket] = [:]
+        var cacheBuckets: [String: FixtureBrowseBucket] = [:]
         var cachedMatches = pageCache.matchesByDate
 
         for dateKey in dateKeys {
@@ -1322,10 +1874,7 @@ final class FixtureBrowserStore: ObservableObject {
                 fetchedAt: fetchedAt,
                 lastUpdated: response.lastUpdated
             )
-            store(
-                bucket: bucket,
-                for: Self.bucketKey(dateKey: dateKey)
-            )
+            cacheBuckets[Self.bucketKey(dateKey: dateKey)] = bucket
             bucketsByDate[dateKey] = bucket
 
             guard updatePageCache, let snapshot else { continue }
@@ -1340,6 +1889,11 @@ final class FixtureBrowserStore: ObservableObject {
                 cachedMatches[dateKey] = filtered
             }
         }
+
+        // Mutate and publish the value-type cache once for the whole response.
+        // Copying its full dictionary for every date made a multi-day response
+        // disproportionately expensive on the main actor.
+        store(buckets: cacheBuckets)
 
         if updatePageCache {
             pageCache.replace(with: cachedMatches)
@@ -1400,6 +1954,10 @@ final class FixtureBrowserStore: ObservableObject {
             snapshot.effectiveFixtureViewOptionIDs.isEmpty
     }
 
+    private func calendarShowsAllMatches(_ snapshot: PreferencesSnapshot) -> Bool {
+        isTVListingsModeEnabled || snapshot.fixtureViewShowsAll
+    }
+
     private func filteredMatches(
         in bucket: FixtureBrowseBucket,
         snapshot: PreferencesSnapshot,
@@ -1414,7 +1972,8 @@ final class FixtureBrowserStore: ObservableObject {
             fixtureViewOptionIDs: Set(snapshot.effectiveFixtureViewOptionIDs),
             showAllMatches: snapshot.fixtureViewShowsAll,
             includePostponed: snapshot.showPostponedGames,
-            topTeamsMatcher: topTeamsMatcher
+            topTeamsMatcher: topTeamsMatcher,
+            premierLeagueTeamMatcher: premierLeagueTeamMatcher
         )
     }
 
@@ -1453,9 +2012,20 @@ final class FixtureBrowserStore: ObservableObject {
               Set(snapshot.effectiveFixtureViewOptionIDs) == Set([FixtureViewOptionID.topTeamsPreset]) else {
             return
         }
+        pageCache.replace(with: [:])
         recomputeAvailableDays(keepCurrentDate: true)
-        rebuildCachedMatchesByDate()
-        visibleMatches = selectedDateKey.flatMap { pageCache.matchesByDate[$0] } ?? []
+    }
+
+    private func applyPremierLeagueTeamMatcher(_ matcher: PremierLeagueTeamMatcher) {
+        guard premierLeagueTeamMatcher != matcher else { return }
+        premierLeagueTeamMatcher = matcher
+        guard let snapshot,
+              Set(snapshot.effectiveFixtureViewOptionIDs) ==
+                FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs else {
+            return
+        }
+        pageCache.replace(with: [:])
+        recomputeAvailableDays(keepCurrentDate: true)
     }
 
     private func persistCache() {

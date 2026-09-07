@@ -29,6 +29,7 @@ struct FantasyView: View {
 
     @EnvironmentObject private var preferences: PreferencesStore
     @EnvironmentObject private var fantasyViewModel: FantasyViewModel
+    @EnvironmentObject private var matchesStore: MatchesStore
     @AppStorage(StorageKeys.managerEntryID) private var managerEntryID = ""
     @AppStorage(StorageKeys.rivalManagersJSON) private var rivalManagersJSON = "[]"
     @AppStorage(StorageKeys.trackedLeaguesJSON) private var trackedLeaguesJSON = "[]"
@@ -105,6 +106,8 @@ struct FantasyView: View {
     @State private var fantasyAutomaticRetryTask: Task<Void, Never>?
     @State private var fantasyAutomaticRetryAttempt = 0
     @State private var fantasyScoreRefreshTask: Task<Void, Never>?
+    @State private var liveSubstitutionRefreshTask: Task<Void, Never>?
+    @State private var detailedLiveMatchesByID: [String: Match] = [:]
     @State private var lastStartedFantasyRefreshRequest: PendingFantasyRefreshRequest?
     @State private var lastStartedFantasyRefreshAt: Date?
     @State private var lastStartedFantasyScoreRefreshAt: Date?
@@ -264,7 +267,9 @@ struct FantasyView: View {
                 syncManagerEntryIDToSharedDefaults()
                 if managerEntryID.isEmpty {
                     managerCaptureStatusMessage = "Waiting for shared Fantasy entry URL. Open your Points page in Safari/Chrome and share it to Top Scores."
-                } else {
+                }
+                guard isSelected else { return }
+                if !managerEntryID.isEmpty {
                     migrateLegacyInitialSetupIfNeeded()
                     if initialSetupVersion < Self.currentInitialSetupVersion {
                         beginInitialSetup()
@@ -281,6 +286,7 @@ struct FantasyView: View {
                 armSharedEntryPolling()
                 consumeSharedFantasyEntryURLIfNeeded()
                 beginScreenViewTiming()
+                triggerLiveSubstitutionRefresh()
             }
             .onChange(of: isSelected) { _, selected in
                 guard selected else {
@@ -289,6 +295,8 @@ struct FantasyView: View {
                     fantasyRefreshTask = nil
                     fantasyScoreRefreshTask?.cancel()
                     fantasyScoreRefreshTask = nil
+                    liveSubstitutionRefreshTask?.cancel()
+                    liveSubstitutionRefreshTask = nil
                     inFlightFantasyRefreshRequest = nil
                     pendingFantasyRefreshRequest = nil
                     fantasyViewModel.cancelBackgroundRefreshWork()
@@ -316,6 +324,7 @@ struct FantasyView: View {
                 armSharedEntryPolling()
                 consumeSharedFantasyEntryURLIfNeeded()
                 beginScreenViewTiming()
+                triggerLiveSubstitutionRefresh()
             }
             .onChange(of: scenePhase) { _, newValue in
                 guard newValue == .active else {
@@ -324,6 +333,8 @@ struct FantasyView: View {
                     fantasyRefreshTask = nil
                     fantasyScoreRefreshTask?.cancel()
                     fantasyScoreRefreshTask = nil
+                    liveSubstitutionRefreshTask?.cancel()
+                    liveSubstitutionRefreshTask = nil
                     inFlightFantasyRefreshRequest = nil
                     pendingFantasyRefreshRequest = nil
                     fantasyViewModel.cancelBackgroundRefreshWork()
@@ -343,6 +354,7 @@ struct FantasyView: View {
                 }
                 armSharedEntryPolling()
                 consumeSharedFantasyEntryURLIfNeeded()
+                triggerLiveSubstitutionRefresh()
             }
             .onChange(of: showAddRivalSheet) { _, isPresented in
                 guard isPresented else { return }
@@ -403,7 +415,11 @@ struct FantasyView: View {
                 previousRivalRanks = [:]
                 scheduleRivalRankUpdate()
             }
-            .onChange(of: selectedRivalSquad) { _, newValue in
+            .onChange(of: selectedRivalSquad) { previousValue, newValue in
+                if let newValue,
+                   previousValue?.entryID != newValue.entryID {
+                    triggerFantasyScoreRefresh(force: true)
+                }
                 guard newValue == nil else { return }
                 if let pendingPlayerSelection = pendingPlayerSelectionAfterRivalDismiss {
                     pendingPlayerSelectionAfterRivalDismiss = nil
@@ -419,6 +435,16 @@ struct FantasyView: View {
                     }
                 }
             }
+            .onChange(of: fantasyViewModel.rivalSquads) { _, refreshedRivals in
+                guard let selectedRivalSquad,
+                      let refreshedRival = refreshedRivals.first(where: {
+                          $0.entryID == selectedRivalSquad.entryID
+                      }),
+                      refreshedRival != selectedRivalSquad else {
+                    return
+                }
+                self.selectedRivalSquad = refreshedRival
+            }
             .onChange(of: preferences.apiBaseURL) { _, _ in
                 guard isFantasySetupReadyForRefresh else { return }
                 triggerFantasyRefresh(
@@ -426,6 +452,10 @@ struct FantasyView: View {
                     rivalManagers: rivalManagers,
                     trackedLeagues: trackedLeagues
                 )
+                triggerLiveSubstitutionRefresh()
+            }
+            .onChange(of: matchesStore.lastUpdated) { _, _ in
+                triggerLiveSubstitutionRefresh()
             }
             .onChange(of: fantasyViewModel.isLoading) { _, isLoading in
                 if !isLoading {
@@ -468,6 +498,7 @@ struct FantasyView: View {
                       scenePhase == .active,
                       isFantasySetupReadyForRefresh else { return }
                 triggerFantasyScoreRefresh()
+                triggerLiveSubstitutionRefresh()
             }
             .task(id: sharedEntryPollingDeadline) {
                 await pollForSharedFantasyEntry()
@@ -1193,6 +1224,9 @@ struct FantasyView: View {
                                             .padding(.vertical, 4)
                                             .background(rivalInitialsColor(for: pill.initials))
 
+                                        if let chip = pill.badgeChip {
+                                            FantasyChipBadgeImage(chip: chip, width: 20)
+                                        }
                                         Text(pill.displayedScore)
                                             .font(.system(size: 11, weight: .semibold, design: .rounded))
                                             .monospacedDigit()
@@ -1279,7 +1313,8 @@ struct FantasyView: View {
                     entryID: rival.entryID,
                     initials: initials(for: rival.managerName),
                     score: rival.currentScore,
-                    showsAsterisk: rival.squad.hasActiveChip
+                    showsAsterisk: rival.squad.hasActiveChip && rival.squad.activeBadgeChip == nil,
+                    badgeChip: rival.squad.activeBadgeChip
                 )
             }
             .sorted { lhs, rhs in
@@ -1616,7 +1651,7 @@ struct FantasyView: View {
                 projectedGameweekPoints: fantasyViewModel.currentSquadProjectedGameweekPoints,
                 isExpectedPointsLoading: false,
                 hasActiveChipInCurrentGameweek: mySquad.hasActiveChip,
-                hasWildcardInCurrentGameweek: mySquad.hasWildcardActive,
+                activeBadgeChip: mySquad.activeBadgeChip,
                 hasPlayerInPlay: mySquad.hasPlayerInPlay,
                 squad: mySquad,
                 clubBadgeSrc: profile?.clubBadgeSrc,
@@ -1638,7 +1673,7 @@ struct FantasyView: View {
                 projectedGameweekPoints: rivalSquad?.projectedGameweekPoints,
                 isExpectedPointsLoading: rivalSquad?.isExpectedPointsLoading ?? false,
                 hasActiveChipInCurrentGameweek: rivalSquad?.squad.hasActiveChip ?? false,
-                hasWildcardInCurrentGameweek: rivalSquad?.squad.hasWildcardActive ?? false,
+                activeBadgeChip: rivalSquad?.squad.activeBadgeChip,
                 hasPlayerInPlay: rivalSquad?.squad.hasPlayerInPlay ?? false,
                 squad: rivalSquad?.squad,
                 clubBadgeSrc: rivalSquad?.clubBadgeSrc ?? rival.clubBadgeSrc,
@@ -2031,8 +2066,8 @@ struct FantasyView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             Group {
-                if entry.showsWildcardBadge(for: scoreMode) {
-                    FantasyWildcardBadgeImage(width: 22)
+                if let chip = entry.badgeChip(for: scoreMode) {
+                    FantasyChipBadgeImage(chip: chip, width: 22)
                 } else {
                     Color.clear
                 }
@@ -2282,8 +2317,8 @@ struct FantasyView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             Group {
-                if fantasyViewModel.leagueWildcardStatusByEntryID[row.entry] == true {
-                    FantasyWildcardBadgeImage(width: 22)
+                if let chip = fantasyViewModel.leagueChipsByEntryID[row.entry]?.first(where: { $0.badgeAssetName != nil }) {
+                    FantasyChipBadgeImage(chip: chip, width: 22)
                 } else {
                     Color.clear
                 }
@@ -2535,8 +2570,8 @@ struct FantasyView: View {
             .opacity(isIncluded ? 1.0 : 0.5)
 
             Group {
-                if entry.showsWildcardBadge(for: rivalsScoreMode) {
-                    FantasyWildcardBadgeImage(width: 20)
+                if let chip = entry.badgeChip(for: rivalsScoreMode) {
+                    FantasyChipBadgeImage(chip: chip, width: 20)
                 } else {
                     Color.clear
                 }
@@ -2712,8 +2747,8 @@ struct FantasyView: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                if displayData.hasWildcardActive {
-                    FantasyWildcardBadgeImage(width: 92)
+                if let chip = displayData.activeBadgeChip {
+                    FantasyChipBadgeImage(chip: chip, width: 92)
                         .frame(maxWidth: .infinity, alignment: .center)
                 }
 
@@ -2786,6 +2821,7 @@ struct FantasyView: View {
         showsPoints: Bool = true,
         finalPointsMetricTitle: String = "Final Points"
     ) -> some View {
+        let substitutedOffElementIDs = substitutedOffElementIDs(in: data)
         let pointsMetricTitle: String
         let pointsMetricValue: Double?
         let pointsMetricDisplayValue: String?
@@ -2833,6 +2869,8 @@ struct FantasyView: View {
                         playerSelectionEnabled: playerSelectionEnabled,
                         detailMode: detailMode.wrappedValue,
                         scorePhase: data.scorePhase,
+                        substitutedOffElementIDs: substitutedOffElementIDs,
+                        hasTripleCaptainActive: data.hasTripleCaptainActive,
                         showsPoints: showsPoints
                     )
                     positionRow(
@@ -2841,6 +2879,8 @@ struct FantasyView: View {
                         playerSelectionEnabled: playerSelectionEnabled,
                         detailMode: detailMode.wrappedValue,
                         scorePhase: data.scorePhase,
+                        substitutedOffElementIDs: substitutedOffElementIDs,
+                        hasTripleCaptainActive: data.hasTripleCaptainActive,
                         showsPoints: showsPoints
                     )
                     positionRow(
@@ -2849,6 +2889,8 @@ struct FantasyView: View {
                         playerSelectionEnabled: playerSelectionEnabled,
                         detailMode: detailMode.wrappedValue,
                         scorePhase: data.scorePhase,
+                        substitutedOffElementIDs: substitutedOffElementIDs,
+                        hasTripleCaptainActive: data.hasTripleCaptainActive,
                         showsPoints: showsPoints
                     )
                     positionRow(
@@ -2857,6 +2899,8 @@ struct FantasyView: View {
                         playerSelectionEnabled: playerSelectionEnabled,
                         detailMode: detailMode.wrappedValue,
                         scorePhase: data.scorePhase,
+                        substitutedOffElementIDs: substitutedOffElementIDs,
+                        hasTripleCaptainActive: data.hasTripleCaptainActive,
                         showsPoints: showsPoints
                     )
                 }
@@ -3029,6 +3073,8 @@ struct FantasyView: View {
         playerSelectionEnabled: Bool,
         detailMode: FantasyPitchPlayerDetailMode,
         scorePhase: FantasySquadDisplayData.ScorePhase,
+        substitutedOffElementIDs: Set<Int>,
+        hasTripleCaptainActive: Bool,
         showsPoints: Bool = true
     ) -> some View {
         GeometryReader { proxy in
@@ -3052,6 +3098,8 @@ struct FantasyView: View {
                         playerSelectionEnabled: playerSelectionEnabled,
                         detailMode: detailMode,
                         scorePhase: scorePhase,
+                        isSubstitutedOff: substitutedOffElementIDs.contains(player.elementID),
+                        isTripleCaptain: hasTripleCaptainActive && player.isCaptain,
                         showsPoints: showsPoints
                     )
                 }
@@ -3092,6 +3140,7 @@ struct FantasyView: View {
                             playerSelectionEnabled: playerSelectionEnabled,
                             detailMode: detailMode,
                             scorePhase: data.scorePhase,
+                            isTripleCaptain: data.hasTripleCaptainActive && player.isCaptain,
                             showsPoints: showsPoints
                         )
                     }
@@ -3125,6 +3174,8 @@ struct FantasyView: View {
         playerSelectionEnabled: Bool,
         detailMode: FantasyPitchPlayerDetailMode,
         scorePhase: FantasySquadDisplayData.ScorePhase,
+        isSubstitutedOff: Bool = false,
+        isTripleCaptain: Bool = false,
         showsPoints: Bool = true
     ) -> some View {
         if playerSelectionEnabled {
@@ -3136,6 +3187,8 @@ struct FantasyView: View {
                     width: width,
                     detailMode: detailMode,
                     scorePhase: scorePhase,
+                    isSubstitutedOff: isSubstitutedOff,
+                    isTripleCaptain: isTripleCaptain,
                     showsPoints: showsPoints
                 )
             }
@@ -3146,9 +3199,50 @@ struct FantasyView: View {
                 width: width,
                 detailMode: detailMode,
                 scorePhase: scorePhase,
+                isSubstitutedOff: isSubstitutedOff,
+                isTripleCaptain: isTripleCaptain,
                 showsPoints: showsPoints
             )
         }
+    }
+
+    private func substitutedOffElementIDs(in data: FantasySquadDisplayData) -> Set<Int> {
+        guard data.hasActiveFixtures else { return [] }
+
+        var elementIDs = Set<Int>()
+        for baseMatch in matchesStore.matches
+        where baseMatch.isInProgress && isPremierLeagueMatch(baseMatch) {
+            let match = detailedLiveMatchesByID[baseMatch.id] ?? baseMatch
+            collectSubstitutedOffElementIDs(
+                from: data.matchSquadSection(forTeamName: match.homeTeam),
+                lineup: match.teamLineups?.home,
+                into: &elementIDs
+            )
+            collectSubstitutedOffElementIDs(
+                from: data.matchSquadSection(forTeamName: match.awayTeam),
+                lineup: match.teamLineups?.away,
+                into: &elementIDs
+            )
+        }
+        return elementIDs
+    }
+
+    private func collectSubstitutedOffElementIDs(
+        from section: FantasyMatchTeamSquadSection?,
+        lineup: MatchTeamLineup?,
+        into elementIDs: inout Set<Int>
+    ) {
+        guard let section, let lineup else { return }
+        for player in section.starters + section.bench where player.hasActiveFixtureThisGameweek {
+            if FantasyLiveScoringEngine.hasBeenSubstitutedOff(player: player, lineup: lineup) {
+                elementIDs.insert(player.elementID)
+            }
+        }
+    }
+
+    private func isPremierLeagueMatch(_ match: Match) -> Bool {
+        match.league.trimmingCharacters(in: .whitespacesAndNewlines)
+            .localizedCaseInsensitiveCompare("Premier League") == .orderedSame
     }
 
     @ViewBuilder
@@ -3558,6 +3652,58 @@ struct FantasyView: View {
             }
         }
         fantasyScoreRefreshTask = task
+    }
+
+    private func triggerLiveSubstitutionRefresh() {
+        guard isSelected,
+              scenePhase == .active,
+              let baseURL = URL(string: preferences.apiBaseURL) else {
+            return
+        }
+
+        let liveMatches = matchesStore.matches.filter {
+            $0.isInProgress && isPremierLeagueMatch($0) && $0.matchDetailsID != nil
+        }
+        guard !liveMatches.isEmpty else {
+            liveSubstitutionRefreshTask?.cancel()
+            liveSubstitutionRefreshTask = nil
+            detailedLiveMatchesByID = [:]
+            return
+        }
+        guard liveSubstitutionRefreshTask == nil else { return }
+
+        let liveMatchIDs = Set(liveMatches.map(\.id))
+        let retainedDetails = detailedLiveMatchesByID.filter { liveMatchIDs.contains($0.key) }
+        let task = Task {
+            let fetchedDetails = await withTaskGroup(of: (String, Match)?.self) { group in
+                for match in liveMatches {
+                    group.addTask {
+                        guard !Task.isCancelled, let detailsID = match.matchDetailsID else {
+                            return nil
+                        }
+                        do {
+                            let details = try await APIClient(baseURL: baseURL)
+                                .fetchMatchDetails(matchId: detailsID)
+                            return (match.id, match.withDetails(details))
+                        } catch {
+                            return nil
+                        }
+                    }
+                }
+
+                var matchesByID = retainedDetails
+                for await result in group {
+                    guard let (matchID, detailedMatch) = result else { continue }
+                    matchesByID[matchID] = detailedMatch
+                }
+                return matchesByID
+            }
+
+            guard !Task.isCancelled else { return }
+            detailedLiveMatchesByID = fetchedDetails
+            liveSubstitutionRefreshTask = nil
+        }
+        liveSubstitutionRefreshTask = task
     }
 
     private func migrateLegacyInitialSetupIfNeeded() {
@@ -4937,11 +5083,44 @@ private func fantasyLivePulseIntensity(at date: Date, reduceMotion: Bool) -> Dou
     return (1 - cos(cyclePosition * 2 * .pi)) / 2
 }
 
+private struct FantasyPlayerLiveOutline: View {
+    let cornerRadius: CGFloat
+
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { context in
+            outline(pulse: fantasyLivePulseIntensity(at: context.date, reduceMotion: reduceMotion))
+        }
+    }
+
+    private func outline(pulse: Double) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .strokeBorder(Color.red.opacity(0.96 - (0.28 * pulse)), lineWidth: 3.5)
+
+            RoundedRectangle(
+                cornerRadius: max(5, cornerRadius - 2.25),
+                style: .continuous
+            )
+            .strokeBorder(Color.white.opacity(0.94 - (0.56 * pulse)), lineWidth: 1.1)
+            .padding(2.25)
+
+            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                .stroke(Color.red, lineWidth: 1.5)
+                .scaleEffect(1 + (0.035 * pulse))
+                .opacity(0.42 * (1 - pulse))
+        }
+    }
+}
+
 private struct FantasyPlayerCard: View {
     let player: FantasyDisplayPlayer
     let width: CGFloat
     let detailMode: FantasyPitchPlayerDetailMode
     let scorePhase: FantasySquadDisplayData.ScorePhase
+    let isSubstitutedOff: Bool
+    let isTripleCaptain: Bool
     let showsPoints: Bool
     @ObservedObject private var teamColorCatalog = TeamColorCatalog.shared
 
@@ -4950,12 +5129,16 @@ private struct FantasyPlayerCard: View {
         width: CGFloat,
         detailMode: FantasyPitchPlayerDetailMode,
         scorePhase: FantasySquadDisplayData.ScorePhase,
+        isSubstitutedOff: Bool = false,
+        isTripleCaptain: Bool = false,
         showsPoints: Bool = true
     ) {
         self.player = player
         self.width = width
         self.detailMode = detailMode
         self.scorePhase = scorePhase
+        self.isSubstitutedOff = isSubstitutedOff
+        self.isTripleCaptain = isTripleCaptain
         self.showsPoints = showsPoints
     }
 
@@ -5043,7 +5226,9 @@ private struct FantasyPlayerCard: View {
 
     private var accessibilityLabelText: String {
         let fixtureDifficultyText = player.fixtureDifficulty.map { ", fixture difficulty \($0)" } ?? ""
-        return "\(player.displayName), \(secondaryDisplayText)\(fixtureDifficultyText), \(scorePresentation.accessibilityDescription), \(scoreState.accessibilityDescription)"
+        let substitutionText = isSubstitutedOff ? ", substituted off" : ""
+        let captainText = isTripleCaptain ? ", Triple Captain" : ""
+        return "\(player.displayName), \(secondaryDisplayText)\(fixtureDifficultyText), \(scorePresentation.accessibilityDescription), \(scoreState.accessibilityDescription)\(substitutionText)\(captainText)"
     }
 
     private var hasEventStats: Bool {
@@ -5136,6 +5321,14 @@ private struct FantasyPlayerCard: View {
                 }
 
                 VStack(alignment: .trailing, spacing: 3) {
+                    if isSubstitutedOff {
+                        Image(systemName: "arrow.down")
+                            .font(.system(size: 9, weight: .heavy))
+                            .foregroundStyle(.white)
+                            .frame(width: 18, height: 18)
+                            .background(Circle().fill(Color.red))
+                            .accessibilityHidden(true)
+                    }
                     if player.isCaptain {
                         badge(text: "C", color: .yellow)
                     }
@@ -5208,15 +5401,26 @@ private struct FantasyPlayerCard: View {
                     )
 
                 if isInPlay {
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .strokeBorder(Color.red.opacity(0.96), lineWidth: 3.5)
+                    FantasyPlayerLiveOutline(cornerRadius: cornerRadius)
+                }
 
-                    RoundedRectangle(
-                        cornerRadius: max(5, cornerRadius - 2.25),
-                        style: .continuous
-                    )
-                    .strokeBorder(Color.white.opacity(0.94), lineWidth: 1.1)
-                    .padding(2.25)
+                if isTripleCaptain {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .strokeBorder(Color(red: 0.36, green: 0.08, blue: 0.62), lineWidth: 4)
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .inset(by: 1.25)
+                        .strokeBorder(
+                            LinearGradient(
+                                colors: [
+                                    Color(red: 1, green: 0.93, blue: 0.43),
+                                    Color(red: 1, green: 0.72, blue: 0.05),
+                                    Color(red: 1, green: 0.88, blue: 0.27)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1.5
+                        )
                 }
             }
         }
@@ -5532,7 +5736,7 @@ private struct FantasyRivalRankSnapshot: Equatable {
     let score: Int?
 }
 
-private enum RivalsScoreMode: String, CaseIterable {
+enum RivalsScoreMode: String, CaseIterable {
     case currentGameweek
     case allGameweeks
 
@@ -5617,7 +5821,7 @@ private enum FantasyIDAddMode {
     }
 }
 
-private struct FantasyLeagueTableEntry: Identifiable, Hashable {
+struct FantasyLeagueTableEntry: Identifiable, Hashable {
     let entryID: Int
     let teamName: String
     let managerName: String
@@ -5626,7 +5830,7 @@ private struct FantasyLeagueTableEntry: Identifiable, Hashable {
     let projectedGameweekPoints: Double?
     let isExpectedPointsLoading: Bool
     let hasActiveChipInCurrentGameweek: Bool
-    let hasWildcardInCurrentGameweek: Bool
+    let activeBadgeChip: FantasyChip?
     let hasPlayerInPlay: Bool
     let squad: FantasySquadDisplayData?
     let clubBadgeSrc: String?
@@ -5657,14 +5861,14 @@ private struct FantasyLeagueTableEntry: Identifiable, Hashable {
         guard let score = scoreValue(for: mode) else { return "-" }
         if mode == .currentGameweek,
            hasActiveChipInCurrentGameweek,
-           !hasWildcardInCurrentGameweek {
+           activeBadgeChip == nil {
             return "\(score)*"
         }
         return "\(score)"
     }
 
-    func showsWildcardBadge(for mode: RivalsScoreMode) -> Bool {
-        mode == .currentGameweek && hasWildcardInCurrentGameweek
+    func badgeChip(for mode: RivalsScoreMode) -> FantasyChip? {
+        mode == .currentGameweek ? activeBadgeChip : nil
     }
 
     func showsScoreLoadingIndicator(for mode: RivalsScoreMode) -> Bool {
@@ -5677,6 +5881,7 @@ private struct FantasyRivalScorePill: Identifiable, Hashable {
     let initials: String
     let score: Int
     let showsAsterisk: Bool
+    let badgeChip: FantasyChip?
 
     var id: Int {
         entryID
@@ -6336,15 +6541,16 @@ private struct FantasyRivalToastView: View {
     }
 }
 
-private struct FantasyWildcardBadgeImage: View {
+private struct FantasyChipBadgeImage: View {
+    let chip: FantasyChip
     let width: CGFloat
 
     var body: some View {
-        Image("FPLWildcardBadge")
+        Image(chip.badgeAssetName ?? "FPLWildcardBadge")
             .resizable()
             .scaledToFit()
             .frame(width: width)
-            .accessibilityLabel("Wildcard active this gameweek")
+            .accessibilityLabel("\(chip.displayName) active this gameweek")
     }
 }
 
@@ -6611,8 +6817,8 @@ private struct FantasyLeagueShareSnapshotView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
 
                             Group {
-                                if row.showsWildcardBadge(for: scoreMode) {
-                                    FantasyWildcardBadgeImage(width: 20)
+                                if let chip = row.badgeChip(for: scoreMode) {
+                                    FantasyChipBadgeImage(chip: chip, width: 20)
                                 } else {
                                     Color.clear
                                 }
@@ -8154,4 +8360,5 @@ private struct FantasyShareAppIconView: View {
     FantasyView(isSelected: true)
         .environmentObject(PreferencesStore())
         .environmentObject(FantasyViewModel())
+        .environmentObject(MatchesStore())
 }

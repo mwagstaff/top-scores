@@ -6,6 +6,7 @@ import UIKit
 private enum FixturePreferenceMode: String, CaseIterable, Identifiable {
     case favourites
     case topTeams
+    case premierLeagueTeams
     case all
     case custom
 
@@ -15,6 +16,7 @@ private enum FixturePreferenceMode: String, CaseIterable, Identifiable {
         switch self {
         case .favourites: return "Favourites"
         case .topTeams: return "Top teams"
+        case .premierLeagueTeams: return "Premier League teams (all competitions)"
         case .all: return "All"
         case .custom: return "Custom"
         }
@@ -24,6 +26,7 @@ private enum FixturePreferenceMode: String, CaseIterable, Identifiable {
 private enum NotificationCoverageMode: String, CaseIterable, Identifiable {
     case favourites
     case topTeams
+    case premierLeagueTeams
     case custom
 
     var id: String { rawValue }
@@ -32,6 +35,7 @@ private enum NotificationCoverageMode: String, CaseIterable, Identifiable {
         switch self {
         case .favourites: return "Favourites"
         case .topTeams: return "Top teams"
+        case .premierLeagueTeams: return "Premier League teams (all competitions)"
         case .custom: return "Custom"
         }
     }
@@ -811,23 +815,40 @@ struct PreferencesView: View {
                    !preferences.fixtureAllMajorMatchesEnabled {
                     return .topTeams
                 }
+                if Set(preferences.selectedFixtureViewOptionIDs) ==
+                    FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs,
+                   !preferences.fixtureAllMajorMatchesEnabled {
+                    return .premierLeagueTeams
+                }
                 return preferences.fixtureAllMajorMatchesEnabled && preferences.hasSavedFavouriteFixtureView
                     ? .favourites
                     : .custom
             },
             set: { mode in
-                preferences.fixtureAllMajorMatchesEnabled = mode == .favourites
-                preferences.showAllMatches = mode == .all
-                preferences.competitionFilterEnabled = mode == .custom || mode == .topTeams
-                if mode == .topTeams {
-                    preferences.selectedFixtureViewOptionIDs = [FixtureViewOptionID.topTeamsPreset]
-                }
-                if mode == .custom,
-                   preferences.selectedFixtureViewOptionIDs.isEmpty ||
-                    Set(preferences.selectedFixtureViewOptionIDs) == Set([FixtureViewOptionID.topTeamsPreset]) {
-                    preferences.selectedFixtureViewOptionIDs = preferences.hasSavedFavouriteFixtureView
-                        ? preferences.favouriteFixtureViewOptionIDs.filter { $0 != FixtureViewOptionID.all }
-                        : []
+                preferences.performBatchUpdate {
+                    preferences.fixtureAllMajorMatchesEnabled = mode == .favourites
+                    preferences.showAllMatches = mode == .all
+                    preferences.competitionFilterEnabled = [
+                        FixturePreferenceMode.custom,
+                        .topTeams,
+                        .premierLeagueTeams,
+                    ].contains(mode)
+                    if mode == .topTeams {
+                        preferences.selectedFixtureViewOptionIDs = [FixtureViewOptionID.topTeamsPreset]
+                    }
+                    if mode == .premierLeagueTeams {
+                        preferences.selectedFixtureViewOptionIDs =
+                            FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs.sorted()
+                    }
+                    if mode == .custom,
+                       preferences.selectedFixtureViewOptionIDs.isEmpty ||
+                        Set(preferences.selectedFixtureViewOptionIDs) == Set([FixtureViewOptionID.topTeamsPreset]) ||
+                        Set(preferences.selectedFixtureViewOptionIDs) ==
+                            FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs {
+                        preferences.selectedFixtureViewOptionIDs = preferences.hasSavedFavouriteFixtureView
+                            ? preferences.favouriteFixtureViewOptionIDs.filter { $0 != FixtureViewOptionID.all }
+                            : []
+                    }
                 }
                 AppMetricsService.shared.fireActivity("pref_fixtures_all_major_matches_toggle", screen: "preferences", apiBaseURL: preferences.apiBaseURL)
             }
@@ -846,6 +867,8 @@ struct PreferencesView: View {
             return "Edit the saved leagues, teams and rivalry fixtures shown in Favourites."
         case .topTeams:
             return "Show featured clubs, home internationals and selected European matches."
+        case .premierLeagueTeams:
+            return "Show every match involving a Premier League team, regardless of competition."
         case .all:
             return "Show fixtures from every available competition."
         case .custom:
@@ -863,6 +886,10 @@ struct PreferencesView: View {
                 if Set(preferences.selectedNotificationViewOptionIDs) == Set([FixtureViewOptionID.topTeamsPreset]) {
                     return .topTeams
                 }
+                if Set(preferences.selectedNotificationViewOptionIDs) ==
+                    FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs {
+                    return .premierLeagueTeams
+                }
                 return .custom
             },
             set: { mode in
@@ -874,8 +901,13 @@ struct PreferencesView: View {
                 preferences.notificationMajorTournamentsFilterEnabled = usesFavourites
                 if mode == .topTeams {
                     preferences.selectedNotificationViewOptionIDs = [FixtureViewOptionID.topTeamsPreset]
+                } else if mode == .premierLeagueTeams {
+                    preferences.selectedNotificationViewOptionIDs =
+                        FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs.sorted()
                 } else if mode == .custom,
-                          Set(preferences.selectedNotificationViewOptionIDs) == Set([FixtureViewOptionID.topTeamsPreset]) {
+                          Set(preferences.selectedNotificationViewOptionIDs) == Set([FixtureViewOptionID.topTeamsPreset]) ||
+                          Set(preferences.selectedNotificationViewOptionIDs) ==
+                            FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs {
                     preferences.selectedNotificationViewOptionIDs = []
                 }
                 AppMetricsService.shared.fireActivity("pref_notifications_all_major_matches_toggle", screen: "preferences", apiBaseURL: preferences.apiBaseURL)

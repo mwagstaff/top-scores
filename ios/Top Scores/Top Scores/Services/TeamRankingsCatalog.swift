@@ -6,6 +6,23 @@ struct TeamRatingResolution: Sendable {
 }
 
 struct TeamRatingLookup: Sendable {
+    private final class ResolutionCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [String: TeamRatingResolution] = [:]
+
+        func value(for key: String) -> TeamRatingResolution? {
+            lock.lock()
+            defer { lock.unlock() }
+            return values[key]
+        }
+
+        func store(_ value: TeamRatingResolution, for key: String) {
+            lock.lock()
+            values[key] = value
+            lock.unlock()
+        }
+    }
+
     private struct Candidate: Sendable {
         let key: String
         let tokens: [String]
@@ -15,6 +32,7 @@ struct TeamRatingLookup: Sendable {
     private let exactByKey: [String: Double]
     private let candidates: [Candidate]
     private let defaultPoints: Double
+    private let resolutionCache: ResolutionCache
     private nonisolated static let stopWords: Set<String> = [
         "fc", "cf", "sc", "afc", "ac", "sv", "fk", "bk", "bc", "ks", "nk", "club", "de", "the", "and"
     ]
@@ -44,6 +62,7 @@ struct TeamRatingLookup: Sendable {
         self.defaultPoints = defaultPoints
         exactByKey = exact
         candidates = candidateList
+        resolutionCache = ResolutionCache()
     }
 
     nonisolated func rating(for teamName: String) -> Double? {
@@ -82,10 +101,18 @@ struct TeamRatingLookup: Sendable {
     }
 
     nonisolated func resolveRating(for teamName: String) -> TeamRatingResolution {
-        if let exactRating = rating(for: teamName) {
-            return TeamRatingResolution(rating: exactRating, usedDefault: false)
+        let cacheKey = Self.normalizedKey(teamName)
+        if let cached = resolutionCache.value(for: cacheKey) {
+            return cached
         }
-        return TeamRatingResolution(rating: defaultPoints, usedDefault: true)
+        let resolution: TeamRatingResolution
+        if let exactRating = rating(for: teamName) {
+            resolution = TeamRatingResolution(rating: exactRating, usedDefault: false)
+        } else {
+            resolution = TeamRatingResolution(rating: defaultPoints, usedDefault: true)
+        }
+        resolutionCache.store(resolution, for: cacheKey)
+        return resolution
     }
 
     private nonisolated static func normalizedTokens(_ value: String) -> [String] {

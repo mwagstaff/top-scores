@@ -42,7 +42,9 @@ def license_allowed(value: str) -> bool:
         return True
     if "NONCOMMERCIAL" in normalized or "NO DERIV" in normalized:
         return False
-    return bool(re.fullmatch(r"CC BY(?: SA)?(?: \d(?:\.\d)?)?", normalized))
+    return bool(
+        re.fullmatch(r"CC BY(?: SA)?(?: \d(?:\.\d)?)?(?: [A-Z]{2,3})?", normalized)
+    )
 
 
 class WikimediaSource:

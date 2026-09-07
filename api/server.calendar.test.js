@@ -91,6 +91,27 @@ test("calendar selection applies the Scores channel filter", () => {
   assert.deepEqual(visible.map((match) => match.match_details_id), ["1"]);
 });
 
+test("calendar selection applies the Scores channel filter to structured tv_channels objects", () => {
+  const structuredPremierLeague = {
+    ...premierLeague,
+    tv_channels: [{ name: "Sky Sports Main Event", country: "United Kingdom", countryCode: "GB", logo: null }],
+  };
+  const structuredLaLiga = {
+    ...laLiga,
+    tv_channels: [{ name: "Premier Sports 1", country: "United Kingdom", countryCode: "GB", logo: null }],
+  };
+  const visible = matchesVisibleForScoresPreferences(
+    [structuredPremierLeague, structuredLaLiga],
+    activePreferences({
+      showAllMatches: true,
+      channelFilterEnabled: true,
+      selectedChannels: ["Sky (all)"],
+    }),
+    { fixtureViewContext, premierLeagueTeams: [] }
+  );
+  assert.deepEqual(visible.map((match) => match.match_details_id), ["1"]);
+});
+
 test("calendar tokens are fixed-length base64url bearer values", () => {
   const token = "A".repeat(43);
   assert.equal(normalizeCalendarSubscriptionToken(token), token);

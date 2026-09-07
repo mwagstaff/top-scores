@@ -1,3 +1,4 @@
+const { renewLiveActivityIfNeeded } = require("./live_activity_renewal");
 const {
   getAllUserPreferences,
   getUserPreferences,
@@ -32,6 +33,7 @@ const LIVE_ACTIVITY_PREMIER_LEAGUE_TEAMS = require("./premier_league_teams_stati
 const TEAM_SHORT_NAMES_PAYLOAD = require("./team_short_names.json");
 const TEAM_ALIASES_PAYLOAD = require("./team_aliases.json");
 const { teamIdentityNames, teamIdentityKeys } = require("./team_identity");
+const { bsdTeamLogoAsset, legacyBsdTeamLogoAsset } = require("./bsd_team_logo_assets");
 const fs = require("fs");
 const path = require("path");
 
@@ -1099,25 +1101,7 @@ function liveActivityTeamScoreTotal(match) {
 }
 
 function buildLiveActivityPremierLeagueTeamLookup(teams) {
-  const exactByKey = new Set();
-  const candidates = [];
-
-  (Array.isArray(teams) ? teams : []).forEach((team) => {
-    Array.from(new Set(teamIdentityNames(team))).forEach((name) => {
-      const key = normalizeLiveActivityTeamKey(name);
-      if (!key) return;
-      exactByKey.add(key);
-      candidates.push({
-        key,
-        tokens: normalizeLiveActivityTeamTokens(name),
-      });
-    });
-  });
-
-  return {
-    exactByKey,
-    candidates,
-  };
+  return new Set((Array.isArray(teams) ? teams : []).flatMap(teamIdentityKeys));
 }
 
 function getLiveActivityPremierLeagueTeamLookup() {
@@ -1131,28 +1115,7 @@ function getLiveActivityPremierLeagueTeamLookup() {
 
 function isEnglishPremierLeagueTeam(teamName) {
   const lookup = getLiveActivityPremierLeagueTeamLookup();
-  let bestConfidence = 0;
-
-  for (const variant of teamIdentityNames(teamName)) {
-    const key = normalizeLiveActivityTeamKey(variant);
-    if (!key) continue;
-    if (lookup.exactByKey.has(key)) return true;
-
-    const sourceTokens = normalizeLiveActivityTeamTokens(variant);
-    lookup.candidates.forEach((candidate) => {
-      const confidence = liveActivityTeamSimilarity(
-        key,
-        candidate.key,
-        sourceTokens,
-        candidate.tokens
-      );
-      if (confidence > bestConfidence) {
-        bestConfidence = confidence;
-      }
-    });
-  }
-
-  return bestConfidence >= 0.86;
+  return teamIdentityKeys(teamName).some((key) => lookup.has(key));
 }
 
 async function ensureLiveActivityTeamRatingCache(nowMs = Date.now()) {
@@ -3043,7 +3006,9 @@ function evaluateUserNotificationDecision(user, match, event) {
   if (prefs.channelFilterEnabled && prefs.selectedChannels && prefs.selectedChannels.length > 0) {
     const matchChannels = match.tv_channels || [];
     const hasMatchingChannel = matchChannels.some((channel) =>
-      prefs.selectedChannels.some((selection) => channelMatchesSelection(channel, selection))
+      prefs.selectedChannels.some((selection) =>
+        channelMatchesSelection(extractTvChannelName(channel), selection)
+      )
     );
     if (matchChannels.length > 0 && !hasMatchingChannel) {
       return {
@@ -3072,7 +3037,7 @@ function evaluateUserNotificationDecision(user, match, event) {
       };
     }
 
-    if (notificationFixtureCategoryFilter && !notificationFixtureCategoryFilter(user, match, { mode: "fixtures" })) {
+    if (!notificationFixtureCategoryFilter || !notificationFixtureCategoryFilter(user, match, { mode: "fixtures" })) {
       return {
         shouldNotify: false,
         reason: "fixture_category_filtered_out",
@@ -3131,11 +3096,7 @@ function evaluateUserNotificationDecision(user, match, event) {
   } else if (notificationAllMajorMatchesEnabled === true) {
     const isMajorMatch = notificationFixtureCategoryFilter
       ? notificationFixtureCategoryFilter(user, match, { mode: "all_major" })
-      : isEnglishPremierLeagueTeam(match && match.home_team) ||
-        isEnglishPremierLeagueTeam(match && match.away_team) ||
-        matchIsMajorGameOfInterest(match) ||
-        matchIncludesHomeNation(match) ||
-        matchIsMajorTournament(match);
+      : false;
     if (!isMajorMatch) {
       return {
         shouldNotify: false,
@@ -3163,8 +3124,7 @@ function evaluateUserNotificationDecision(user, match, event) {
   if (notificationAllMajorMatchesEnabled !== true && notifEplOnly) {
     const includesPremierLeagueTeam = notificationFixtureCategoryFilter
       ? notificationFixtureCategoryFilter(user, match, { mode: "premier_league_only" })
-      : isEnglishPremierLeagueTeam(match && match.home_team) ||
-        isEnglishPremierLeagueTeam(match && match.away_team);
+      : false;
     if (!includesPremierLeagueTeam) {
       return {
         shouldNotify: false,
@@ -3474,7 +3434,12 @@ function buildLiveActivityTeamLogoAssetLookup() {
   return lookup;
 }
 
-function resolveLiveActivityTeamLogoKey(teamName, shortName = null) {
+function resolveLiveActivityTeamLogoKey(teamName, shortName = null, teamID = null) {
+  if (String(teamID ?? "").trim()) {
+    // Never fall through to name matching for an unknown BSD ID: that can
+    // substitute an unrelated club's crest (e.g. Reading City -> Reading).
+    return bsdTeamLogoAsset(teamID);
+  }
   if (!liveActivityTeamLogoAssetLookup) {
     liveActivityTeamLogoAssetLookup = buildLiveActivityTeamLogoAssetLookup();
   }
@@ -3505,11 +3470,14 @@ function resolveLiveActivityTeamLogoKey(teamName, shortName = null) {
   for (const candidate of candidates) {
     const spacedKey = normalizeLiveActivityTeamShortNameKey(candidate);
     const compactKey = normalizeLiveActivityTeamKey(candidate);
-    const coreKey = normalizeLiveActivityTeamLogoCoreKey(candidate);
     const resolved =
+      legacyBsdTeamLogoAsset(candidate) ||
       liveActivityTeamLogoAssetLookup.get(spacedKey) ||
       liveActivityTeamLogoAssetLookup.get(compactKey);
     if (resolved) return resolved;
+  }
+  for (const candidate of candidates) {
+    const coreKey = normalizeLiveActivityTeamLogoCoreKey(candidate);
     const coreMatches =
       coreKey && liveActivityTeamLogoAssetCoreLookup
         ? Array.from(new Set(liveActivityTeamLogoAssetCoreLookup.get(coreKey) || []))
@@ -4825,7 +4793,9 @@ function isEligibleForLiveActivityByPreferences(user, match) {
   if (prefs.channelFilterEnabled && Array.isArray(prefs.selectedChannels) && prefs.selectedChannels.length > 0) {
     const channels = Array.isArray(match.tv_channels) ? match.tv_channels : [];
     const hasMatchingChannel = channels.some((channel) =>
-      prefs.selectedChannels.some((selection) => channelMatchesSelection(channel, selection))
+      prefs.selectedChannels.some((selection) =>
+        channelMatchesSelection(extractTvChannelName(channel), selection)
+      )
     );
     if (!hasMatchingChannel) {
       return {
@@ -5705,8 +5675,8 @@ function buildLiveActivityContentState(
         match.away_short_name ?? match.awayShortName,
         fullAwayTeam
       );
-      const homeLogoKey = resolveLiveActivityTeamLogoKey(fullHomeTeam, homeShortName);
-      const awayLogoKey = resolveLiveActivityTeamLogoKey(fullAwayTeam, awayShortName);
+      const homeLogoKey = resolveLiveActivityTeamLogoKey(fullHomeTeam, homeShortName, match.home_team_id);
+      const awayLogoKey = resolveLiveActivityTeamLogoKey(fullAwayTeam, awayShortName, match.away_team_id);
       const normalizedMatch = {
         matchId: String(match.match_details_id || ""),
         date: kickoff.date,
@@ -5808,10 +5778,10 @@ function buildLiveActivityContentState(
   return contentState;
 }
 
-function liveActivityPayloadMetrics(contentState) {
+function liveActivityPayloadMetrics(contentState, nowMs = Date.now()) {
   const contentStateJSON = JSON.stringify(contentState);
   const archiveEstimateJSON = JSON.stringify({
-    attributes: LIVE_ACTIVITY_ATTRIBUTES,
+    attributes: { ...LIVE_ACTIVITY_ATTRIBUTES, startedAtEpochSeconds: Math.floor(nowMs / 1000) },
     "content-state": contentState,
   });
 
@@ -5831,7 +5801,7 @@ function logLiveActivityPayloadDiagnostics(
   payloadHash,
   context = {}
 ) {
-  const metrics = liveActivityPayloadMetrics(contentState);
+  const metrics = liveActivityPayloadMetrics(contentState, nowMs);
   liveActivityMetrics.recordPayloadSample({
     event,
     isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
@@ -6654,6 +6624,18 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
   const scoreHash = buildLiveActivityScoreHash(contentState);
 
   if (activityPushToken) {
+    if (!isTestHoldActive) {
+      const attemptedRenewal = await renewLiveActivityIfNeeded(user, contentState, nowMs, {
+        persist: updateUserLiveActivityState,
+        send: sendLiveActivityPush,
+        record: persistLiveActivityDebug,
+      });
+      // Registration may have completed while the renewal push was in flight.
+      if (attemptedRenewal) {
+        const latestUser = await getUserPreferences(user.deviceToken);
+        if (latestUser?.liveActivity?.currentActivityId !== currentActivityId) return;
+      }
+    }
     const skipReason = liveActivitySkipReason(state, payloadHash, presentation.mode, forceDispatch, {
       scoreHash,
       nowMs,
@@ -6774,6 +6756,10 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
       raw_payload: updateRawPayload,
       content_state: contentState,
     });
+    // A replacement can register while this old-token APNs request is in flight.
+    // Its response must not clear the replacement token or overwrite its hashes.
+    const latestActivityUser = await getUserPreferences(user.deviceToken);
+    if (latestActivityUser?.liveActivity?.currentActivityId !== currentActivityId) return;
     if (updateResult.success) {
       await persistLiveActivityPatch(user, {
         lastPayloadHash: payloadHash,
@@ -7000,7 +6986,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     token: pushToStartToken,
     event: "start",
     attributesType: LIVE_ACTIVITY_ATTRIBUTES_TYPE,
-    attributes: LIVE_ACTIVITY_ATTRIBUTES,
+    attributes: { ...LIVE_ACTIVITY_ATTRIBUTES, startedAtEpochSeconds: Math.floor(nowMs / 1000) },
     contentState,
     staleDate: startStaleDate,
     alert: {

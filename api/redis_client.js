@@ -788,6 +788,12 @@ function normalizeLiveActivityStatePatch(patch = {}) {
   if (Object.prototype.hasOwnProperty.call(patch, "testHoldUntil")) {
     normalized.testHoldUntil = normalizeOptionalToken(patch.testHoldUntil);
   }
+  for (const key of ["renewalForActivityId", "renewalRequestedAt", "renewalLastAttemptAt", "currentActivityStartedAt", "retiredActivityId"]) {
+    if (Object.prototype.hasOwnProperty.call(patch, key)) normalized[key] = normalizeOptionalToken(patch[key]);
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, "renewalAttempts")) {
+    normalized.renewalAttempts = Math.max(0, Math.floor(Number(patch.renewalAttempts) || 0));
+  }
   return normalized;
 }
 
@@ -839,6 +845,11 @@ function freshestUserRecord(...records) {
       if (rightMs === null) return -1;
       return rightMs - leftMs;
     })[0] || null;
+}
+
+let notificationTeamSubscriptionResolver = null;
+function setNotificationTeamSubscriptionResolver(resolver) {
+  notificationTeamSubscriptionResolver = typeof resolver === "function" ? resolver : null;
 }
 
 async function saveUserPreferences(
@@ -922,6 +933,13 @@ async function saveUserPreferences(
       updatedAt: new Date().toISOString(),
     };
 
+    if (notificationTeamSubscriptionResolver) {
+      const subscriptions = notificationTeamSubscriptionResolver(data);
+      if (JSON.stringify(subscriptions) !== JSON.stringify(data.notificationTeamSubscriptions)) {
+        data.notificationTeamSubscriptionsUpdatedAt = data.updatedAt;
+      }
+      data.notificationTeamSubscriptions = subscriptions;
+    }
     const serializedData = JSON.stringify(data);
     const transaction = redisClient.multi();
     transaction.set(key, serializedData, { EX: USER_PREFERENCES_TTL_SECONDS });
@@ -3443,6 +3461,7 @@ async function unmarkMatchDeleted(matchId) {
 }
 
 module.exports = {
+  setNotificationTeamSubscriptionResolver,
   getClient,
   saveUserPreferences: _withMetrics("save_user_preferences", saveUserPreferences),
   updateUserLiveActivityState: _withMetrics("update_live_activity_state", updateUserLiveActivityState),

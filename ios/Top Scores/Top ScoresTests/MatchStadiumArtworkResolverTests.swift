@@ -3,70 +3,35 @@ import Testing
 @testable import Top_Scores
 
 struct MatchStadiumArtworkResolverTests {
-    @Test func sameHomeTeamKeepsFamilyAcrossOpponents() {
+    @Test func sameHomeTeamKeepsArtworkAcrossOpponentsAndLighting() {
         let resolver = MatchStadiumArtworkResolver()
         let first = makeMatch(homeTeamID: "57", awayTeam: "Arsenal", lightContext: "day")
         let second = makeMatch(homeTeamID: "different-provider-id", awayTeam: "Leeds United", lightContext: "night")
-
-        #expect(resolver.familyIndex(homeTeamID: first.homeTeamId, homeTeamName: first.homeTeam)
-            == resolver.familyIndex(homeTeamID: second.homeTeamId, homeTeamName: second.homeTeam))
-        #expect(resolver.assetName(for: first).hasSuffix("Day"))
-        #expect(resolver.assetName(for: second).hasSuffix("Night"))
+        #expect(resolver.assetName(for: first) == resolver.assetName(for: second))
     }
 
-    @Test func apiLightContextTakesPrecedenceOverKickoffHour() {
-        let resolver = MatchStadiumArtworkResolver()
-        let lateDaylightMatch = makeMatch(homeTeamID: "57", time: "22:00", lightContext: "day")
-
-        #expect(resolver.lightContext(for: lateDaylightMatch) == .day)
-    }
-
-    @Test func kickoffHourProvidesSafeFallbackWithoutVenueData() {
-        let resolver = MatchStadiumArtworkResolver()
-
-        #expect(resolver.lightContext(for: makeMatch(time: "15:00")) == .day)
-        #expect(resolver.lightContext(for: makeMatch(time: "20:00")) == .night)
-    }
-
-    @Test func bournemouthDayMatchSelectsFromAllSixDayAssets() {
+    @Test func bournemouthUsesAllBundledImagesRegardlessOfLighting() {
         let resolver = MatchStadiumArtworkResolver()
         let match = makeMatch(homeTeam: "AFC Bournemouth", lightContext: "day")
-
-        let assets = Set((0 ..< 6).map { seed in
-            resolver.assetName(for: match, selectionSeed: UInt32(seed))
-        })
-
-        #expect(assets == Set((1 ... 6).map { String(format: "BournemouthStadiumDay%02d", $0) }))
+        let assets = Set((0..<10).map { resolver.assetName(for: match, selectionSeed: UInt32($0)) })
+        #expect(assets.count == 10)
+        #expect(assets.contains("BournemouthStadiumNight04"))
+        #expect(assets.contains("BournemouthStadiumDay06"))
     }
 
-    @Test func bournemouthAwayMatchSelectsFromNightAssets() {
+    @Test func awayClubNeverOverridesHomeClubArtwork() {
         let resolver = MatchStadiumArtworkResolver()
-        let match = makeMatch(awayTeam: "Bournemouth", lightContext: "night")
-
-        #expect(resolver.assetName(for: match, selectionSeed: 3) == "BournemouthStadiumNight04")
-        #expect(resolver.assetName(for: match, selectionSeed: 4) == "BournemouthStadiumNight01")
+        let match = makeMatch(awayTeam: "Bournemouth")
+        #expect(!resolver.assetName(for: match).contains("Bournemouth"))
     }
 
-    @Test func teamHeroArtworkIsStableAndAlwaysUsesEveningArtwork() {
+    @Test func teamHeroArtworkIsStableAcrossProviderIDs() {
         let resolver = MatchStadiumArtworkResolver()
-
-        let first = resolver.teamHeroAssetName(teamID: "57", teamName: "Watford")
-        let second = resolver.teamHeroAssetName(teamID: "different-provider-id", teamName: "Watford")
-
-        #expect(first == second)
-        #expect(first.hasSuffix("Night"))
+        #expect(resolver.teamHeroAssetName(teamID: "57", teamName: "Watford")
+            == resolver.teamHeroAssetName(teamID: "other", teamName: "Watford"))
     }
 
-    @Test func bournemouthTeamHeroUsesDedicatedNightArtwork() {
-        let asset = MatchStadiumArtworkResolver().teamHeroAssetName(
-            teamID: "1044",
-            teamName: "AFC Bournemouth"
-        )
-
-        #expect(asset.hasPrefix("BournemouthStadiumNight"))
-    }
-
-    @Test func remoteArtworkPrefersExactVenueThenHomeTeam() {
+    @Test func remoteMatchArtworkPrefersHomeTeamOverVenue() {
         let resolver = MatchStadiumArtworkResolver()
         let catalog = makeCatalog(
             teams: [
@@ -90,7 +55,7 @@ struct MatchStadiumArtworkResolverTests {
         )
         let match = makeMatch(homeTeamID: "57", lightContext: "day", venueID: "42")
 
-        #expect(resolver.remoteAsset(for: match, catalog: catalog)?.id == "venue-day")
+        #expect(resolver.remoteAsset(for: match, catalog: catalog)?.id == "watford-day")
     }
 
     @Test func remoteMatchArtworkUsesHomeTeamOnlyThenGenericFallback() {
@@ -114,7 +79,7 @@ struct MatchStadiumArtworkResolverTests {
         #expect(resolver.remoteAsset(for: match, catalog: catalog)?.id == "generic-night")
     }
 
-    @Test func remoteTeamHeroPrefersNightArtwork() {
+    @Test func remoteTeamGalleryIncludesEveryLightingContext() {
         let resolver = MatchStadiumArtworkResolver()
         let catalog = makeCatalog(
             teams: [
@@ -128,15 +93,16 @@ struct MatchStadiumArtworkResolverTests {
             assets: [
                 makeAsset(id: "watford-day", role: .team, light: .day, teamIDs: ["watford"]),
                 makeAsset(id: "watford-night", role: .team, light: .night, teamIDs: ["watford"]),
+                makeAsset(id: "watford-any", role: .team, light: .any, teamIDs: ["watford"]),
             ]
         )
 
         #expect(
-            resolver.remoteTeamHeroAsset(
+            resolver.remoteTeamHeroAssets(
                 teamID: "57",
                 teamName: "Watford",
                 catalog: catalog
-            )?.id == "watford-night"
+            ).map(\.id) == ["watford-any", "watford-day", "watford-night"]
         )
     }
 

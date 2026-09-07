@@ -17,6 +17,7 @@ struct ContentView: View {
     @State private var selectedTab = 0
     @State private var fantasyTabBadge: String?
     @State private var fantasyTabShouldPulse = false
+    @State private var fantasyTabHasLivePlayer = false
     @State private var fantasyTabNeedsAuthentication = false
     @StateObject private var fixturesCoordinator = FixturesViewCoordinator()
     @ObservedObject private var tablesNavigationCoordinator = TablesNavigationCoordinator.shared
@@ -61,7 +62,7 @@ struct ContentView: View {
                                     value: fantasyTabShouldPulse
                                 )
 
-                            if fantasyTabNeedsAuthentication {
+                            if fantasyTabNeedsAuthentication || fantasyTabHasLivePlayer {
                                 Circle()
                                     .fill(.red)
                                     .frame(width: 8, height: 8)
@@ -127,6 +128,7 @@ struct ContentView: View {
                 fantasyManagerEntryID: fantasyManagerEntryID,
                 fantasyTabBadge: $fantasyTabBadge,
                 fantasyTabShouldPulse: $fantasyTabShouldPulse,
+                fantasyTabHasLivePlayer: $fantasyTabHasLivePlayer,
                 fantasyTabNeedsAuthentication: $fantasyTabNeedsAuthentication
             )
             .frame(width: 0, height: 0)
@@ -145,6 +147,7 @@ private struct ContentLifecycleCoordinator: View {
     let fantasyManagerEntryID: String
     @Binding var fantasyTabBadge: String?
     @Binding var fantasyTabShouldPulse: Bool
+    @Binding var fantasyTabHasLivePlayer: Bool
     @Binding var fantasyTabNeedsAuthentication: Bool
     @AppStorage("fantasy.hasAuthenticatedBefore") private var hasAuthenticatedBefore = false
     @State private var lastAutomaticFantasyScoreRefreshAt: Date?
@@ -195,13 +198,12 @@ private struct ContentLifecycleCoordinator: View {
             .onChange(of: matchesStore.matches) { _, _ in
                 updateFantasyTabPresentation()
             }
-            .task(id: fantasyManagerEntryID) {
+            .task(id: "\(fantasyManagerEntryID)|\(preferences.apiBaseURL)|\(selectedTab)") {
                 updateFantasyTabPresentation()
                 await refreshFantasyInBackground()
             }
             .task(id: preferences.apiBaseURL) {
                 await fantasyViewModel.refreshSeasonActiveStatus(apiBaseURL: preferences.apiBaseURL)
-                await refreshFantasyInBackground()
                 updateFantasyTabPresentation()
             }
             .onReceive(fantasyBackgroundRefreshTimer) { _ in
@@ -244,7 +246,7 @@ private struct ContentLifecycleCoordinator: View {
     }
 
     private func refreshFantasyInBackground() async {
-        guard !trimmedFantasyManagerEntryID.isEmpty else { return }
+        guard selectedTab != 0, !trimmedFantasyManagerEntryID.isEmpty else { return }
 
         let defaults = UserDefaults.standard
         let rivals = Self.decodeRivals(defaults.string(forKey: "fantasy.rivalManagersJSON"))
@@ -280,6 +282,11 @@ private struct ContentLifecycleCoordinator: View {
             hasAuthenticatedBefore: hasAuthenticatedBefore,
             requiresAuthentication: fantasyViewModel.requiresAuthentication
         )
+        let nextHasLivePlayer = fantasyShouldShowLivePlayerIndicator(
+            isSeasonActive: fantasyViewModel.isSeasonActive,
+            hasManagerEntryID: !trimmedFantasyManagerEntryID.isEmpty,
+            hasPlayerInPlay: fantasyViewModel.data?.hasPlayerInPlay == true
+        )
         let nextBadge: String?
         let nextShouldPulse: Bool
 
@@ -314,6 +321,9 @@ private struct ContentLifecycleCoordinator: View {
         if fantasyTabShouldPulse != nextShouldPulse {
             fantasyTabShouldPulse = nextShouldPulse
         }
+        if fantasyTabHasLivePlayer != nextHasLivePlayer {
+            fantasyTabHasLivePlayer = nextHasLivePlayer
+        }
 
         if fantasyTabNeedsAuthentication != nextNeedsAuthentication {
             fantasyTabNeedsAuthentication = nextNeedsAuthentication
@@ -339,6 +349,14 @@ func fantasyShouldShowReauthenticationIndicator(
     requiresAuthentication: Bool
 ) -> Bool {
     hasAuthenticatedBefore && requiresAuthentication
+}
+
+func fantasyShouldShowLivePlayerIndicator(
+    isSeasonActive: Bool,
+    hasManagerEntryID: Bool,
+    hasPlayerInPlay: Bool
+) -> Bool {
+    isSeasonActive && hasManagerEntryID && hasPlayerInPlay
 }
 
 func fantasyTabMatchIsLiveOrRecentlyFinished(

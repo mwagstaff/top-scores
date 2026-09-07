@@ -797,7 +797,6 @@ private final class TeamDetailsViewModel {
 
 struct TeamDetailsView: View {
     @EnvironmentObject private var preferences: PreferencesStore
-    @EnvironmentObject private var stadiumArtworkStore: StadiumArtworkStore
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ObservedObject private var teamColorCatalog = TeamColorCatalog.shared
@@ -824,10 +823,6 @@ struct TeamDetailsView: View {
 
     private var competitionName: String {
         viewModel.standing?.leagueName ?? context.originatingLeagueName
-    }
-
-    private var heroHeight: CGFloat {
-        dynamicTypeSize.isAccessibilitySize ? 390 : 328
     }
 
     private var currentTeamForm: [String]? {
@@ -871,8 +866,6 @@ struct TeamDetailsView: View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0) {
                 teamHero
-                    .padding(.horizontal, 16)
-                    .padding(.top, 14)
 
                 LazyVStack(alignment: .leading, spacing: 24) {
                     currentSeasonSection
@@ -930,116 +923,8 @@ struct TeamDetailsView: View {
     }
 
     private var teamHero: some View {
-        GeometryReader { proxy in
-            let scrollOffset = proxy.frame(in: .named("TeamDetailsScroll")).minY
-            ZStack {
-                RemoteStadiumArtworkImage(
-                    asset: stadiumArtworkStore.teamHeroAsset(
-                        teamID: context.teamID,
-                        teamName: context.teamName
-                    ),
-                    apiBaseURL: preferences.apiBaseURL,
-                    fallbackAssetName: MatchStadiumArtworkResolver.shared.teamHeroAssetName(
-                        teamID: context.teamID,
-                        teamName: context.teamName
-                    )
-                )
-                    .scaledToFill()
-                    .frame(width: proxy.size.width, height: heroHeight + 28)
-                    .scaleEffect(1.08)
-                    .blur(radius: 2.5, opaque: true)
-                    .offset(y: accessibilityReduceMotion ? 0 : -scrollOffset * 0.10)
-                    .opacity(hasAppeared ? 1 : 0.72)
-                    .accessibilityHidden(true)
-
-                LinearGradient(
-                    colors: [
-                        FootballVisualStyle.pageBackground.opacity(0.30),
-                        FootballVisualStyle.pageBackground.opacity(0.48),
-                        FootballVisualStyle.pageBackground.opacity(0.98),
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-
-                RadialGradient(
-                    colors: [.clear, FootballVisualStyle.pageBackground.opacity(0.68)],
-                    center: .center,
-                    startRadius: 100,
-                    endRadius: max(proxy.size.width, heroHeight) * 0.72
-                )
-
-                LinearGradient(
-                    colors: [accentColors.primary.opacity(0.18), .clear, accentColors.secondary.opacity(0.06)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                )
-
-                VStack(spacing: dynamicTypeSize.isAccessibilitySize ? 16 : 12) {
-                    Spacer(minLength: 18)
-
-                    ZStack {
-                        Circle()
-                            .fill(accentColors.primary.opacity(0.18))
-                            .frame(width: 150, height: 150)
-                            .blur(radius: 24)
-
-                        Group {
-                            if let image = LogoResolver.shared.image(
-                                for: context.teamName,
-                                teamId: context.teamID,
-                                alternateNames: context.alternateNames
-                            ) {
-                                Image(uiImage: image)
-                                    .resizable()
-                                    .interpolation(.high)
-                                    .scaledToFit()
-                            } else {
-                                Image(systemName: "shield.fill")
-                                    .font(.system(size: 72, weight: .semibold))
-                                    .foregroundStyle(.white.opacity(0.90))
-                            }
-                        }
-                        .frame(width: 100, height: 100)
-                        .shadow(color: accentColors.primary.opacity(0.44), radius: 18)
-                        .shadow(color: .black.opacity(0.62), radius: 12, y: 8)
-                    }
-                    .scaleEffect(hasAppeared ? 1 : 0.96)
-                    .opacity(hasAppeared ? 1 : 0)
-
-                    Text(context.canonicalName)
-                        .font(.system(.largeTitle, design: .rounded, weight: .heavy))
-                        .foregroundStyle(.white)
-                        .multilineTextAlignment(.center)
-                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
-                        .minimumScaleFactor(0.72)
-                        .padding(.horizontal, 20)
-
-                    HStack(spacing: 9) {
-                        TeamDetailsCompetitionBadge(
-                            competitionID: competitionID,
-                            competitionName: competitionName,
-                            size: 25,
-                            foregroundColor: .white
-                        )
-                        Text(competitionName)
-                            .font(.headline.weight(.semibold))
-                            .foregroundStyle(.white.opacity(0.92))
-                            .multilineTextAlignment(.center)
-                    }
-                    .padding(.horizontal, 18)
-
-                    Spacer(minLength: 22)
-                }
-                .opacity(hasAppeared ? 1 : 0)
-                .offset(y: hasAppeared ? 0 : 10)
-            }
-        }
-        .frame(height: heroHeight)
-        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .shadow(color: Color.black.opacity(0.18), radius: 22, x: 0, y: 12)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(context.canonicalName), \(competitionName)")
+        TeamDetailsHero(context: context, competitionID: competitionID,
+                        competitionName: competitionName, hasAppeared: hasAppeared)
     }
 
     @ViewBuilder
@@ -2727,4 +2612,116 @@ private struct TeamFormBadge: View {
             .frame(width: size, height: size)
             .background(color, in: Circle())
     }
+}
+
+// Shared with the artwork review screen so previews use the production hero.
+struct TeamDetailsHero: View {
+    @EnvironmentObject private var preferences: PreferencesStore
+    @EnvironmentObject private var stadiumArtworkStore: StadiumArtworkStore
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ObservedObject private var teamColorCatalog = TeamColorCatalog.shared
+
+    let context: TeamDetailsContext
+    let competitionID: String?
+    let competitionName: String
+    var hasAppeared = true
+
+    private var heroHeight: CGFloat { dynamicTypeSize.isAccessibilitySize ? 390 : 328 }
+    private var accentColors: TeamAccentColors { teamColorCatalog.accentColors(for: context.teamName) }
+    var body: some View {
+        GeometryReader { proxy in
+            let scrollOffset = proxy.frame(in: .named("TeamDetailsScroll")).minY
+            ZStack {
+                RotatingStadiumArtworkImage(
+                    assets: stadiumArtworkStore.teamHeroAssets(
+                        teamID: context.teamID, teamName: context.teamName
+                    ),
+                    apiBaseURL: preferences.apiBaseURL,
+                    fallbackAssetName: MatchStadiumArtworkResolver.shared.teamHeroAssetName(
+                        teamID: context.teamID, teamName: context.teamName
+                    )
+                )
+                .id(context.id)
+                .frame(width: proxy.size.width, height: heroHeight)
+                .modifier(StadiumHeroMotion(scrollOffset: -scrollOffset * 0.10))
+                .blur(radius: 1, opaque: true)
+                .opacity(hasAppeared ? 1 : 0.72)
+                .accessibilityHidden(true)
+
+                StadiumHeroEdgeFade()
+
+                RadialGradient(
+                    colors: [.clear, FootballVisualStyle.pageBackground.opacity(0.32)],
+                    center: .center,
+                    startRadius: 100,
+                    endRadius: max(proxy.size.width, heroHeight) * 0.72
+                )
+
+                VStack(spacing: dynamicTypeSize.isAccessibilitySize ? 16 : 12) {
+                    Spacer(minLength: 18)
+
+                    ZStack {
+                        Circle()
+                            .fill(accentColors.primary.opacity(0.12))
+                            .frame(width: 132, height: 132)
+                            .blur(radius: 20)
+
+                        Group {
+                            if let image = LogoResolver.shared.image(
+                                for: context.teamName,
+                                teamId: context.teamID,
+                                alternateNames: context.alternateNames
+                            ) {
+                                Image(uiImage: image)
+                                    .resizable()
+                                    .interpolation(.high)
+                                    .scaledToFit()
+                            } else {
+                                Image(systemName: "shield.fill")
+                                    .font(.system(size: 72, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(0.90))
+                            }
+                        }
+                        .frame(width: 100, height: 100)
+                        .shadow(color: accentColors.primary.opacity(0.28), radius: 12)
+                        .shadow(color: .black.opacity(0.62), radius: 12, y: 8)
+                    }
+                    .scaleEffect(hasAppeared ? 1 : 0.96)
+                    .opacity(hasAppeared ? 1 : 0)
+
+                    Text(context.canonicalName)
+                        .font(.system(.largeTitle, design: .rounded, weight: .heavy))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                        .minimumScaleFactor(0.72)
+                        .padding(.horizontal, 20)
+
+                    HStack(spacing: 9) {
+                        TeamDetailsCompetitionBadge(
+                            competitionID: competitionID,
+                            competitionName: competitionName,
+                            size: 25,
+                            foregroundColor: .white
+                        )
+                        Text(competitionName)
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.92))
+                            .multilineTextAlignment(.center)
+                    }
+                    .padding(.horizontal, 18)
+
+                    Spacer(minLength: 22)
+                }
+                .opacity(hasAppeared ? 1 : 0)
+                .offset(y: hasAppeared ? 0 : 10)
+            }
+        }
+        .frame(height: heroHeight)
+        .clipped()
+        .stadiumParallaxMotionLifecycle()
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(context.canonicalName), \(competitionName)")
+    }
+
 }

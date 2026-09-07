@@ -233,7 +233,6 @@ struct MatchDetailView: View {
                         predictionDisplay: predictionDisplay,
                         teamCompetitionEntries: teamCompetitionEntries
                     )
-                    .padding(.horizontal)
 
                     MatchTeamLeaguePositionsLink(
                         entries: teamCompetitionEntries
@@ -307,7 +306,7 @@ struct MatchDetailView: View {
                 }
                 // Keep data-heavy child views from widening the vertical scroll content.
                 .frame(width: proxy.size.width, alignment: .leading)
-                .padding(.vertical, 12)
+                .padding(.bottom, 12)
             }
         }
         .task(id: "\(preferences.apiBaseURL)|\(match.matchDetailsID ?? "")") {
@@ -923,33 +922,6 @@ private struct MatchVenueSection: View {
                     .foregroundStyle(.primary)
             }
 
-            if let imageURL = venue.imageURL.flatMap(URL.init(string:)) {
-                AsyncImage(url: imageURL) { phase in
-                    switch phase {
-                    case .success(let image):
-                        GeometryReader { proxy in
-                            image
-                                .resizable()
-                                .scaledToFill()
-                                .frame(width: proxy.size.width, height: proxy.size.height)
-                                .clipped()
-                        }
-                        .aspectRatio(16 / 9, contentMode: .fit)
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                    case .empty:
-                        RoundedRectangle(cornerRadius: 16, style: .continuous)
-                            .fill(Color(.tertiarySystemFill))
-                            .aspectRatio(16 / 9, contentMode: .fit)
-                            .overlay { ProgressView() }
-                    case .failure:
-                        EmptyView()
-                    @unknown default:
-                        EmptyView()
-                    }
-                }
-                .accessibilityLabel("Photo of \(venue.name)")
-            }
-
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 24) {
                     venueFacts
@@ -1033,14 +1005,29 @@ private struct MatchVenueFact: View {
 
 // MARK: - FPL Squad Sections
 
-private struct MatchDetailScoreboardHero: View {
+private struct MatchHeroStadiumImage: View {
     @EnvironmentObject private var preferences: PreferencesStore
     @EnvironmentObject private var stadiumArtworkStore: StadiumArtworkStore
+
+    let match: Match
+
+    var body: some View {
+        RotatingStadiumArtworkImage(
+            assets: stadiumArtworkStore.matchAssets(for: match),
+            apiBaseURL: preferences.apiBaseURL,
+            fallbackAssetName: MatchStadiumArtworkResolver.shared.assetName(for: match)
+        )
+        .id(match.homeTeamId ?? match.homeTeam)
+        .modifier(StadiumHeroMotion())
+    }
+}
+
+struct MatchDetailScoreboardHero: View {
+    @EnvironmentObject private var preferences: PreferencesStore
     let match: Match
     let kickoffText: String
     let predictionDisplay: FixturePredictionDisplayState
     let teamCompetitionEntries: [MatchTeamCompetitionEntry]
-    @State private var artworkSelectionSeed: UInt32
     @ScaledMetric(relativeTo: .headline) private var teamNameRowHeight: CGFloat = 46
 
     init(
@@ -1053,7 +1040,6 @@ private struct MatchDetailScoreboardHero: View {
         self.kickoffText = kickoffText
         self.predictionDisplay = predictionDisplay
         self.teamCompetitionEntries = teamCompetitionEntries
-        _artworkSelectionSeed = State(initialValue: UInt32.random(in: .min ... .max))
     }
 
     private var showsTeamCompetitions: Bool {
@@ -1134,10 +1120,10 @@ private struct MatchDetailScoreboardHero: View {
                         .minimumScaleFactor(0.65)
                         .lineLimit(1)
 
-                    if match.isInProgress {
+                    if match.isInProgress || match.isFinished {
                         MatchTimeStatusView(
                             text: statusText,
-                            isLive: true,
+                            isLive: match.isInProgress,
                             isFinal: match.isFinalRound
                         )
                     } else {
@@ -1192,35 +1178,17 @@ private struct MatchDetailScoreboardHero: View {
         .padding(.vertical, 24)
         .background(
             ZStack {
-                RemoteStadiumArtworkImage(
-                    asset: stadiumArtworkStore.matchAsset(
-                        for: match,
-                        selectionSeed: artworkSelectionSeed
-                    ),
-                    apiBaseURL: preferences.apiBaseURL,
-                    fallbackAssetName: MatchStadiumArtworkResolver.shared.assetName(
-                        for: match,
-                        selectionSeed: artworkSelectionSeed
-                    )
+                MatchHeroStadiumImage(
+                    match: match
                 )
-                    .scaledToFill()
-                    .scaleEffect(1.04)
-                    .blur(radius: 3, opaque: true)
+                    .blur(radius: 1, opaque: true)
+                    .overlay(Color.black.opacity(0.18))
                     .accessibilityHidden(true)
 
-                LinearGradient(
-                    colors: [
-                        Color.black.opacity(0.28),
-                        Color.black.opacity(0.58),
-                        Color.black.opacity(0.90)
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
+                StadiumHeroEdgeFade()
             }
         )
-        .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .shadow(color: Color.black.opacity(0.18), radius: 22, x: 0, y: 12)
+        .clipped()
         .accessibilityElement(children: .contain)
     }
 
@@ -1232,18 +1200,18 @@ private struct MatchDetailScoreboardHero: View {
         goalSummaries: [MatchScoreboardGoalSummary],
         competition: MatchTeamCompetitionEntry?
     ) -> some View {
-        NavigationLink {
-            TeamDetailsView(
-                context: TeamDetailsContext(
-                    teamID: teamId,
-                    teamName: fullName,
-                    displayName: name,
-                    alternateNames: alternateNames,
-                    originatingLeagueID: match.leagueId,
-                    originatingLeagueName: match.league,
-                    originatingMatch: match
-                )
-            )
+        let destinationContext = TeamDetailsContext(
+            teamID: teamId,
+            teamName: fullName,
+            displayName: name,
+            alternateNames: alternateNames,
+            originatingLeagueID: match.leagueId,
+            originatingLeagueName: match.league,
+            originatingMatch: match
+        )
+
+        return NavigationLink {
+            TeamDetailsView(context: destinationContext)
         } label: {
             teamColumn(
                 name: name,
@@ -1263,6 +1231,11 @@ private struct MatchDetailScoreboardHero: View {
             )
         )
         .accessibilityHint("View team details")
+        .prewarmTeamStadiumPhoto(
+            for: destinationContext,
+            candidateMatches: [match],
+            apiBaseURL: preferences.apiBaseURL
+        )
     }
 
     private func teamColumn(
@@ -1837,6 +1810,7 @@ private struct MatchPenaltyShootoutSummary: View {
 
 private struct MatchEventsCard: View {
     @EnvironmentObject private var preferences: PreferencesStore
+    @ObservedObject private var teamColorCatalog = TeamColorCatalog.shared
     @State private var selectedPlayer: MatchLineupPlayer?
     @State private var sortOrder = MatchEventSortOrder.defaultOrder
 
@@ -1849,6 +1823,46 @@ private struct MatchEventsCard: View {
             }
             return left.title.localizedCaseInsensitiveCompare(right.title) == .orderedAscending
         }
+    }
+
+    private var homeTeamName: String {
+        match.teamLineups?.home?.team ?? match.displayHomeTeam
+    }
+
+    private var awayTeamName: String {
+        match.teamLineups?.away?.team ?? match.displayAwayTeam
+    }
+
+    private var homeTeamColors: TeamLineupNumberColors {
+        teamColorCatalog.lineupColors(
+            for: homeTeamName,
+            opponentTeamName: awayTeamName,
+            isAway: false
+        )
+    }
+
+    private var awayTeamColors: TeamLineupNumberColors {
+        teamColorCatalog.lineupColors(
+            for: awayTeamName,
+            opponentTeamName: homeTeamName,
+            isAway: true
+        )
+    }
+
+    private var homeEventColors: TeamLineupNumberColors {
+        teamColorCatalog.lineupColors(
+            for: homeTeamName,
+            opponentTeamName: nil,
+            isAway: false
+        )
+    }
+
+    private var awayEventColors: TeamLineupNumberColors {
+        teamColorCatalog.lineupColors(
+            for: awayTeamName,
+            opponentTeamName: nil,
+            isAway: false
+        )
     }
 
     var body: some View {
@@ -1915,41 +1929,38 @@ private struct MatchEventsCard: View {
 
     @ViewBuilder
     private func eventCard(_ entry: MatchEventEntry, isFirst: Bool, isLast: Bool) -> some View {
-        let isHome = entry.side == .home
         let isGoal = entry.kind == .goal
+        let hasTeamLeadingRail = isGoal || entry.kind == .redCard
         let player = entry.player
+        let teamColors = eventColors(for: entry.side)
 
         Button {
             if let player, player.idPlayer != nil {
                 selectedPlayer = player
             }
         } label: {
-            HStack(spacing: 0) {
-                minuteText(entry.minute, isGoal: isGoal)
+            VStack(alignment: .leading, spacing: 4) {
+                eventTeamIdentity(for: entry.side)
 
-                timelineRail(
-                    entry: entry,
-                    showsEventIcon: isGoal || isHome,
-                    isFirst: isFirst,
-                    isLast: isLast
-                )
+                HStack(spacing: 0) {
+                    minuteText(entry.minute, isGoal: isGoal)
 
-                if entry.kind == .substitution {
-                    substitutionEventContent(entry, isHome: isHome)
-                } else if !isHome && !isGoal {
-                    Spacer(minLength: 6)
-                    eventText(entry, alignment: .trailing, textAlignment: .trailing)
-                    eventIcon(entry.kind)
-                        .frame(width: 30, height: 30)
-                        .padding(.leading, 8)
-                    eventPortrait(player, entry: entry)
-                        .padding(.leading, 10)
-                } else {
-                    eventText(entry, alignment: .leading, textAlignment: .leading)
+                    timelineRail(
+                        entry: entry,
+                        isFirst: isFirst,
+                        isLast: isLast
+                    )
+
+                    if entry.kind == .substitution {
+                        substitutionNames(entry)
+                    } else {
+                        eventText(entry)
+                    }
                     Spacer(minLength: 8)
                     eventPortrait(player, entry: entry)
                 }
             }
+            .padding(.leading, 10)
             .padding(.trailing, 12)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, minHeight: entry.kind == .substitution ? 104 : 88)
@@ -1959,72 +1970,90 @@ private struct MatchEventsCard: View {
         .allowsHitTesting(player?.idPlayer != nil)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(isGoal ? Color.green.opacity(0.12) : Color(.tertiarySystemBackground))
+                .fill(Color(.tertiarySystemBackground))
+                .overlay {
+                    if isGoal {
+                        ZStack {
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(teamColors.foreground.opacity(0.06))
+                            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                .fill(teamColors.background.opacity(0.20))
+                        }
+                    }
+                }
         )
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(
-                    isGoal ? Color.green.opacity(0.55) : Color.primary.opacity(0.06),
-                    lineWidth: isGoal ? 1.2 : 1
-                )
-        )
-    }
-
-    @ViewBuilder
-    private func substitutionEventContent(_ entry: MatchEventEntry, isHome: Bool) -> some View {
-        HStack(alignment: .center, spacing: 8) {
-            if isHome {
-                substitutionNames(entry, isTrailing: false)
-                Spacer(minLength: 8)
-                eventPortrait(entry.player, entry: entry)
-            } else {
-                Spacer(minLength: 8)
-                substitutionNames(entry, isTrailing: true)
-                eventIcon(.substitution)
-                    .frame(width: 30, height: 30)
-                eventPortrait(entry.player, entry: entry)
+        .overlay {
+            ZStack {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(
+                        isGoal ? teamColors.foreground.opacity(0.38) : Color.primary.opacity(0.06),
+                        lineWidth: isGoal ? 2.4 : 1
+                    )
+                if isGoal {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(teamColors.background.opacity(0.88), lineWidth: 1.2)
+                }
             }
         }
+        .overlay(alignment: .leading) {
+            if hasTeamLeadingRail {
+                Rectangle()
+                    .fill(teamColors.background)
+                    .frame(width: isGoal ? 5 : 4)
+                    .overlay(alignment: .trailing) {
+                        Rectangle()
+                            .fill(teamColors.foreground.opacity(0.60))
+                            .frame(width: 1)
+                    }
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    @ViewBuilder
-    private func substitutionNames(_ entry: MatchEventEntry, isTrailing: Bool) -> some View {
-        let alignment: HorizontalAlignment = isTrailing ? .trailing : .leading
-        VStack(alignment: alignment, spacing: 5) {
+    private func eventTeamIdentity(for side: MatchEventEntry.Side) -> some View {
+        let teamName = teamName(for: side)
+        return HStack(spacing: 5) {
+            FantasyMatchTeamLogo(teamName: teamName, size: 14)
+
+            Text(teamName)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func substitutionNames(_ entry: MatchEventEntry) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
             HStack(spacing: 5) {
-                if isTrailing { Spacer(minLength: 0) }
                 Image(systemName: "arrow.down")
                     .foregroundStyle(.red)
                 Text(entry.playerOffName ?? "Player off")
-                if !isTrailing { Spacer(minLength: 0) }
             }
 
             HStack(spacing: 5) {
-                if isTrailing { Spacer(minLength: 0) }
                 Image(systemName: "arrow.up")
                     .foregroundStyle(.green)
                 Text(entry.playerOnName ?? entry.title)
                     .fontWeight(.semibold)
-                if !isTrailing { Spacer(minLength: 0) }
             }
         }
         .font(.caption)
         .foregroundStyle(.primary)
-        .multilineTextAlignment(isTrailing ? .trailing : .leading)
+        .multilineTextAlignment(.leading)
     }
 
     private func minuteText(_ minute: String, isGoal: Bool) -> some View {
         Text(minute)
-            .font(.system(size: 16, weight: .semibold, design: .rounded))
+            .font(.system(size: 16, weight: isGoal ? .bold : .semibold, design: .rounded))
             .monospacedDigit()
-            .foregroundStyle(isGoal ? Color.green : Color.primary)
+            .foregroundStyle(Color.primary)
             .frame(width: 50, alignment: .center)
     }
 
     private func timelineRail(
         entry: MatchEventEntry,
-        showsEventIcon: Bool,
         isFirst: Bool,
         isLast: Bool
     ) -> some View {
@@ -2036,23 +2065,15 @@ private struct MatchEventsCard: View {
             }
             .stroke(Color.secondary.opacity(0.52), lineWidth: 1.2)
 
-            Group {
-                if showsEventIcon {
-                    eventIcon(entry.kind)
-                        .frame(width: entry.kind == .goal ? 36 : 28, height: entry.kind == .goal ? 36 : 28)
-                } else {
-                    Circle()
-                        .fill(Color.secondary.opacity(0.75))
-                        .frame(width: 7, height: 7)
-                }
-            }
+            eventIcon(entry)
+                .frame(width: entry.kind == .goal ? 36 : 28, height: entry.kind == .goal ? 36 : 28)
             .position(x: proxy.size.width / 2, y: midpoint)
         }
         .frame(width: 44)
     }
 
-    private func eventText(_ entry: MatchEventEntry, alignment: HorizontalAlignment, textAlignment: TextAlignment) -> some View {
-        VStack(alignment: alignment, spacing: 3) {
+    private func eventText(_ entry: MatchEventEntry) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
             Text(entry.title)
                 .font(.subheadline.weight(entry.kind == .goal ? .bold : .medium))
                 .foregroundStyle(.primary)
@@ -2062,18 +2083,20 @@ private struct MatchEventsCard: View {
                     .foregroundStyle(.secondary)
             }
         }
-        .multilineTextAlignment(textAlignment)
+        .multilineTextAlignment(.leading)
     }
 
     @ViewBuilder
     private func eventPortrait(_ player: MatchLineupPlayer?, entry: MatchEventEntry) -> some View {
+        let teamColors = portraitColors(for: entry.playerSide ?? entry.side)
         if let player {
             MatchLineupPlayerPortraitView(
                 player: player,
-                borderColor: portraitBorderColor(for: entry.kind),
-                borderLineWidth: portraitBorderLineWidth(for: entry.kind),
-                glowColor: portraitGlowColor(for: entry.kind),
-                glowRadius: portraitGlowRadius(for: entry.kind)
+                borderColor: teamColors.background,
+                borderOutlineColor: teamColors.foreground,
+                borderLineWidth: 2,
+                glowColor: entry.kind == .goal ? teamColors.background.opacity(0.68) : .clear,
+                glowRadius: entry.kind == .goal ? 7 : 0
             )
         } else {
             ZStack {
@@ -2084,7 +2107,12 @@ private struct MatchEventsCard: View {
             }
             .frame(width: MatchLineupPlayerPortraitView.size, height: MatchLineupPlayerPortraitView.size)
             .overlay {
-                Circle().stroke(portraitBorderColor(for: entry.kind), lineWidth: 2)
+                ZStack {
+                    Circle()
+                        .stroke(teamColors.foreground.opacity(0.72), lineWidth: 3.5)
+                    Circle()
+                        .stroke(teamColors.background, lineWidth: 2)
+                }
             }
         }
     }
@@ -2098,65 +2126,64 @@ private struct MatchEventsCard: View {
         return initials.isEmpty ? "?" : initials.uppercased()
     }
 
-    private func portraitBorderColor(for kind: MatchEventEntry.Kind) -> Color {
-        switch kind {
-        case .goal:
-            return Color.green
-        case .yellowCard:
-            return Color.yellow
-        case .redCard:
-            return Color.red
-        case .varEvent, .substitution:
-            return Color.white.opacity(0.82)
-        }
-    }
-
-    private func portraitBorderLineWidth(for kind: MatchEventEntry.Kind) -> CGFloat {
-        switch kind {
-        case .goal, .yellowCard, .redCard:
-            return 2
-        case .varEvent, .substitution:
-            return 1.4
-        }
-    }
-
-    private func portraitGlowColor(for kind: MatchEventEntry.Kind) -> Color {
-        kind == .goal ? Color.green.opacity(0.7) : Color.clear
-    }
-
-    private func portraitGlowRadius(for kind: MatchEventEntry.Kind) -> CGFloat {
-        kind == .goal ? 8 : 0
-    }
-
     @ViewBuilder
-    private func eventIcon(_ kind: MatchEventEntry.Kind) -> some View {
-        switch kind {
-        case .goal:
-            ZStack {
-                Circle()
-                    .fill(Color.green)
+    private func eventIcon(_ entry: MatchEventEntry) -> some View {
+        let teamColors = eventColors(for: entry.side)
+        ZStack {
+            Circle()
+                .fill(teamColors.background)
+            Circle()
+                .stroke(teamColors.foreground.opacity(0.72), lineWidth: 1.2)
+
+            switch entry.kind {
+            case .goal:
                 Image(systemName: "soccerball")
                     .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(.white)
+                    .foregroundStyle(teamColors.foreground)
+            case .yellowCard:
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(Color.yellow)
+                    .frame(width: 11, height: 16)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                            .stroke(Color.black.opacity(0.32), lineWidth: 0.8)
+                    }
+            case .redCard:
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(Color.red)
+                    .frame(width: 11, height: 16)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 2, style: .continuous)
+                            .stroke(Color.white.opacity(0.46), lineWidth: 0.8)
+                    }
+            case .varEvent:
+                Image(systemName: "theatermask.and.paintbrush")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(teamColors.foreground)
+            case .substitution:
+                Image(systemName: "arrow.left.arrow.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(teamColors.foreground)
             }
-            .shadow(color: Color.green.opacity(0.55), radius: 6, x: 0, y: 0)
-        case .yellowCard:
-            RoundedRectangle(cornerRadius: 2, style: .continuous)
-                .fill(Color.yellow)
-                .frame(width: 13, height: 18)
-        case .redCard:
-            RoundedRectangle(cornerRadius: 2, style: .continuous)
-                .fill(Color.red)
-                .frame(width: 13, height: 18)
-        case .varEvent:
-            Image(systemName: "theatermask.and.paintbrush")
-                .font(.system(size: 16, weight: .medium))
-                .foregroundStyle(.orange)
-        case .substitution:
-            Image(systemName: "arrow.left.arrow.right")
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.secondary)
         }
+        .shadow(
+            color: entry.kind == .goal ? teamColors.background.opacity(0.52) : .clear,
+            radius: entry.kind == .goal ? 5 : 0,
+            x: 0,
+            y: 0
+        )
+    }
+
+    private func portraitColors(for side: MatchEventEntry.Side) -> TeamLineupNumberColors {
+        side == .home ? homeTeamColors : awayTeamColors
+    }
+
+    private func eventColors(for side: MatchEventEntry.Side) -> TeamLineupNumberColors {
+        side == .home ? homeEventColors : awayEventColors
+    }
+
+    private func teamName(for side: MatchEventEntry.Side) -> String {
+        side == .home ? homeTeamName : awayTeamName
     }
 
     private static func entries(for match: Match) -> [MatchEventEntry] {
@@ -2165,9 +2192,7 @@ private struct MatchEventsCard: View {
         appendGoals(
             from: match.homeGoalScorers,
             assists: match.homeAssists,
-            teamName: match.displayHomeTeam,
             side: .home,
-            ownGoalTeamName: match.displayAwayTeam,
             ownGoalSide: .away,
             match: match,
             to: &output
@@ -2175,17 +2200,15 @@ private struct MatchEventsCard: View {
         appendGoals(
             from: match.awayGoalScorers,
             assists: match.awayAssists,
-            teamName: match.displayAwayTeam,
             side: .away,
-            ownGoalTeamName: match.displayHomeTeam,
             ownGoalSide: .home,
             match: match,
             to: &output
         )
-        appendCards(from: match.homeYellowCards, teamName: match.displayHomeTeam, kind: .yellowCard, side: .home, match: match, to: &output)
-        appendCards(from: match.awayYellowCards, teamName: match.displayAwayTeam, kind: .yellowCard, side: .away, match: match, to: &output)
-        appendCards(from: match.homeRedCards, teamName: match.displayHomeTeam, kind: .redCard, side: .home, match: match, to: &output)
-        appendCards(from: match.awayRedCards, teamName: match.displayAwayTeam, kind: .redCard, side: .away, match: match, to: &output)
+        appendCards(from: match.homeYellowCards, kind: .yellowCard, side: .home, match: match, to: &output)
+        appendCards(from: match.awayYellowCards, kind: .yellowCard, side: .away, match: match, to: &output)
+        appendCards(from: match.homeRedCards, kind: .redCard, side: .home, match: match, to: &output)
+        appendCards(from: match.awayRedCards, kind: .redCard, side: .away, match: match, to: &output)
         appendVarEvents(from: match.homeVarEvents, side: .home, match: match, to: &output)
         appendVarEvents(from: match.awayVarEvents, side: .away, match: match, to: &output)
         appendSubstitutions(from: match.teamLineups?.home, side: .home, to: &output)
@@ -2197,9 +2220,7 @@ private struct MatchEventsCard: View {
     private static func appendGoals(
         from scorers: [MatchGoalScorer],
         assists: [MatchAssistProvider],
-        teamName: String,
         side: MatchEventEntry.Side,
-        ownGoalTeamName: String,
         ownGoalSide: MatchEventEntry.Side,
         match: Match,
         to output: inout [MatchEventEntry]
@@ -2221,8 +2242,7 @@ private struct MatchEventsCard: View {
                         side: side,
                         title: scorer.player,
                         subtitle: assistLookup[normalizedMinute(minute)]
-                            .map { "\(teamName)\nAssist: \($0)" }
-                            ?? teamName,
+                            .map { "Assist: \($0)" },
                         player: player
                     )
                 )
@@ -2235,8 +2255,9 @@ private struct MatchEventsCard: View {
                         kind: .goal,
                         side: ownGoalSide,
                         title: "\(scorer.player) (OG)",
-                        subtitle: ownGoalTeamName,
-                        player: player
+                        subtitle: nil,
+                        player: player,
+                        playerSide: side
                     )
                 )
             }
@@ -2248,7 +2269,7 @@ private struct MatchEventsCard: View {
                         kind: .goal,
                         side: side,
                         title: "\(scorer.player) disallowed goal",
-                        subtitle: teamName,
+                        subtitle: nil,
                         player: player
                     )
                 )
@@ -2258,7 +2279,6 @@ private struct MatchEventsCard: View {
 
     private static func appendCards(
         from cards: [MatchYellowCardEvent],
-        teamName: String,
         kind: MatchEventEntry.Kind,
         side: MatchEventEntry.Side,
         match: Match,
@@ -2279,7 +2299,7 @@ private struct MatchEventsCard: View {
                         kind: kind,
                         side: side,
                         title: card.player,
-                        subtitle: teamName,
+                        subtitle: nil,
                         player: player
                     )
                 )
@@ -2289,7 +2309,6 @@ private struct MatchEventsCard: View {
 
     private static func appendCards(
         from cards: [MatchRedCardEvent],
-        teamName: String,
         kind: MatchEventEntry.Kind,
         side: MatchEventEntry.Side,
         match: Match,
@@ -2310,7 +2329,7 @@ private struct MatchEventsCard: View {
                         kind: kind,
                         side: side,
                         title: card.player,
-                        subtitle: teamName,
+                        subtitle: nil,
                         player: player
                     )
                 )
@@ -2460,6 +2479,7 @@ private struct MatchEventEntry: Identifiable {
     let title: String
     let subtitle: String?
     let player: MatchLineupPlayer?
+    var playerSide: Side? = nil
     var playerOff: MatchLineupPlayer? = nil
     var playerOffName: String? = nil
     var playerOnName: String? = nil
@@ -3171,12 +3191,7 @@ private struct MatchLineupTeamPanelsView: View {
         teamColorCatalog.lineupColors(
             for: homeTeamName,
             opponentTeamName: awayTeamName,
-            isAway: false,
-            fallbackColors: TeamLineupNumberColors(
-                background: .yellow,
-                foreground: .black,
-                outline: nil
-            )
+            isAway: false
         )
     }
 
@@ -3184,12 +3199,7 @@ private struct MatchLineupTeamPanelsView: View {
         teamColorCatalog.lineupColors(
             for: awayTeamName,
             opponentTeamName: homeTeamName,
-            isAway: true,
-            fallbackColors: TeamLineupNumberColors(
-                background: .red,
-                foreground: .black,
-                outline: nil
-            )
+            isAway: true
         )
     }
 

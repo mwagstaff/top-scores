@@ -23,6 +23,7 @@
 // ---------------------------------------------------------------------------
 
 const bsd = require("./bsd_client");
+const { refreshCatalogue } = require("./fetch_bsd_catalogue");
 const http = require("http");
 const crypto = require("crypto");
 const bsdHttpMetrics = require("./bsd_http_metrics");
@@ -96,6 +97,7 @@ let lastLivePollAt = 0;
 let incidentsPollInFlight = false;
 let lineupsPollInFlight = false;
 let referenceRefreshInFlight = false;
+let catalogueAbortController = new AbortController();
 let eventsRefreshInFlight = false;
 let broadcastsRefreshInFlight = false;
 let predictionsRefreshInFlight = false;
@@ -743,7 +745,18 @@ async function refreshManagers() {
   }
 }
 
+async function refreshGameCatalogue() {
+  try {
+    const result = await refreshCatalogue({ signal: catalogueAbortController.signal });
+    if (!result.skipped && result.succeeded > 0) markPollSuccess("game_catalogue");
+    if (!result.skipped) console.log(`[bsd-runtime] game catalogue: ${result.succeeded} published, ${result.failed} failed`);
+  } catch (error) {
+    console.error(`[bsd-runtime] game catalogue refresh failed: ${error.message || error}`);
+  }
+}
+
 function start() {
+  catalogueAbortController = new AbortController();
   console.log(
     `[bsd-runtime] starting (live=${LIVE_POLL_MS}ms, live_idle=${LIVE_IDLE_POLL_MS}ms, incidents=${INCIDENTS_POLL_MS}ms, ` +
       `lineups=${LINEUPS_POLL_MS}ms, events=${EVENTS_REFRESH_MS}ms, reference=${REFERENCE_REFRESH_MS}ms, ` +
@@ -764,6 +777,9 @@ function start() {
   pollLiveEvents();
   pollLineups();
   scheduleStandingsDailyRefresh();
+  // Due competitions refresh daily; hourly checks retry failures and avoid a
+  // complete re-ingestion whenever the poller is restarted.
+  void refreshGameCatalogue();
 
   timers.push(setInterval(pollLiveEvents, LIVE_POLL_MS));
   timers.push(setInterval(pollIncidents, INCIDENTS_POLL_MS));
@@ -774,9 +790,11 @@ function start() {
   timers.push(setInterval(refreshBroadcasts, BROADCASTS_REFRESH_MS));
   timers.push(setInterval(refreshPredictions, PREDICTIONS_REFRESH_MS));
   timers.push(setInterval(refreshManagers, MANAGERS_REFRESH_MS));
+  timers.push(setInterval(refreshGameCatalogue, 60 * 60 * 1000));
 }
 
 async function stop(signal) {
+  catalogueAbortController.abort();
   console.log(`[bsd-runtime] ${signal} received, shutting down`);
   timers.forEach((timer) => clearInterval(timer));
   timers = [];
@@ -787,6 +805,9 @@ async function stop(signal) {
   settlementTimers.forEach((timer) => clearTimeout(timer));
   settlementTimers.clear();
   try {
+    // Let the cancelled catalogue request unwind and release its Mongo lease
+    // before closing the shared connection or exiting the process.
+    await refreshCatalogue({ signal: catalogueAbortController.signal }).catch(() => {});
     await closeMetricsServer();
     await closeMongoConnection();
   } catch (_err) {

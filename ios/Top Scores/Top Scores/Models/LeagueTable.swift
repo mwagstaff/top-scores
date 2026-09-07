@@ -1,5 +1,32 @@
 import Foundation
 
+// These knockout-only competitions have no league or group standings.
+// Share the rule between Tables and the Scores competition heading links.
+enum TableCompetitionAvailability {
+    private static let knockoutOnlyKeys: Set<String> = [
+        "39", "facup", "englishfacup",
+        "40", "eflcup", "englishleaguecup", "carabaocup",
+        "41", "copadelrey",
+        "43", "dfbpokal",
+        "42", "coppaitalia",
+        "44", "coupedefrance",
+        "90", "uefasupercup"
+    ]
+
+    static func supportsTable(competitionID: String?, competitionName: String) -> Bool {
+        ![competitionID, competitionName].compactMap { $0 }.contains { value in
+            let key = value.lowercased().filter { $0.isLetter || $0.isNumber }
+            return knockoutOnlyKeys.contains(key)
+        }
+    }
+
+    static func eligibleLeagues(_ leagues: [LeagueTable]) -> [LeagueTable] {
+        leagues.filter {
+            supportsTable(competitionID: $0.leagueID, competitionName: $0.leagueName)
+        }
+    }
+}
+
 struct LeagueTablesEnvelope: Codable, Hashable, Sendable {
     let updatedAt: String?
     let count: Int?

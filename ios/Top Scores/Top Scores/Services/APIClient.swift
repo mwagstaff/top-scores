@@ -480,7 +480,14 @@ struct APIClient {
         let request = try buildRequest(path: "matches", queryItems: queryItems)
         let (data, http) = try await performRequest(request, operation: "fixture_browse_matches")
         try validateSuccess(http, data: data, operation: "fixture_browse_matches")
-        let decoded = try decodeMatches(from: data, operation: "fixture_browse_matches")
+        let decodingTask = Task.detached(priority: .userInitiated) {
+            try Self.decodeMatchesPayload(from: data, operation: "fixture_browse_matches")
+        }
+        let decoded = try await withTaskCancellationHandler {
+            try await decodingTask.value
+        } onCancel: {
+            decodingTask.cancel()
+        }
         return MatchResponse(
             matches: hydrateStates ? try await hydrateMatchStates(decoded) : decoded,
             lastUpdated: Self.lastUpdated(from: http),
@@ -664,6 +671,26 @@ struct APIClient {
         try validateSuccess(http, data: data, operation: "team_colors")
         return try JSONDecoder().decode(TeamColorsCatalogResponse.self, from: data)
     }
+
+    #if DEBUG
+    func deleteStadiumArtwork(asset: StadiumArtworkAsset, adminToken: String) async throws -> StadiumArtworkCatalog {
+        var request = try buildRequest(path: "stadium-artwork/admin/assets/\(asset.id)", queryItems: [])
+        guard request.url?.scheme == "https" else {
+            throw NSError(domain: "StadiumArtworkAdmin", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "Use an HTTPS API address for artwork administration."])
+        }
+        request.httpMethod = "DELETE"
+        request.setValue("Bearer \(adminToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("\"\(asset.sha256)\"", forHTTPHeaderField: "If-Match")
+        let (data, http) = try await performRequest(request, operation: "stadium_artwork_delete", maxAttempts: 1)
+        if !(200..<300).contains(http.statusCode) {
+            let message = (try? JSONDecoder().decode([String: String].self, from: data))?["error"]
+            throw NSError(domain: "StadiumArtworkAdmin", code: http.statusCode,
+                          userInfo: [NSLocalizedDescriptionKey: message ?? "Image deletion failed. Refresh and try again."])
+        }
+        return try JSONDecoder().decode(StadiumArtworkCatalog.self, from: data)
+    }
+    #endif
 
     func fetchStadiumArtworkCatalog(ifNoneMatch: String?) async throws -> StadiumArtworkFetchResult {
         var request = try buildRequest(path: "stadium-artwork/catalog", queryItems: [])
@@ -1275,6 +1302,13 @@ struct APIClient {
     }
 
     private func decodeMatches(from data: Data, operation: String) throws -> [Match] {
+        try Self.decodeMatchesPayload(from: data, operation: operation)
+    }
+
+    private nonisolated static func decodeMatchesPayload(
+        from data: Data,
+        operation: String
+    ) throws -> [Match] {
         do {
             return try JSONDecoder().decode([Match].self, from: data)
         } catch {
@@ -1287,7 +1321,10 @@ struct APIClient {
         }
     }
 
-    private func decodeMatchesLossy(from data: Data, operation: String) throws -> [Match] {
+    private nonisolated static func decodeMatchesLossy(
+        from data: Data,
+        operation: String
+    ) throws -> [Match] {
         let root = try JSONSerialization.jsonObject(with: data)
         let items: [Any]
         if let arrayRoot = root as? [Any] {

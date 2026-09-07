@@ -2209,6 +2209,33 @@ test("buildLiveActivityContentState sends penalty shootout score in home-away or
   assert.equal(contentState.matches[0].penaltyResult, "P 2-3");
 });
 
+test("liveActivityPayloadMetrics does not throw when estimating archive size", () => {
+  const contentState = __testHooks.buildLiveActivityContentState(
+    "single_live",
+    [
+      {
+        match_details_id: "9101",
+        date: "2026-09-05",
+        time: "19:45",
+        league: "National League",
+        home_team: "Hartlepool United",
+        away_team: "Woking",
+        home_score: 1,
+        away_score: 0,
+        score_status: "63",
+      },
+    ],
+    0,
+    Date.parse("2026-09-05T19:50:00Z")
+  );
+
+  const metrics = __testHooks.liveActivityPayloadMetrics(contentState, Date.now());
+
+  assert.equal(typeof metrics.contentStateBytes, "number");
+  assert.equal(typeof metrics.archiveEstimateBytes, "number");
+  assert.ok(metrics.archiveEstimateBytes > metrics.contentStateBytes);
+});
+
 test("buildLiveActivityContentState clears pre-kickoff live status and uses primary canonical TV logo", () => {
   const contentState = __testHooks.buildLiveActivityContentState(
     "multi_live",
@@ -6314,7 +6341,7 @@ test("evaluateUserNotificationDecision blocks non-Premier League matches when EP
   });
 });
 
-test("evaluateUserNotificationDecision allows Premier League matches when EPL-only filter is enabled", () => {
+test("evaluateUserNotificationDecision fails closed for EPL-only when the ID filter is unavailable", () => {
   const decision = __testHooks.evaluateUserNotificationDecision(
     {
       apnsToken: "apns-token",
@@ -6336,11 +6363,11 @@ test("evaluateUserNotificationDecision allows Premier League matches when EPL-on
     }
   );
 
-  assert.equal(decision.shouldNotify, true);
-  assert.equal(decision.reason, "eligible");
+  assert.equal(decision.shouldNotify, false);
+  assert.equal(decision.reason, "premier_league_team_filter");
 });
 
-test("evaluateUserNotificationDecision includes major international matches when All major matches is enabled", () => {
+test("evaluateUserNotificationDecision fails closed when the major-match filter is unavailable", () => {
   const decision = __testHooks.evaluateUserNotificationDecision(
     {
       apnsToken: "apns-token",
@@ -6360,8 +6387,8 @@ test("evaluateUserNotificationDecision includes major international matches when
     { type: "goal" }
   );
 
-  assert.equal(decision.shouldNotify, true);
-  assert.equal(decision.reason, "eligible");
+  assert.equal(decision.shouldNotify, false);
+  assert.equal(decision.reason, "all_major_matches_filter");
 });
 
 test("evaluateUserNotificationDecision uses the Fixtures current-season category filter", () => {

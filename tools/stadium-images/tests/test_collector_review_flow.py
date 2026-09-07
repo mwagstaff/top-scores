@@ -179,10 +179,11 @@ def test_stages_only_suitable_images_above_threshold(tmp_path):
         result,
         staging_root=tmp_path,
         slug="example-stadium",
-        teams=[{"name": "Example FC", "aliases": []}],
+        teams=[{"name": "Example FC", "bsd_team_id": "123", "aliases": []}],
         session=FakeSession(png_bytes()),
     )
     manifest = json.loads((destination / "manifest.json").read_text())
+    assert destination.name == "example-fc-123"
     assert len(manifest["staged_images"]) == 1
     assert manifest["staged_images"][0]["assessment"]["index"] == 0
     assert (destination / manifest["staged_images"][0]["filename"]).is_file()
@@ -191,8 +192,8 @@ def test_stages_only_suitable_images_above_threshold(tmp_path):
 def test_single_stadium_queries_add_club_context_without_changing_stadium_name():
     queries = find_images.build_queries("Emirates Stadium", "Arsenal")
 
-    assert len(queries) == 5
-    assert all(query.startswith("Emirates Stadium Arsenal ") for query in queries)
+    assert any("Arsenal" in query and "tifo" in query for query in queries)
+    assert any("Emirates Stadium" in query for query in queries)
 
 
 def test_vision_thumbnail_is_resized_and_embedded_as_a_data_url():
@@ -291,9 +292,9 @@ def test_league_scopes_resolve_every_configured_club():
     championship, _ = collect_all.load_collection_targets(scopes={"championship"})
 
     assert len(premier) == 20
-    assert len(championship) == 24
+    assert len(championship) == 5
     assert any(target["slug"] == "emirates-stadium" for target in premier)
-    assert any(target["slug"] == "vicarage-road" for target in championship)
+    assert all("Club Elo" in target["source"] for target in championship)
     assert all(target["search_terms"] for target in premier + championship)
 
 
@@ -380,7 +381,7 @@ def test_promotion_uses_only_files_remaining_after_review(tmp_path):
         "schema_version": 1,
         "stadium": "Example Stadium",
         "slug": "example-stadium",
-        "teams": [{"name": "Example FC", "aliases": ["Example"]}],
+        "teams": [{"name": "Example FC", "bsd_team_id": "123", "aliases": ["Example"]}],
         "staged_images": [
             {
                 "filename": kept_name,
@@ -413,6 +414,87 @@ def test_promotion_uses_only_files_remaining_after_review(tmp_path):
     assert count == 1
     config = yaml.safe_load((deployment / "publishing.yaml").read_text())
     assert len(config["assets"]) == 1
-    assert config["assets"][0]["light_context"] == "night"
+    assert config["assets"][0]["light_context"] == "any"
     assert config["assets"][0]["credit"]["author"] == "Jane Smith"
     assert not (deployment / "assets/example-stadium/02-080-deleted.png").exists()
+
+    assert "assets/example-fc-123/" in config["assets"][0]["file"]
+    assert (tmp_path / config["assets"][0]["file"]).is_file()
+
+
+def test_promotion_preserves_previous_batches_and_is_idempotent(tmp_path):
+    staging = tmp_path / "staging" / "example"
+    staging.mkdir(parents=True)
+    data = png_bytes()
+    image = {
+        "filename": "kept.png", "sha256": hashlib.sha256(data).hexdigest(),
+        "source": {"artist": "Jane", "license": "CC BY 4.0",
+                   "commons_page": "https://commons.wikimedia.org/wiki/File:Example.jpg"},
+    }
+    (staging / "kept.png").write_bytes(data)
+    (staging / "manifest.json").write_text(json.dumps({
+        "schema_version": 1, "stadium": "Example", "slug": "example",
+        "teams": [{"name": "Example FC", "bsd_team_id": "123"}], "staged_images": [image],
+    }))
+    deployment = tmp_path / "deployment"
+    def promote():
+        return promote_reviewed.promote_reviewed_images(tmp_path / "staging", deployment, tmp_path)
+    assert promote()[1] == 1
+    assert promote()[1] == 0
+    archive = promote_reviewed.archive_reviewed_staging(tmp_path / "staging")
+    assert (archive / "example/manifest.json").exists()
+    assert not list((tmp_path / "staging").iterdir())
+    second = tmp_path / "staging" / "second"
+    second.mkdir()
+    (second / "kept.png").write_bytes(data)
+    (second / "manifest.json").write_text(json.dumps({
+        "schema_version": 1, "stadium": "Second", "slug": "second",
+        "teams": [{"name": "Second FC", "bsd_team_id": "456"}], "staged_images": [image],
+    }))
+    assert promote()[1] == 1
+    config = yaml.safe_load((deployment / "publishing.yaml").read_text())
+    assert len(config["assets"]) == 2
+    assert all((tmp_path / asset["file"]).exists() for asset in config["assets"])
+
+
+def test_championship_selection_uses_elo_not_configuration_order():
+    targets, _ = collect_all.load_collection_targets(scopes={"championship"})
+    assert [target["club"] for target in targets] == [
+        "West Ham United", "Wolverhampton Wanderers", "Burnley", "Middlesbrough", "Southampton"
+    ]
+
+
+def test_shared_ground_galleries_only_include_qualifying_clubs():
+    targets, _ = collect_all.load_collection_targets(scopes={"major"})
+    assert all(len(target["teams"]) == 1 for target in targets)
+    assert any(target["club"] == "AC Milan" for target in targets)
+    assert any(target["club"] == "Inter Milan" for target in targets)
+    assert not any(target["club"] == "Lazio" for target in targets)
+
+
+def test_existing_originals_move_atomically_and_remain_publishable(tmp_path):
+    from stadium_images.publishing import build_publish_bundle
+    deployment = tmp_path / "deployment"
+    old = deployment / "assets/example-stadium/photo.png"
+    old.parent.mkdir(parents=True)
+    old.write_bytes(png_bytes())
+    config = {"schema_version": 1,
+              "teams": {"example-fc": {"name": "Example FC", "bsd_team_id": "123"}},
+              "assets": [{"id": "example-photo", "file": old.relative_to(tmp_path).as_posix(),
+                          "role": "team", "team_ids": ["example-fc"],
+                          "credit": {"author": "Jane", "source": "Wikimedia Commons",
+                                     "license": "CC BY 4.0", "attribution": "Jane"}}]}
+    (deployment / "publishing.yaml").write_text(yaml.safe_dump(config))
+    assert promote_reviewed.organize_existing_images(deployment, tmp_path) == 1
+    assert not old.exists()
+    moved = deployment / "assets/example-fc-123/photo.png"
+    assert moved.read_bytes() == png_bytes()
+    assert promote_reviewed.organize_existing_images(deployment, tmp_path) == 1
+    catalog = build_publish_bundle(deployment / "publishing.yaml", tmp_path / "published", tmp_path)
+    assert catalog["assets"][0]["asset_path"].startswith("assets/example-fc-123/")
+    moved.unlink()
+    before = (deployment / "publishing.yaml").read_bytes()
+    import pytest
+    with pytest.raises(FileNotFoundError):
+        promote_reviewed.organize_existing_images(deployment, tmp_path)
+    assert (deployment / "publishing.yaml").read_bytes() == before

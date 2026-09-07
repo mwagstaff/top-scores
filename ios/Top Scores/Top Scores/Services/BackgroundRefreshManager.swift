@@ -33,9 +33,13 @@ enum BackgroundRefreshManager {
             let snapshot = PreferencesStore.loadSnapshot()
             scheduleNextRefresh(intervalMinutes: snapshot.refreshIntervalMinutes)
             async let fantasyRefresh: Void = refreshFantasySnapshotIfNeeded()
+            async let missingLogoAuditCleanup: Void = MissingTeamLogoAuditCleanupService.shared.pruneIfNeeded(
+                apiBaseURL: snapshot.apiBaseURL
+            )
 
             guard let baseURL = URL(string: snapshot.apiBaseURL) else {
                 await fantasyRefresh
+                await missingLogoAuditCleanup
                 task.setTaskCompleted(success: false)
                 return
             }
@@ -88,12 +92,14 @@ enum BackgroundRefreshManager {
                     snapshot: snapshot
                 )
                 await fantasyRefresh
+                await missingLogoAuditCleanup
                 await PreferencesSyncService.shared.syncPreferences(snapshot)
                 await AppIconBadgeManager.update(preferences: snapshot, matches: sorted)
                 scheduleNextRefresh(intervalMinutes: snapshot.refreshIntervalMinutes)
                 task.setTaskCompleted(success: true)
             } catch {
                 await fantasyRefresh
+                await missingLogoAuditCleanup
                 await PreferencesSyncService.shared.syncPreferences(snapshot)
                 task.setTaskCompleted(success: false)
             }

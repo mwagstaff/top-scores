@@ -40,8 +40,56 @@ const NON_MEMBERSHIP_MATCH_STATUSES = new Set([
   "postponed",
 ]);
 
+const CLUB_DESIGNATOR_PREFIX = /^(?:A\.?F\.?C\.?|A\.?C\.?|A\.?S\.?|C\.?D\.?|C\.?F\.?|F\.?C\.?|F\.?K\.?|HŠK|IFK|MŠK|N\.?K\.?|R\.?C\.?D?\.?|S\.?C\.?|S\.?K\.?|ŠK|S\.?V\.?|U\.?D\.?)\s+/i;
+const CLUB_DESIGNATOR_SUFFIX = /\s+(?:A\.?F\.?C\.?|A\.?I\.?F\.?|C\.?F\.?|F\.?C\.?|F\.?K\.?|I\.?L\.?|J\.?K\.?|P\.?F\.?K\.?|S\.?K\.?|T\.?C\.?)$/i;
+
+function transliteratedSearchName(value) {
+  return String(value || "")
+    .replace(/Æ/g, "AE")
+    .replace(/æ/g, "ae")
+    .replace(/Œ/g, "OE")
+    .replace(/œ/g, "oe")
+    .replace(/Ø/g, "O")
+    .replace(/ø/g, "o")
+    .replace(/Ð/g, "D")
+    .replace(/ð/g, "d")
+    .replace(/Þ/g, "Th")
+    .replace(/þ/g, "th")
+    .replace(/Ł/g, "L")
+    .replace(/ł/g, "l")
+    .replace(/Đ/g, "D")
+    .replace(/đ/g, "d")
+    .replace(/İ/g, "I")
+    .replace(/ı/g, "i")
+    .replace(/ß/g, "ss")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function derivedTeamSearchAliases(names) {
+  const aliases = new Set();
+
+  (Array.isArray(names) ? names : []).forEach((rawName) => {
+    const name = String(rawName || "").replace(/\s+/g, " ").trim();
+    if (!name) return;
+
+    const transliterated = transliteratedSearchName(name);
+    if (transliterated && transliterated !== name) aliases.add(transliterated);
+
+    for (const candidate of [name, transliterated]) {
+      const withoutPrefix = candidate.replace(CLUB_DESIGNATOR_PREFIX, "").trim();
+      const withoutDesignators = withoutPrefix.replace(CLUB_DESIGNATOR_SUFFIX, "").trim();
+      if (withoutDesignators && withoutDesignators !== candidate) {
+        aliases.add(withoutDesignators);
+      }
+    }
+  });
+
+  return Array.from(aliases);
+}
+
 function normalizedSearchValue(value) {
-  return normalizeTeamIdentityName(value)
+  return normalizeTeamIdentityName(transliteratedSearchName(value))
     .replace(/[^a-z0-9]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -150,6 +198,9 @@ function buildTeamCatalog(matches, competitions, options = {}) {
     const identityNames = Array.from(
       new Set([canonicalName, trimmed, ...teamIdentityNames(canonicalName)].filter(Boolean))
     );
+    const searchNames = Array.from(
+      new Set([...identityNames, ...derivedTeamSearchAliases(identityNames)])
+    );
     const identityKey = stableSlug(canonicalName);
     if (!identityKey) return;
 
@@ -168,8 +219,8 @@ function buildTeamCatalog(matches, competitions, options = {}) {
       teamsByIdentity.set(identityKey, entry);
     }
 
-    identityNames.forEach((name) => {
-      if (normalizedSearchValue(name) !== normalizedSearchValue(entry.name)) {
+    searchNames.forEach((name) => {
+      if (String(name).toLocaleLowerCase() !== String(entry.name).toLocaleLowerCase()) {
         entry.aliases.add(name);
       }
     });
@@ -314,6 +365,7 @@ module.exports = {
   buildTeamCatalog,
   buildTeamCatalogIndex,
   filterTeamCatalog,
+  derivedTeamSearchAliases,
   normalizedSearchValue,
   preferredStableTeamId,
   stableSlug,

@@ -88,7 +88,7 @@ final class FantasyViewModel: ObservableObject {
     @Published private(set) var previousTeamData: FantasySquadDisplayData?
     @Published private(set) var rivalSquads: [FantasyRivalSquad] = []
     @Published private(set) var trackedLeagueStandings: [FantasyTrackedLeagueStanding] = []
-    @Published private(set) var leagueWildcardStatusByEntryID: [Int: Bool] = [:]
+    @Published private(set) var leagueChipsByEntryID: [Int: [FantasyChip]] = [:]
     @Published private(set) var leagueInPlayStatusByEntryID: [Int: Bool] = [:]
     @Published private(set) var myProfile: FantasyEntryProfile?
     @Published private(set) var lastUpdated: Date?
@@ -244,7 +244,7 @@ final class FantasyViewModel: ObservableObject {
         previousTeamData = nil
         rivalSquads = []
         trackedLeagueStandings = []
-        leagueWildcardStatusByEntryID = [:]
+        leagueChipsByEntryID = [:]
         leagueInPlayStatusByEntryID = [:]
         myProfile = nil
         lastUpdated = nil
@@ -379,7 +379,7 @@ final class FantasyViewModel: ObservableObject {
 
         if leagueEntryStatusGameweekID != gameweekID {
             leagueEntryStatusGameweekID = gameweekID
-            leagueWildcardStatusByEntryID = [:]
+            leagueChipsByEntryID = [:]
             leagueInPlayStatusByEntryID = [:]
             leagueSelectedElementIDsByEntryID = [:]
         }
@@ -387,14 +387,14 @@ final class FantasyViewModel: ObservableObject {
         if let authenticatedEntryID {
             let ownSquad = data?.gameweekID == gameweekID ? data : previousTeamData
             if let ownSquad, ownSquad.gameweekID == gameweekID {
-                leagueWildcardStatusByEntryID[authenticatedEntryID] = ownSquad.hasWildcardActive
+                leagueChipsByEntryID[authenticatedEntryID] = ownSquad.activeChips
                 leagueSelectedElementIDsByEntryID[authenticatedEntryID] = Set(
                     ownSquad.allPlayers.map(\.elementID)
                 )
             }
         }
         for rival in rivalSquads where rival.squad.gameweekID == gameweekID {
-            leagueWildcardStatusByEntryID[rival.entryID] = rival.squad.hasWildcardActive
+            leagueChipsByEntryID[rival.entryID] = rival.squad.activeChips
             leagueSelectedElementIDsByEntryID[rival.entryID] = Set(
                 rival.squad.allPlayers.map(\.elementID)
             )
@@ -403,13 +403,13 @@ final class FantasyViewModel: ObservableObject {
         let unresolvedEntryIDs = standings
             .map(\.entry)
             .filter {
-                leagueWildcardStatusByEntryID[$0] == nil
+                leagueChipsByEntryID[$0] == nil
                     || leagueSelectedElementIDsByEntryID[$0] == nil
             }
 
         if !unresolvedEntryIDs.isEmpty {
             let publicClient = fantasyPublicClient
-            await withTaskGroup(of: (Int, Bool?, Set<Int>?).self) { group in
+            await withTaskGroup(of: (Int, [FantasyChip]?, Set<Int>?).self) { group in
                 let maximumConcurrentRequests = 6
                 let initialRequestCount = min(maximumConcurrentRequests, unresolvedEntryIDs.count)
                 for entryID in unresolvedEntryIDs.prefix(initialRequestCount) {
@@ -420,20 +420,20 @@ final class FantasyViewModel: ObservableObject {
                         )
                         return (
                             entryID,
-                            picks?.activeChips.contains(where: \.isWildcard),
+                            picks?.activeChips,
                             picks.map { Set($0.picks.map(\.element)) }
                         )
                     }
                 }
 
                 var nextEntryIndex = initialRequestCount
-                while let (entryID, hasWildcard, selectedElementIDs) = await group.next() {
+                while let (entryID, activeChips, selectedElementIDs) = await group.next() {
                     guard !Task.isCancelled else {
                         group.cancelAll()
                         return
                     }
-                    if let hasWildcard {
-                        leagueWildcardStatusByEntryID[entryID] = hasWildcard
+                    if let activeChips {
+                        leagueChipsByEntryID[entryID] = activeChips
                     }
                     if let selectedElementIDs {
                         leagueSelectedElementIDsByEntryID[entryID] = selectedElementIDs
@@ -448,7 +448,7 @@ final class FantasyViewModel: ObservableObject {
                             )
                             return (
                                 nextEntryID,
-                                picks?.activeChips.contains(where: \.isWildcard),
+                                picks?.activeChips,
                                 picks.map { Set($0.picks.map(\.element)) }
                             )
                         }
@@ -534,28 +534,19 @@ final class FantasyViewModel: ObservableObject {
                 ?? snapshot.gameweek
             let previousDataChecked = snapshot.gameweek.dataChecked == true
 
-            let refreshedPicks: FantasyPicksResponse
             let refreshedLive: FantasyEventLiveResponse
-            let refreshedFixtures: [FantasyFixture]
-            if refreshedGameweek.isCurrent == true || refreshedGameweek.dataChecked == true {
-                async let picksTask = fantasyPublicClient.fetchPicks(
-                    entryID: entryID,
-                    eventID: refreshedGameweek.id
-                )
-                async let liveTask = fantasyPublicClient.fetchEventLive(eventID: refreshedGameweek.id)
-                async let fixturesTask = fantasyPublicClient.fetchEventFixtures(eventID: refreshedGameweek.id)
-                (refreshedPicks, refreshedLive, refreshedFixtures) = try await (
-                    picksTask,
-                    liveTask,
-                    fixturesTask
-                )
+            if FantasyTeamGameweekResolver.isLiveScoringGameweek(refreshedGameweek)
+                || refreshedGameweek.dataChecked == true {
+                refreshedLive = try await timed(
+                    "current_score_live event_id=\(refreshedGameweek.id)"
+                ) {
+                    try await fantasyPublicClient.fetchEventLive(eventID: refreshedGameweek.id)
+                }
             } else {
-                refreshedPicks = snapshot.picksResponse
                 refreshedLive = FantasyEventLiveResponse(elements: [])
-                refreshedFixtures = try await fantasyPublicClient.fetchEventFixtures(
-                    eventID: refreshedGameweek.id
-                )
             }
+            let refreshedPicks = snapshot.picksResponse
+            let refreshedFixtures = snapshot.fixtures
 
             let mergedSeasonFixtures = Self.mergingFixtures(
                 refreshedFixtures,
@@ -1136,7 +1127,7 @@ final class FantasyViewModel: ObservableObject {
 
             let currentTeamGameweek = resolvedCurrentTeamGameweek(events: bootstrapLookup.events)
             let currentSnapshot: FantasySquadSnapshot
-            if currentTeamGameweek.isCurrent == true && currentTeamGameweek.dataChecked != true {
+            if FantasyTeamGameweekResolver.isLiveScoringGameweek(currentTeamGameweek) {
                 currentSnapshot = try await fetchSquadSnapshot(
                     entryID: activeEntryID,
                     gameweek: currentTeamGameweek,
@@ -1219,8 +1210,8 @@ final class FantasyViewModel: ObservableObject {
                 rivalManagers: rivalManagers,
                 excludingEntryID: activeEntryID
             )
-            let shouldUseCurrentRivalStandings = currentSnapshot.gameweek.isCurrent == true
-                && currentSnapshot.gameweek.dataChecked != true
+            let shouldUseCurrentRivalStandings = FantasyTeamGameweekResolver
+                .isLiveScoringGameweek(currentSnapshot.gameweek)
             let rivalStandingsSnapshot = shouldUseCurrentRivalStandings
                 ? currentSnapshot
                 : previousSnapshot
@@ -1435,18 +1426,113 @@ final class FantasyViewModel: ObservableObject {
         gameweekID: Int,
         apiBaseURL: String
     ) async throws -> FantasyPlayerDetailsData {
+        let cachedDetailsBootstrap = cachedPlayerDetailsBootstrap ?? currentSquadBootstrap ?? cachedBootstrapLookup
+        let cachedHasAvailabilityIssue = fantasyPlayerHasAvailabilityIssue(
+            elementID: elementID,
+            in: cachedDetailsBootstrap
+        )
+        let cachedTeamName = cachedHasAvailabilityIssue
+            ? fantasyTeamName(for: elementID, in: cachedDetailsBootstrap)
+            : nil
         async let bootstrapLookupTask = fetchPlayerDetailsBootstrapLookup(apiBaseURL: apiBaseURL)
         async let elementSummaryTask = timed("element_summary element_id=\(elementID)") {
             try await fantasyPublicClient.fetchElementSummary(elementID: elementID)
         }
+        async let cachedExpectedReturnTask = fetchFantasyPlayerInjuryExpectedReturn(
+            elementID: elementID,
+            teamName: cachedTeamName,
+            apiBaseURL: apiBaseURL
+        )
 
         let (bootstrapLookup, elementSummary) = try await (bootstrapLookupTask, elementSummaryTask)
+        let cachedExpectedReturn = await cachedExpectedReturnTask
+        let resolvedTeamName = fantasyTeamName(for: elementID, in: bootstrapLookup)
+        let resolvedHasAvailabilityIssue = fantasyPlayerHasAvailabilityIssue(
+            elementID: elementID,
+            in: bootstrapLookup
+        )
+        let injuryExpectedReturn: String?
+        if !resolvedHasAvailabilityIssue {
+            injuryExpectedReturn = nil
+        } else if let cachedTeamName,
+           let resolvedTeamName,
+           !fantasyTeamLookupKeys(cachedTeamName).isDisjoint(
+                with: fantasyTeamLookupKeys(resolvedTeamName)
+           ) {
+            injuryExpectedReturn = cachedExpectedReturn
+        } else if cachedTeamName != nil, resolvedTeamName == nil {
+            injuryExpectedReturn = cachedExpectedReturn
+        } else {
+            injuryExpectedReturn = await fetchFantasyPlayerInjuryExpectedReturn(
+                elementID: elementID,
+                teamName: resolvedTeamName,
+                apiBaseURL: apiBaseURL
+            )
+        }
         return try FantasyPlayerDetailsBuilder.build(
             elementID: elementID,
             gameweekID: gameweekID,
             bootstrap: bootstrapLookup,
-            summary: elementSummary
+            summary: elementSummary,
+            injuryExpectedReturn: injuryExpectedReturn
         )
+    }
+
+    private func fantasyTeamName(
+        for elementID: Int,
+        in bootstrap: FantasyBootstrapLookup?
+    ) -> String? {
+        guard let bootstrap,
+              let teamID = bootstrap.elements.first(where: { $0.id == elementID })?.team else {
+            return nil
+        }
+        return bootstrap.teams.first(where: { $0.id == teamID })?.name
+    }
+
+    private func fantasyPlayerHasAvailabilityIssue(
+        elementID: Int,
+        in bootstrap: FantasyBootstrapLookup?
+    ) -> Bool {
+        guard let element = bootstrap?.elements.first(where: { $0.id == elementID }) else {
+            return false
+        }
+        let status = (element.status ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let chance = element.chanceOfPlayingNextRound ?? element.chanceOfPlayingThisRound
+        return status == "i" || status == "d" || (chance ?? 100) < 100
+    }
+
+    private func fetchFantasyPlayerInjuryExpectedReturn(
+        elementID: Int,
+        teamName: String?,
+        apiBaseURL: String
+    ) async -> String? {
+        guard let teamName,
+              let baseURL = URL(string: apiBaseURL) else {
+            return nil
+        }
+
+        do {
+            let client = APIClient(baseURL: baseURL)
+            let catalog = try await client.fetchTeamCatalog(query: teamName, limit: 20)
+            guard let bsdTeamID = FantasyPlayerAvailabilityResolver.bsdTeamID(
+                forFPLTeamName: teamName,
+                in: catalog
+            ) else {
+                return nil
+            }
+            let squad = try await client.fetchTeamSquad(teamId: bsdTeamID)
+            return FantasyPlayerAvailabilityResolver.injuryExpectedReturn(
+                forElementID: elementID,
+                in: squad
+            )
+        } catch {
+            logPerf(
+                "player_injury_expected_return_failed element_id=\(elementID) error=\"\(error.localizedDescription)\""
+            )
+            return nil
+        }
     }
 
     private func populateDetailedExpectedPoints(

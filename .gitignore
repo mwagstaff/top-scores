@@ -295,3 +295,8 @@ __pycache__/
 /tools/stadium-images/published/
 /tools/stadium-images/collector/staging/
 /tools/stadium-images/collector/deployment/
+/tools/stadium-images/collector/reviewed/
+
+# Local copies of server artwork removals and quarantined originals
+tools/stadium-images/collector/server-deletions.json
+tools/stadium-images/collector/removed/

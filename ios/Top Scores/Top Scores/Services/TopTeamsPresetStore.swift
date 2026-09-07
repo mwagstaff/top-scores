@@ -229,6 +229,135 @@ struct TopTeamsPresetSources: Codable, Equatable, Sendable {
     }
 }
 
+nonisolated struct PremierLeagueTeamMatcher: Equatable, Sendable {
+    static let empty = PremierLeagueTeamMatcher(teams: [])
+
+    private let sourceTeamIDs: Set<String>
+    private let normalizedTeamKeys: Set<String>
+
+    init(teams: [TeamCatalogEntry]) {
+        sourceTeamIDs = Set(teams.flatMap(\.sourceTeamIDs))
+        normalizedTeamKeys = Set(
+            teams.flatMap { team in
+                [team.name] + team.aliases
+            }.flatMap { name in
+                TeamIdentityStore.shared.normalizedKeys(for: name)
+            }
+        )
+    }
+
+    var isEmpty: Bool {
+        sourceTeamIDs.isEmpty && normalizedTeamKeys.isEmpty
+    }
+
+    func matches(_ match: Match) -> Bool {
+        matches(teamName: match.homeTeam, sourceTeamID: match.homeTeamId) ||
+            matches(teamName: match.awayTeam, sourceTeamID: match.awayTeamId)
+    }
+
+    private func matches(teamName: String, sourceTeamID: String?) -> Bool {
+        if let sourceTeamID, sourceTeamIDs.contains(sourceTeamID) {
+            return true
+        }
+        return !TeamIdentityStore.shared.normalizedKeys(for: teamName)
+            .isDisjoint(with: normalizedTeamKeys)
+    }
+}
+
+@MainActor
+final class PremierLeagueTeamsStore: ObservableObject {
+    static let shared = PremierLeagueTeamsStore()
+
+    @Published private(set) var matcher: PremierLeagueTeamMatcher
+
+    private static let cacheTTL: TimeInterval = 6 * 60 * 60
+    private var fetchedAt: Date?
+    private var cachedAPIBaseURL: String?
+    private var refreshTask: Task<TeamCatalogResponse, Error>?
+
+    private init() {
+        if let cached = Self.loadCache() {
+            fetchedAt = cached.fetchedAt
+            cachedAPIBaseURL = cached.apiBaseURL
+            matcher = PremierLeagueTeamMatcher(teams: cached.teams)
+        } else {
+            matcher = .empty
+        }
+    }
+
+    func ensureFresh(apiBaseURL: String, force: Bool = false) async {
+        if !force,
+           cachedAPIBaseURL == apiBaseURL,
+           let fetchedAt,
+           Date().timeIntervalSince(fetchedAt) < Self.cacheTTL,
+           !matcher.isEmpty {
+            return
+        }
+        if let refreshTask {
+            _ = try? await refreshTask.value
+            return
+        }
+        guard let baseURL = URL(string: apiBaseURL) else { return }
+
+        let task = Task<TeamCatalogResponse, Error> {
+            try await APIClient(baseURL: baseURL).fetchTeamCatalog(
+                competitionID: "premier-league",
+                limit: 200
+            )
+        }
+        refreshTask = task
+        defer { refreshTask = nil }
+
+        do {
+            let response = try await task.value
+            guard !response.teams.isEmpty else {
+                diagnosticLog("[PremierLeagueTeams] Ignoring empty team catalogue")
+                return
+            }
+            fetchedAt = Date()
+            cachedAPIBaseURL = apiBaseURL
+            matcher = PremierLeagueTeamMatcher(teams: response.teams)
+            Self.persist(
+                CachePayload(
+                    apiBaseURL: apiBaseURL,
+                    fetchedAt: fetchedAt ?? Date(),
+                    teams: response.teams
+                )
+            )
+        } catch {
+            diagnosticLog("[PremierLeagueTeams] Refresh failed: %@", String(describing: error))
+        }
+    }
+
+    private struct CachePayload: Codable {
+        let apiBaseURL: String
+        let fetchedAt: Date
+        let teams: [TeamCatalogEntry]
+    }
+
+    private static func loadCache() -> CachePayload? {
+        guard let data = try? Data(contentsOf: cacheURL) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try? decoder.decode(CachePayload.self, from: data)
+    }
+
+    private static func persist(_ payload: CachePayload) {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(payload) else { return }
+        try? data.write(to: cacheURL, options: .atomic)
+    }
+
+    private static var cacheURL: URL {
+        let fileManager = FileManager.default
+        let root = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let directory = root.appendingPathComponent("TopScores", isDirectory: true)
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        return directory.appendingPathComponent("premier-league-teams-cache.json")
+    }
+}
+
 nonisolated struct TopTeamsPresetMatcher: Sendable {
     private let definition: TopTeamsPresetDefinition
     private let unconditionalTeamIDs: Set<String>
@@ -246,7 +375,6 @@ nonisolated struct TopTeamsPresetMatcher: Sendable {
 
     func matches(_ match: Match, competitionID: String?) -> Bool {
         if competitionID == (definition.premierLeagueCompetitionID ?? "premier-league") ||
-            MatchesStore.matchIncludesPremierLeagueTeam(match) ||
             teamMatches(match.homeTeam, sourceID: match.homeTeamId, ids: unconditionalTeamIDs, keys: unconditionalTeamKeys) ||
             teamMatches(match.awayTeam, sourceID: match.awayTeamId, ids: unconditionalTeamIDs, keys: unconditionalTeamKeys) {
             return true

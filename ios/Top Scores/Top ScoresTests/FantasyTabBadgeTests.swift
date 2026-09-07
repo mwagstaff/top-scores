@@ -35,6 +35,30 @@ struct FantasyTabBadgeTests {
         #expect(!fantasyTabMatchIsLiveOrRecentlyFinished(match, now: now))
     }
 
+    @Test func livePlayerShowsNotificationDot() {
+        #expect(fantasyShouldShowLivePlayerIndicator(
+            isSeasonActive: true,
+            hasManagerEntryID: true,
+            hasPlayerInPlay: true
+        ))
+    }
+
+    @Test func notificationDotIsRemovedWhenNoPlayerIsLive() {
+        #expect(!fantasyShouldShowLivePlayerIndicator(
+            isSeasonActive: true,
+            hasManagerEntryID: true,
+            hasPlayerInPlay: false
+        ))
+    }
+
+    @Test func livePlayerDoesNotShowNotificationDotWithoutConfiguredTeam() {
+        #expect(!fantasyShouldShowLivePlayerIndicator(
+            isSeasonActive: true,
+            hasManagerEntryID: false,
+            hasPlayerInPlay: true
+        ))
+    }
+
     private func makeMatch(status: String?, updatedAt: String?) -> Match {
         Match(
             date: "15-01-2027",

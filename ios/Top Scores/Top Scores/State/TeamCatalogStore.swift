@@ -19,6 +19,16 @@ final class TeamCatalogStore: ObservableObject {
         loadCache()
     }
 
+    func configureForSearch(apiBaseURL: String) {
+        guard let url = URL(string: apiBaseURL) else {
+            baseURL = nil
+            errorMessage = "Invalid API URL."
+            return
+        }
+        baseURL = url
+        errorMessage = nil
+    }
+
     func configure(apiBaseURL: String, selectedTeamIDs: Set<String>) async {
         guard let url = URL(string: apiBaseURL) else {
             errorMessage = "Invalid API URL."

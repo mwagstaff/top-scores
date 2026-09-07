@@ -272,6 +272,28 @@ struct TeamDetailsTests {
         #expect(matches.map(\.matchDetailsID) == ["previousmatch"])
     }
 
+    @Test func stadiumPhotoResolverUsesOnlyTheViewedTeamsHomeMatches() {
+        let homeMatch = makeMatch(
+            id: "sevillahome",
+            date: "2026-08-20",
+            homeTeam: "Sevilla",
+            awayTeam: "Valencia"
+        )
+        let awayMatch = makeMatch(
+            id: "sevillaaway",
+            date: "2026-08-27",
+            homeTeam: "Barcelona",
+            awayTeam: "Sevilla"
+        )
+
+        let candidates = TeamStadiumPhotoResolver.homeMatchCandidates(
+            teamName: "Sevilla",
+            from: [awayMatch, homeMatch]
+        )
+
+        #expect(candidates.map(\.matchDetailsID) == ["sevillahome"])
+    }
+
     @Test func upcomingFixturesAreChronologicalAndExcludeFinishedMatches() {
         let context = TeamDetailsContext(
             teamID: "282",

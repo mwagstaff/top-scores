@@ -21,6 +21,8 @@ final class StadiumArtworkStore: ObservableObject {
     private var fetchedAt: Date?
     private var etag: String?
     private var refreshTask: Task<StadiumArtworkFetchResult, Error>?
+    private var refreshGeneration = UUID()
+    private var nextAttemptAt: Date?
 
     init(
         cacheURL: URL = StadiumArtworkStore.defaultCacheURL(),
@@ -44,11 +46,17 @@ final class StadiumArtworkStore: ObservableObject {
         }
 
         if self.apiBaseURL != nil, self.apiBaseURL != normalizedBaseURL {
+            refreshTask?.cancel()
+            refreshTask = nil
+            refreshGeneration = UUID()
+            nextAttemptAt = nil
             catalog = nil
             fetchedAt = nil
             etag = nil
         }
         self.apiBaseURL = normalizedBaseURL
+
+        if !force, let nextAttemptAt, now < nextAttemptAt { return }
 
         if !force,
            let fetchedAt,
@@ -75,11 +83,18 @@ final class StadiumArtworkStore: ObservableObject {
             )
         }
         refreshTask = task
-        defer { refreshTask = nil }
+        let generation = UUID()
+        refreshGeneration = generation
+        // Failed refreshes should not be retried on every navigation event.
+        nextAttemptAt = now.addingTimeInterval(60)
+        defer {
+            if refreshGeneration == generation { refreshTask = nil }
+        }
 
         do {
             let result = try await task.value
-            let refreshDate = Date()
+            guard refreshGeneration == generation else { return }
+            let refreshDate = now
             if result.isNotModified, catalog != nil {
                 fetchedAt = refreshDate
                 etag = result.etag ?? etag
@@ -92,21 +107,41 @@ final class StadiumArtworkStore: ObservableObject {
                 lastRefreshErrorDescription = "The server returned an unsupported stadium artwork catalogue."
                 return
             }
+            await StadiumArtworkImageCache.shared.prune(keeping: Set(nextCatalog.assets.map(\.sha256)))
+            guard refreshGeneration == generation else { return }
             catalog = nextCatalog
             fetchedAt = refreshDate
             etag = result.etag
             persistCache()
-            let retainedHashes = Set(nextCatalog.assets.map(\.sha256))
-            Task(priority: .utility) {
-                await StadiumArtworkImageCache.shared.prune(keeping: retainedHashes)
-            }
         } catch is CancellationError {
             return
         } catch {
+            guard refreshGeneration == generation else { return }
             lastRefreshErrorDescription = error.localizedDescription
             diagnosticLog("[StadiumArtwork] Catalog refresh failed: \(error)")
         }
     }
+
+    #if DEBUG
+    func deleteArtwork(_ asset: StadiumArtworkAsset, apiBaseURL: String, adminToken: String) async throws {
+        guard let baseURL = URL(string: apiBaseURL) else { throw URLError(.badURL) }
+        let nextCatalog = try await APIClient(baseURL: baseURL, session: session)
+            .deleteStadiumArtwork(asset: asset, adminToken: adminToken)
+        guard self.apiBaseURL == apiBaseURL else { return }
+        refreshTask?.cancel()
+        refreshTask = nil
+        let generation = UUID()
+        refreshGeneration = generation
+        await StadiumArtworkImageCache.shared.prune(keeping: Set(nextCatalog.assets.map(\.sha256)))
+        guard refreshGeneration == generation else { return }
+        catalog = nextCatalog
+        fetchedAt = Date()
+        etag = "\"\(nextCatalog.catalogVersion)\""
+        nextAttemptAt = nil
+        lastRefreshErrorDescription = nil
+        persistCache()
+    }
+    #endif
 
     func backdropAsset(selectionKey: String) -> StadiumArtworkAsset? {
         guard let assets = catalog?.genericBackdropAssets, !assets.isEmpty else { return nil }
@@ -129,6 +164,31 @@ final class StadiumArtworkStore: ObservableObject {
             teamName: teamName,
             catalog: catalog
         )
+    }
+
+    func matchAssets(for match: Match) -> [StadiumArtworkAsset] {
+        guard let catalog else { return [] }
+        return MatchStadiumArtworkResolver.shared.remoteAssets(for: match, catalog: catalog)
+    }
+
+    func teamHeroAssets(teamID: String?, teamName: String) -> [StadiumArtworkAsset] {
+        guard let catalog else { return [] }
+        return MatchStadiumArtworkResolver.shared.remoteTeamHeroAssets(
+            teamID: teamID, teamName: teamName, catalog: catalog
+        )
+    }
+
+    func refreshWhileVisible(apiBaseURL: String) async {
+        do {
+            while !Task.isCancelled {
+                await ensureFresh(apiBaseURL: apiBaseURL)
+                try await Task.sleep(for: .seconds(Self.refreshInterval))
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            diagnosticLog("[StadiumArtwork] Refresh timer failed: \(error)")
+        }
     }
 
     private func stableIndex(_ value: String, count: Int) -> Int {

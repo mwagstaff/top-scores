@@ -517,6 +517,29 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
 @MainActor
 final class PreferencesStore: ObservableObject {
     private let userDefaults: UserDefaults
+    private var batchUpdateDepth = 0
+    private var batchUpdateNeedsPersistence = false
+
+    private func preferenceDidChange() {
+        guard batchUpdateDepth == 0 else {
+            batchUpdateNeedsPersistence = true
+            return
+        }
+        persist()
+    }
+
+    /// Coalesces storage and server sync work for a logical preference change
+    /// that updates several published properties. Published values still change
+    /// immediately, while persistence runs once with the final snapshot.
+    func performBatchUpdate(_ update: () -> Void) {
+        batchUpdateDepth += 1
+        update()
+        batchUpdateDepth -= 1
+
+        guard batchUpdateDepth == 0, batchUpdateNeedsPersistence else { return }
+        batchUpdateNeedsPersistence = false
+        persist()
+    }
 
     nonisolated static let defaultSelectedLeagues = [
         "Premier League",
@@ -599,23 +622,23 @@ final class PreferencesStore: ObservableObject {
     nonisolated static let defaultShowPredictedScores = false
 
     @Published var selectedLeagues: [String] {
-        didSet { persist() }
+        didSet { preferenceDidChange() }
     }
 
     @Published var selectedFixtureViewOptionIDs: [String] {
-        didSet { persist() }
+        didSet { preferenceDidChange() }
     }
 
     @Published var favouriteFixtureViewOptionIDs: [String] {
-        didSet { persist() }
+        didSet { preferenceDidChange() }
     }
 
     @Published var favouriteShowPredictedScores: Bool {
-        didSet { persist() }
+        didSet { preferenceDidChange() }
     }
 
     @Published var hasSavedFavouriteFixtureView: Bool {
-        didSet { persist() }
+        didSet { preferenceDidChange() }
     }
 
     @Published var selectedNotificationLeagues: [String] {
@@ -631,11 +654,11 @@ final class PreferencesStore: ObservableObject {
     }
 
     @Published var competitionFilterEnabled: Bool {
-        didSet { persist() }
+        didSet { preferenceDidChange() }
     }
 
     @Published var fixtureAllMajorMatchesEnabled: Bool {
-        didSet { persist() }
+        didSet { preferenceDidChange() }
     }
 
     @Published var notificationMatchesFixturesEnabled: Bool {
@@ -651,19 +674,19 @@ final class PreferencesStore: ObservableObject {
     }
 
     @Published var englishPremierLeagueTeamsOnly: Bool {
-        didSet { persist() }
+        didSet { preferenceDidChange() }
     }
 
     @Published var majorUEFAClubGamesEnabled: Bool {
-        didSet { persist() }
+        didSet { preferenceDidChange() }
     }
 
     @Published var homeNationsFilterEnabled: Bool {
-        didSet { persist() }
+        didSet { preferenceDidChange() }
     }
 
     @Published var majorTournamentsFilterEnabled: Bool {
-        didSet { persist() }
+        didSet { preferenceDidChange() }
     }
 
     @Published var apiBaseURL: String {
@@ -675,7 +698,7 @@ final class PreferencesStore: ObservableObject {
     }
 
     @Published var showAllMatches: Bool {
-        didSet { persist() }
+        didSet { preferenceDidChange() }
     }
 
     @Published var matchGroupSortOrder: MatchGroupSortOrder {
@@ -758,7 +781,7 @@ final class PreferencesStore: ObservableObject {
     /// display toggle — not part of `PreferencesSnapshot` since it doesn't affect what
     /// matches are fetched or filtered, only how a row already on screen is rendered.
     @Published var showPredictedScores: Bool {
-        didSet { persist() }
+        didSet { preferenceDidChange() }
     }
 
     init(userDefaults: UserDefaults = .standard) {

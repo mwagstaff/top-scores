@@ -7,6 +7,8 @@ struct FantasyPublicAPIClient {
         let config = URLSessionConfiguration.ephemeral
         config.urlCache = nil
         config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        config.timeoutIntervalForRequest = 10
+        config.timeoutIntervalForResource = 15
         return URLSession(configuration: config)
     }
 

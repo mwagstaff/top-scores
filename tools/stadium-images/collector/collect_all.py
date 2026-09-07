@@ -22,11 +22,13 @@ from find_images import (
     DEFAULT_WIKIMEDIA_MIN_INTERVAL_SECONDS,
     OPENAI_MAX_RETRIES,
     configure_wikimedia_requests,
+    build_queries,
     load_openai_api_key,
     research_stadium,
     stage_suitable_images,
 )
 from openai import OpenAI
+from stadium_images.team_folders import identify_team, team_folder
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_PREMIER_LEAGUE_CONFIG = (
@@ -42,6 +44,7 @@ DEFAULT_TOP_TEAMS_CONFIG = PROJECT_ROOT / "api/top_teams_config.json"
 DEFAULT_CLUB_ELO_DATA = PROJECT_ROOT / "api/club_elo_teams.json"
 ALL_SCOPES = {"premier-league", "championship", "major"}
 DEFAULT_WORKERS = 5
+DEFAULT_TEAM_ALIASES = PROJECT_ROOT / "api/team_aliases.json"
 
 
 def normalized_name(value: str) -> str:
@@ -89,6 +92,7 @@ def load_collection_targets(
     top_teams_config: Path = DEFAULT_TOP_TEAMS_CONFIG,
     club_elo_data: Path = DEFAULT_CLUB_ELO_DATA,
     scopes: set[str] | None = None,
+    championship_limit: int = 5,
 ) -> tuple[list[dict], float]:
     selected_scopes = scopes or ALL_SCOPES
     unknown_scopes = selected_scopes - ALL_SCOPES
@@ -113,8 +117,25 @@ def load_collection_targets(
             target = _target_from_venue(venue, source="Premier League")
             targets_by_slug[target["slug"]] = target
     if "championship" in selected_scopes:
+        aliases = json.loads(DEFAULT_TEAM_ALIASES.read_text())["aliases"]
+        canonical = {normalized_name(alias): normalized_name(name) for alias, name in aliases.items()}
+        def identity(name: str) -> str:
+            key = normalized_name(name)
+            return canonical.get(key, key)
+        ratings = {
+            identity(str(row.get("Name") or row.get("Club") or "")): float(row.get("Elo") or 0)
+            for row in club_elo_rows
+        }
+        ranked = []
         for venue in championship_stadiums:
-            target = _target_from_venue(venue, source="Championship")
+            names = [venue["club"], *(venue.get("club_elo_names") or [])]
+            elo = max((ratings.get(identity(name), 0) for name in names), default=0)
+            ranked.append((elo, venue))
+        ranked.sort(key=lambda item: (-item[0], item[1]["club"]))
+        if championship_limit < 1 or len(ranked) < championship_limit or ranked[championship_limit - 1][0] <= 0:
+            raise ValueError("Insufficient Club Elo ratings for the requested Championship selection")
+        for elo, venue in ranked[:championship_limit]:
+            target = _target_from_venue(venue, source=f"Championship Club Elo {elo:.0f}")
             targets_by_slug[target["slug"]] = target
 
     venue_by_club_elo_name: dict[str, dict] = {}
@@ -155,7 +176,29 @@ def load_collection_targets(
             "Major Club Elo teams have no configured venue: "
             + ", ".join(sorted(missing))
         )
-    return list(targets_by_slug.values()), threshold
+    # A shared ground must not assign one club's flags or tifo to its rival.
+    targets = []
+    for target in targets_by_slug.values():
+        if len(target["teams"]) == 1:
+            targets.append(target)
+        else:
+            for team in target["teams"]:
+                team_names = {normalized_name(name) for name in [team["name"], *team["aliases"]]}
+                rating = max((float(row.get("Elo") or 0) for row in club_elo_rows
+                              if normalized_name(str(row.get("Name") or row.get("Club") or "")) in team_names), default=0)
+                if target["source"].startswith("Club Elo") and rating < threshold:
+                    continue
+                targets.append({
+                    **target,
+                    "club": team["name"],
+                    "slug": f"{target['slug']}-{normalized_name(team['name'])}",
+                    "teams": [team],
+                    "search_terms": build_queries(target["stadium"], team["name"]),
+                    "source": f"Club Elo {rating:.0f}",
+                })
+    for target in targets:
+        target["teams"] = [identify_team(team) for team in target["teams"]]
+    return targets, threshold
 
 
 def _target_from_venue(venue: dict, *, source: str) -> dict:
@@ -164,11 +207,11 @@ def _target_from_venue(venue: dict, *, source: str) -> dict:
         "stadium": str(venue["stadium"]).strip(),
         "slug": str(venue["slug"]).strip(),
         "teams": teams_for_venue(venue),
-        "search_terms": [
+        "search_terms": list(dict.fromkeys([*build_queries(str(venue["stadium"]), str(venue["club"])), *[
             str(term).strip()
             for term in venue.get("search_terms") or []
             if str(term).strip()
-        ],
+        ]])),
         "source": source,
     }
 
@@ -193,7 +236,8 @@ def collect_targets(
 
     pending = []
     for position, target in enumerate(targets, start=1):
-        destination = staging_root / target["slug"]
+        directory_name = team_folder(target["teams"][0]) if target["teams"] else target["slug"]
+        destination = staging_root / directory_name
         if destination.exists() and not replace:
             print(f"\n[{position}/{len(targets)}] Skipping existing {destination}")
             continue
@@ -262,6 +306,8 @@ def _collect_target(
         per_query=per_query,
         queries=target["search_terms"] or None,
         log_prefix=label,
+        club=target["club"],
+        reviewed_root=staging_root.parent / "reviewed",
     )
     return stage_suitable_images(
         result,
@@ -289,6 +335,8 @@ def main() -> None:
     parser.add_argument("--per-query", type=int, default=10)
     parser.add_argument("--min-score", type=int, default=70)
     parser.add_argument("--max-downloads", type=int, default=10)
+    parser.add_argument("--championship-limit", type=int, default=5)
+    parser.add_argument("--club-elo-data", type=Path, default=DEFAULT_CLUB_ELO_DATA)
     parser.add_argument("--staging-root", type=Path, default=DEFAULT_STAGING_ROOT)
     parser.add_argument("--replace", action="store_true")
     parser.add_argument("--yes", action="store_true", help="Skip the cost confirmation")
@@ -327,7 +375,9 @@ def main() -> None:
     args = parser.parse_args()
 
     scopes = ALL_SCOPES if args.scope == "all" else {args.scope}
-    targets, threshold = load_collection_targets(scopes=scopes)
+    targets, threshold = load_collection_targets(
+        scopes=scopes, championship_limit=args.championship_limit, club_elo_data=args.club_elo_data
+    )
     if args.limit is not None:
         targets = targets[: max(args.limit, 0)]
     if args.workers < 1:
@@ -337,7 +387,7 @@ def main() -> None:
     if args.wikimedia_min_interval < 0:
         parser.error("--wikimedia-min-interval cannot be negative")
     print(
-        f"Resolved {len(targets)} unique stadiums for scope '{args.scope}' "
+        f"Resolved {len(targets)} club galleries for scope '{args.scope}' "
         f"(Major teams Club Elo threshold: {threshold:.0f})."
     )
     for target in targets:

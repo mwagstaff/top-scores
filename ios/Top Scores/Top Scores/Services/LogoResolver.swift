@@ -4,6 +4,11 @@ import UIKit
 final class LogoResolver {
     static let shared = LogoResolver()
 
+    private struct FuzzyCandidate {
+        let key: String
+        let characters: [Character]
+    }
+
     private enum ImageSource: Hashable {
         case file(URL)
         case asset(String)
@@ -35,6 +40,7 @@ final class LogoResolver {
     private var normalizedLookup: [String: ImageSource] = [:]
     private var coreLookup: [String: [ImageSource]] = [:]
     private var originalLookup: [String: ImageSource] = [:]
+    private var fuzzyCandidatesByInitial: [Character: [FuzzyCandidate]] = [:]
     private var resolvedSourceCache: [String: ImageSource] = [:]
     private var unresolvedSourceKeys: Set<String> = []
     private let imageCache: NSCache<NSString, UIImage> = {
@@ -46,6 +52,7 @@ final class LogoResolver {
 
     private init() {
         loadLogos()
+        buildFuzzyIndex()
     }
 
     func image(for teamName: String, alternateNames: [String] = []) -> UIImage? {
@@ -156,6 +163,19 @@ final class LogoResolver {
         }
     }
 
+    private func buildFuzzyIndex() {
+        fuzzyCandidatesByInitial = Dictionary(
+            grouping: normalizedLookup.keys.compactMap { key -> (Character, FuzzyCandidate)? in
+                guard let initial = key.first else { return nil }
+                return (initial, FuzzyCandidate(key: key, characters: Array(key)))
+            },
+            by: { $0.0 }
+        )
+        .mapValues { entries in
+            entries.map(\.1).sorted { $0.key < $1.key }
+        }
+    }
+
     private func register(source: ImageSource, forName name: String) {
         let normalized = Self.normalizedKey(name)
         if !normalized.isEmpty {
@@ -251,20 +271,36 @@ final class LogoResolver {
     }
 
     private func fuzzyMatch(normalizedTeam: String) -> ImageSource? {
-        guard !normalizedTeam.isEmpty else { return nil }
+        guard let initial = normalizedTeam.first,
+              let candidates = fuzzyCandidatesByInitial[initial] else {
+            return nil
+        }
 
+        let teamCharacters = Array(normalizedTeam)
         var bestKey: String?
         var bestScore: Double = 0
 
-        for key in normalizedLookup.keys {
-            let score = Self.similarity(normalizedTeam, key)
+        for candidate in candidates {
+            let maximumLength = max(teamCharacters.count, candidate.characters.count)
+            let maximumDistance = Int(
+                (Double(maximumLength) * (1 - Self.fuzzySimilarityThreshold)).rounded(.down)
+            )
+            guard abs(teamCharacters.count - candidate.characters.count) <= maximumDistance,
+                  let distance = Self.levenshtein(
+                    teamCharacters,
+                    candidate.characters,
+                    maximumDistance: maximumDistance
+                  ) else {
+                continue
+            }
+            let score = 1 - (Double(distance) / Double(maximumLength))
             if score > bestScore {
                 bestScore = score
-                bestKey = key
+                bestKey = candidate.key
             }
         }
 
-        if let bestKey, bestScore >= 0.78 {
+        if let bestKey, bestScore >= Self.fuzzySimilarityThreshold {
             return normalizedLookup[bestKey]
         }
 
@@ -382,35 +418,51 @@ final class LogoResolver {
         return output
     }
 
-    private static func similarity(_ lhs: String, _ rhs: String) -> Double {
-        let distance = levenshtein(lhs, rhs)
-        let maxLength = max(lhs.count, rhs.count)
-        guard maxLength > 0 else { return 1 }
-        return 1 - (Double(distance) / Double(maxLength))
-    }
-
-    private static func levenshtein(_ lhs: String, _ rhs: String) -> Int {
-        let lhsChars = Array(lhs)
-        let rhsChars = Array(rhs)
-
-        var previous = Array(0...rhsChars.count)
-        var current = Array(repeating: 0, count: rhsChars.count + 1)
-
-        for (i, lhsChar) in lhsChars.enumerated() {
-            current[0] = i + 1
-            for (j, rhsChar) in rhsChars.enumerated() {
-                let cost = lhsChar == rhsChar ? 0 : 1
-                current[j + 1] = min(
-                    previous[j + 1] + 1,
-                    current[j] + 1,
-                    previous[j] + cost
-                )
-            }
-            previous = current
+    private static func levenshtein(
+        _ lhs: [Character],
+        _ rhs: [Character],
+        maximumDistance: Int
+    ) -> Int? {
+        guard abs(lhs.count - rhs.count) <= maximumDistance else { return nil }
+        if lhs.isEmpty {
+            return rhs.count <= maximumDistance ? rhs.count : nil
+        }
+        if rhs.isEmpty {
+            return lhs.count <= maximumDistance ? lhs.count : nil
         }
 
-        return previous[rhsChars.count]
+        let sentinel = maximumDistance + 1
+        var previous = Array(repeating: sentinel, count: rhs.count + 1)
+        var current = Array(repeating: sentinel, count: rhs.count + 1)
+        for index in 0...min(rhs.count, maximumDistance) {
+            previous[index] = index
+        }
+
+        for lhsIndex in 1...lhs.count {
+            let lowerBound = max(1, lhsIndex - maximumDistance)
+            let upperBound = min(rhs.count, lhsIndex + maximumDistance)
+            guard lowerBound <= upperBound else { return nil }
+
+            current[lowerBound - 1] = lowerBound == 1 ? lhsIndex : sentinel
+            for rhsIndex in lowerBound...upperBound {
+                let substitutionCost = lhs[lhsIndex - 1] == rhs[rhsIndex - 1] ? 0 : 1
+                current[rhsIndex] = min(
+                    previous[rhsIndex] + 1,
+                    current[rhsIndex - 1] + 1,
+                    previous[rhsIndex - 1] + substitutionCost
+                )
+            }
+            if upperBound < rhs.count {
+                current[upperBound + 1] = sentinel
+            }
+            swap(&previous, &current)
+        }
+
+        let distance = previous[rhs.count]
+        return distance <= maximumDistance ? distance : nil
     }
+
+    private static let fuzzySimilarityThreshold = 0.78
 
     private static let genericStopWords: Set<String> = [
         "fc", "cf", "sc", "afc", "ac", "sv", "fk", "bk", "bc", "ks", "nk",

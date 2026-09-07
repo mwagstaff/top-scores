@@ -17,7 +17,8 @@
     "start:audit": "node audit.js",
     "migrate:redis-to-mongo": "node scripts/migrate_redis_to_mongo.js",
     "test-harness": "node -e \"console.log('Start the main API server with npm start, then open http://localhost:3000/admin/harness')\"",
-    "live-activity:harness": "./live_activity_test_harness.sh"
+    "live-activity:harness": "./live_activity_test_harness.sh",
+    "test:reference": "node --test reference_*.test.js fetch_bsd_catalogue.test.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1109.0",
@@ -28,6 +29,11 @@
     "nodemailer": "^6.9.0",
     "redis": "^5.11.0",
     "sharp": "^0.35.3",
-    "suncalc": "^1.9.0"
+    "suncalc": "^1.9.0",
+    "swagger-ui-dist": "5.32.15"
+  },
+  "devDependencies": {
+    "ajv": "8.20.0",
+    "ajv-formats": "3.0.1"
   }
 }

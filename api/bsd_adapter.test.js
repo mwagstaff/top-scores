@@ -6,6 +6,7 @@ const fs = require("fs");
 const path = require("path");
 
 const { bsdEventToCanonicalMatch, __private } = require("./bsd_adapter");
+const venueImageCatalog = require("./bsd_venue_image_overrides.json");
 const { DEFAULT_BSD_LEAGUE_ALLOWLIST } = require("./bsd_config");
 const {
   mapBsdStatus,
@@ -63,6 +64,7 @@ test("default BSD league allowlist includes required competitions", () => {
   assert.ok(DEFAULT_BSD_LEAGUE_ALLOWLIST.includes("90"), "UEFA Super Cup");
   assert.ok(DEFAULT_BSD_LEAGUE_ALLOWLIST.includes("86"), "League One");
   assert.ok(DEFAULT_BSD_LEAGUE_ALLOWLIST.includes("87"), "League Two");
+  assert.ok(DEFAULT_BSD_LEAGUE_ALLOWLIST.includes("91"), "National League");
 });
 
 // ---------------------------------------------------------------------------
@@ -479,8 +481,68 @@ test("bsdEventToCanonicalMatch: replaces BSD's missing Coventry venue image", ()
 
   assert.equal(
     details.venue_details.image_url,
-    "https://upload.wikimedia.org/wikipedia/commons/thumb/c/ce/Coventry_Building_Society_Arena_november_2025.jpg/1280px-Coventry_Building_Society_Arena_november_2025.jpg"
+    "https://thumb.wikimedia.org/wikipedia/commons/thumb/1/14/Coventry_%2C_Coventry_Building_Society_Arena_-_geograph.org.uk_-_6974082.jpg/1920px-Coventry_%2C_Coventry_Building_Society_Arena_-_geograph.org.uk_-_6974082.jpg"
   );
+});
+
+test("bsdEventToCanonicalMatch: replaces Easter Road's blue placeholder", () => {
+  const details = bsdEventToCanonicalMatch({
+    id: 209549,
+    league_id: 13,
+    home_team: "Hibernian",
+    away_team: "Hearts",
+    status: "finished",
+    event_date: "2026-08-29T14:00:00Z",
+    venue_id: 221,
+  }, {
+    detail: true,
+    venuesById: new Map([["221", {
+      name: "Easter Road",
+      city: "Edinburgh",
+      country: "Scotland",
+    }]]),
+  });
+
+  assert.equal(
+    details.venue_details.image_url,
+    "https://thumb.wikimedia.org/wikipedia/commons/thumb/7/75/Easter_Road_-_Edinburgh_Derby.jpg/1920px-Easter_Road_-_Edinburgh_Derby.jpg"
+  );
+});
+
+test("bsdEventToCanonicalMatch: suppresses known placeholders without replacements", () => {
+  const details = bsdEventToCanonicalMatch({
+    id: 209550,
+    league_id: 7,
+    home_team: "FC Lugano",
+    away_team: "Inter",
+    status: "notstarted",
+    event_date: "2026-09-10T19:00:00Z",
+    venue_id: 1753,
+  }, {
+    detail: true,
+    venuesById: new Map([["1753", {
+      name: "AIL Arena",
+      city: "Lugano",
+      country: "Switzerland",
+    }]]),
+  });
+
+  assert.equal(details.venue_details.image_url, null);
+});
+
+test("BSD venue image catalog covers every verified replacement", () => {
+  const placeholderIds = venueImageCatalog.upstream_placeholder_venue_ids;
+  const replacements = Object.entries(venueImageCatalog.venues);
+
+  assert.equal(new Set(placeholderIds).size, 189);
+  assert.equal(replacements.length, 181);
+  assert.equal(venueImageCatalog.unresolved_venues.length, 8);
+  for (const [venueId, replacement] of replacements) {
+    assert.ok(placeholderIds.includes(venueId));
+    assert.match(replacement.image_url, /^https:\/\/(?:thumb|upload)\.wikimedia\.org\//);
+    assert.match(replacement.source_page, /^https:\/\/commons\.wikimedia\.org\/wiki\/File:/);
+    assert.ok(replacement.license);
+  }
 });
 
 test("bsdEventToCanonicalMatch: maps BSD league 90 to UEFA Super Cup", () => {
@@ -511,7 +573,7 @@ test("bsdEventToCanonicalMatch: maps BSD league 83 to UEFA Conference League", (
   assert.equal(match.league, "UEFA Conference League");
 });
 
-test("bsdEventToCanonicalMatch: maps EFL League One and League Two to catalog names", () => {
+test("bsdEventToCanonicalMatch: maps lower English leagues to catalog names", () => {
   const event = {
     id: 8601,
     home_team: "Notts County",
@@ -522,6 +584,7 @@ test("bsdEventToCanonicalMatch: maps EFL League One and League Two to catalog na
 
   assert.equal(bsdEventToCanonicalMatch({ ...event, league_id: 86 }).league, "League One");
   assert.equal(bsdEventToCanonicalMatch({ ...event, id: 8701, league_id: 87 }).league, "League Two");
+  assert.equal(bsdEventToCanonicalMatch({ ...event, id: 9101, league_id: 91 }).league, "National League");
 });
 
 test("bsdEventToCanonicalMatch: surfaces BSD last_updated as updated_at", () => {
@@ -1005,6 +1068,26 @@ test("bsdStandingsPayloadToTable: completes a new Championship table from same-s
       [4, "West Ham United", 0, 0],
     ]
   );
+});
+
+test("bsdStandingsPayloadToTable: seeds a new National League table from fixtures", () => {
+  const table = bsdStandingsPayloadToTable({
+    league_id: 91,
+    season: { id: 1903, name: "National League 26/27" },
+    grouped: false,
+    standings: [],
+  }, {
+    leagueId: "91",
+    events: [{
+      league_id: 91,
+      season_id: 1903,
+      home_team: "York City",
+      away_team: "Rochdale",
+    }],
+  });
+
+  assert.equal(table.league_name, "National League");
+  assert.deepEqual(table.rows.map((row) => row.team), ["Rochdale", "York City"]);
 });
 
 test("completeBsdStandingsRowsFromEvents: unplayed teams rank above a played team with a loss", () => {

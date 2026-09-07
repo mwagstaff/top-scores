@@ -1,0 +1,493 @@
+{
+  "source": "https://api.skynolimit.dev/top-scores/api/v1/teams/catalog (BSD IDs; complete paginated catalogue, with Inter 77 also verified directly against BSD teams/77)",
+  "verified_at": "2026-09-06",
+  "teams": {
+    "ac-milan": {
+      "name": "AC Milan",
+      "bsd_team_id": "63",
+      "aliases": [
+        "Milan"
+      ]
+    },
+    "ajax": {
+      "name": "Ajax",
+      "bsd_team_id": "122",
+      "aliases": [
+        "AFC Ajax"
+      ]
+    },
+    "afc-bournemouth": {
+      "name": "AFC Bournemouth",
+      "bsd_team_id": "2",
+      "aliases": [
+        "Bournemouth"
+      ]
+    },
+    "arsenal": {
+      "name": "Arsenal",
+      "bsd_team_id": "18",
+      "aliases": []
+    },
+    "as-roma": {
+      "name": "AS Roma",
+      "bsd_team_id": "65",
+      "aliases": [
+        "Roma"
+      ]
+    },
+    "aston-villa": {
+      "name": "Aston Villa",
+      "bsd_team_id": "3",
+      "aliases": []
+    },
+    "atalanta": {
+      "name": "Atalanta",
+      "bsd_team_id": "71",
+      "aliases": []
+    },
+    "atletico-de-madrid": {
+      "name": "Atlético de Madrid",
+      "bsd_team_id": "54",
+      "aliases": [
+        "Atletico"
+      ]
+    },
+    "bayer-leverkusen": {
+      "name": "Bayer Leverkusen",
+      "bsd_team_id": "85",
+      "aliases": [
+        "Leverkusen"
+      ]
+    },
+    "bayern-munich": {
+      "name": "Bayern Munich",
+      "bsd_team_id": "79",
+      "aliases": [
+        "Bayern"
+      ]
+    },
+    "benfica": {
+      "name": "Benfica",
+      "bsd_team_id": "37",
+      "aliases": []
+    },
+    "borussia-dortmund": {
+      "name": "Borussia Dortmund",
+      "bsd_team_id": "92",
+      "aliases": [
+        "Dortmund"
+      ]
+    },
+    "brentford": {
+      "name": "Brentford",
+      "bsd_team_id": "16",
+      "aliases": []
+    },
+    "brighton-hove-albion": {
+      "name": "Brighton & Hove Albion",
+      "bsd_team_id": "5",
+      "aliases": [
+        "Brighton"
+      ]
+    },
+    "burnley": {
+      "name": "Burnley",
+      "bsd_team_id": "10",
+      "aliases": []
+    },
+    "cardiff-city": {
+      "name": "Cardiff City",
+      "bsd_team_id": "1249",
+      "aliases": []
+    },
+    "chelsea": {
+      "name": "Chelsea",
+      "bsd_team_id": "13",
+      "aliases": []
+    },
+    "como-1907": {
+      "name": "Como 1907",
+      "bsd_team_id": "69",
+      "aliases": [
+        "Como"
+      ]
+    },
+    "coventry-city": {
+      "name": "Coventry City",
+      "bsd_team_id": "203",
+      "aliases": [
+        "Coventry"
+      ]
+    },
+    "crystal-palace": {
+      "name": "Crystal Palace",
+      "bsd_team_id": "14",
+      "aliases": []
+    },
+    "everton": {
+      "name": "Everton",
+      "bsd_team_id": "20",
+      "aliases": []
+    },
+    "fc-barcelona": {
+      "name": "FC Barcelona",
+      "bsd_team_id": "44",
+      "aliases": [
+        "Barcelona"
+      ]
+    },
+    "fc-porto": {
+      "name": "FC Porto",
+      "bsd_team_id": "35",
+      "aliases": [
+        "Porto"
+      ]
+    },
+    "fulham": {
+      "name": "Fulham",
+      "bsd_team_id": "6",
+      "aliases": []
+    },
+    "hull-city": {
+      "name": "Hull City",
+      "bsd_team_id": "204",
+      "aliases": [
+        "Hull"
+      ]
+    },
+    "inter-milan": {
+      "name": "Inter Milan",
+      "bsd_team_id": "77",
+      "aliases": [
+        "Inter",
+        "Internazionale"
+      ]
+    },
+    "ipswich-town": {
+      "name": "Ipswich Town",
+      "bsd_team_id": "200",
+      "aliases": [
+        "Ipswich"
+      ]
+    },
+    "juventus": {
+      "name": "Juventus",
+      "bsd_team_id": "73",
+      "aliases": []
+    },
+    "leeds-united": {
+      "name": "Leeds United",
+      "bsd_team_id": "19",
+      "aliases": [
+        "Leeds"
+      ]
+    },
+    "lincoln-city": {
+      "name": "Lincoln City",
+      "bsd_team_id": "1415",
+      "aliases": []
+    },
+    "liverpool": {
+      "name": "Liverpool",
+      "bsd_team_id": "1",
+      "aliases": [
+        "Liverpool FC"
+      ]
+    },
+    "manchester-city": {
+      "name": "Manchester City",
+      "bsd_team_id": "12",
+      "aliases": [
+        "Man City"
+      ]
+    },
+    "manchester-united": {
+      "name": "Manchester United",
+      "bsd_team_id": "17",
+      "aliases": [
+        "Man United"
+      ]
+    },
+    "middlesbrough": {
+      "name": "Middlesbrough",
+      "bsd_team_id": "207",
+      "aliases": []
+    },
+    "millwall": {
+      "name": "Millwall",
+      "bsd_team_id": "210",
+      "aliases": []
+    },
+    "napoli": {
+      "name": "Napoli",
+      "bsd_team_id": "62",
+      "aliases": []
+    },
+    "newcastle-united": {
+      "name": "Newcastle United",
+      "bsd_team_id": "4",
+      "aliases": [
+        "Newcastle"
+      ]
+    },
+    "norwich-city": {
+      "name": "Norwich City",
+      "bsd_team_id": "209",
+      "aliases": []
+    },
+    "nottingham-forest": {
+      "name": "Nottingham Forest",
+      "bsd_team_id": "15",
+      "aliases": [
+        "Forest"
+      ]
+    },
+    "olympique-de-marseille": {
+      "name": "Olympique de Marseille",
+      "bsd_team_id": "98",
+      "aliases": [
+        "Marseille"
+      ]
+    },
+    "olympique-lyonnais": {
+      "name": "Olympique Lyonnais",
+      "bsd_team_id": "100",
+      "aliases": [
+        "Lyon"
+      ]
+    },
+    "paris-saint-germain": {
+      "name": "Paris Saint-Germain",
+      "bsd_team_id": "114",
+      "aliases": [
+        "Paris SG"
+      ]
+    },
+    "psv-eindhoven": {
+      "name": "PSV Eindhoven",
+      "bsd_team_id": "115",
+      "aliases": [
+        "PSV"
+      ]
+    },
+    "rc-lens": {
+      "name": "RC Lens",
+      "bsd_team_id": "99",
+      "aliases": [
+        "Lens"
+      ]
+    },
+    "real-madrid": {
+      "name": "Real Madrid",
+      "bsd_team_id": "57",
+      "aliases": []
+    },
+    "sheffield-united": {
+      "name": "Sheffield United",
+      "bsd_team_id": "219",
+      "aliases": []
+    },
+    "southampton": {
+      "name": "Southampton",
+      "bsd_team_id": "205",
+      "aliases": []
+    },
+    "sporting-cp": {
+      "name": "Sporting CP",
+      "bsd_team_id": "22",
+      "aliases": [
+        "Sporting"
+      ]
+    },
+    "stoke-city": {
+      "name": "Stoke City",
+      "bsd_team_id": "215",
+      "aliases": []
+    },
+    "sunderland": {
+      "name": "Sunderland",
+      "bsd_team_id": "7",
+      "aliases": []
+    },
+    "tottenham-hotspur": {
+      "name": "Tottenham Hotspur",
+      "bsd_team_id": "9",
+      "aliases": [
+        "Tottenham"
+      ]
+    },
+    "vfb-stuttgart": {
+      "name": "VfB Stuttgart",
+      "bsd_team_id": "84",
+      "aliases": [
+        "Stuttgart"
+      ]
+    },
+    "villarreal-cf": {
+      "name": "Villarreal CF",
+      "bsd_team_id": "41",
+      "aliases": [
+        "Villarreal"
+      ]
+    },
+    "west-bromwich-albion": {
+      "name": "West Bromwich Albion",
+      "bsd_team_id": "217",
+      "aliases": []
+    },
+    "west-ham-united": {
+      "name": "West Ham United",
+      "bsd_team_id": "8",
+      "aliases": []
+    },
+    "wolverhampton-wanderers": {
+      "name": "Wolverhampton Wanderers",
+      "bsd_team_id": "11",
+      "aliases": []
+    },
+    "wrexham": {
+      "name": "Wrexham",
+      "bsd_team_id": "206",
+      "aliases": []
+    },
+    "besiktas": {
+      "name": "Beşiktaş",
+      "bsd_team_id": "196",
+      "aliases": [
+        "Beşiktaş JK",
+        "Besiktas",
+        "Besiktas JK"
+      ]
+    },
+    "birmingham-city": {
+      "name": "Birmingham City",
+      "bsd_team_id": "199",
+      "aliases": [
+        "BCFC",
+        "Birmingham",
+        "Birmingham City FC"
+      ]
+    },
+    "blackburn-rovers": {
+      "name": "Blackburn Rovers",
+      "bsd_team_id": "218",
+      "aliases": [
+        "Blackburn",
+        "Blackburn Rovers FC",
+        "BRFC"
+      ]
+    },
+    "bolton-wanderers": {
+      "name": "Bolton Wanderers",
+      "bsd_team_id": "1247",
+      "aliases": [
+        "Bolton",
+        "Bolton Wanderers FC"
+      ]
+    },
+    "bristol-city": {
+      "name": "Bristol City",
+      "bsd_team_id": "220",
+      "aliases": [
+        "Bristol City FC"
+      ]
+    },
+    "celtic": {
+      "name": "Celtic",
+      "bsd_team_id": "132",
+      "aliases": [
+        "Celtic FC"
+      ]
+    },
+    "charlton-athletic": {
+      "name": "Charlton Athletic",
+      "bsd_team_id": "201",
+      "aliases": [
+        "Charlton",
+        "Charlton Athletic FC"
+      ]
+    },
+    "derby-county": {
+      "name": "Derby County",
+      "bsd_team_id": "216",
+      "aliases": [
+        "Derby",
+        "Derby County FC"
+      ]
+    },
+    "feyenoord": {
+      "name": "Feyenoord",
+      "bsd_team_id": "138",
+      "aliases": [
+        "Feyenoord Rotterdam"
+      ]
+    },
+    "galatasaray": {
+      "name": "Galatasaray",
+      "bsd_team_id": "125",
+      "aliases": []
+    },
+    "lazio": {
+      "name": "Lazio",
+      "bsd_team_id": "70",
+      "aliases": [
+        "SS Lazio"
+      ]
+    },
+    "portsmouth": {
+      "name": "Portsmouth",
+      "bsd_team_id": "212",
+      "aliases": [
+        "Pompey",
+        "Portsmouth FC"
+      ]
+    },
+    "preston-north-end": {
+      "name": "Preston North End",
+      "bsd_team_id": "214",
+      "aliases": [
+        "PNE",
+        "Preston",
+        "Preston North End FC"
+      ]
+    },
+    "queens-park-rangers": {
+      "name": "Queens Park Rangers",
+      "bsd_team_id": "213",
+      "aliases": [
+        "QPR",
+        "Queens Park Rangers FC"
+      ]
+    },
+    "rangers": {
+      "name": "Rangers",
+      "bsd_team_id": "145",
+      "aliases": [
+        "Rangers FC"
+      ]
+    },
+    "rb-leipzig": {
+      "name": "RB Leipzig",
+      "bsd_team_id": "80",
+      "aliases": [
+        "Leipzig"
+      ]
+    },
+    "swansea-city": {
+      "name": "Swansea City",
+      "bsd_team_id": "208",
+      "aliases": [
+        "SCAFC",
+        "Swansea",
+        "Swansea City AFC"
+      ]
+    },
+    "watford": {
+      "name": "Watford",
+      "bsd_team_id": "202",
+      "aliases": [
+        "Watford FC"
+      ]
+    }
+  }
+}

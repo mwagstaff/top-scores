@@ -64,6 +64,49 @@ test("filterTeamCatalog browses by competition and ranks search matches", () => 
   assert.equal(search[0].id, "norwich-city");
 });
 
+test("team catalogue search includes English exonyms, initials, and ASCII transliterations", () => {
+  const teams = buildTeamCatalog(
+    [
+      {
+        league: "UEFA Conference League",
+        home_team: "FC København",
+        away_team: "Atlético Tordesillas",
+        home_team_id: "100",
+        away_team_id: "101",
+      },
+    ],
+    [
+      {
+        id: "uefa-conference-league",
+        name: "UEFA Conference League",
+        aliases: [],
+      },
+    ]
+  );
+  const copenhagen = teams.find((team) => team.name === "FC København");
+
+  assert.ok(copenhagen);
+  assert.ok(copenhagen.aliases.includes("FC Copenhagen"));
+  assert.ok(copenhagen.aliases.includes("FCK"));
+  assert.ok(copenhagen.aliases.includes("FC Kobenhavn"));
+  assert.deepEqual(
+    filterTeamCatalog(teams, { query: "Copenhagen" }).map((team) => team.name),
+    ["FC København"]
+  );
+  assert.deepEqual(
+    filterTeamCatalog(teams, { query: "FCK" }).map((team) => team.name),
+    ["FC København"]
+  );
+  assert.deepEqual(
+    filterTeamCatalog(teams, { query: "Kobenhavn" }).map((team) => team.name),
+    ["FC København"]
+  );
+  assert.deepEqual(
+    filterTeamCatalog(teams, { query: "Atletico Tordesillas" }).map((team) => team.name),
+    ["Atlético Tordesillas"]
+  );
+});
+
 test("team catalogue index resolves alias slugs", () => {
   const teams = buildTeamCatalog(matches, competitions);
   const index = buildTeamCatalogIndex(teams);

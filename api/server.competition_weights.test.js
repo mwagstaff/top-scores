@@ -13,6 +13,7 @@ const {
     normalizeCompetitionFilterName,
   },
 } = require("./server");
+const { __testHooks: matchMonitorTestHooks } = require("./match_monitor");
 
 test("competition weights payload mirrors the competition catalog name and weight pairs", () => {
   assert.deepEqual(
@@ -34,6 +35,7 @@ test("competition catalog exposes canonical ids and aliases", () => {
   assert.ok(catalog.some((entry) => entry.name === "Ligue 1"));
   assert.ok(catalog.some((entry) => entry.name === "EFL League One" && entry.region === "england"));
   assert.ok(catalog.some((entry) => entry.name === "EFL League Two" && entry.region === "england"));
+  assert.ok(catalog.some((entry) => entry.name === "National League" && entry.region === "england"));
   assert.ok(catalog.some((entry) => entry.id === "german-super-cup" && entry.region === "germany"));
   assert.ok(catalog.every((entry) => entry.logo_url === null));
   assert.equal(normalizeCompetitionFilterName("DFL-Supercup"), "german super cup");
@@ -249,6 +251,88 @@ test("UEFA team rules constrain selected club competitions without hiding the Pr
     ),
     true
   );
+});
+
+test("Premier League teams all-competitions preset matches those teams in any competition", () => {
+  const context = {
+    isPremierLeagueTeam: (team) => team === "Arsenal" || team === "Aston Villa",
+  };
+  const preset = [
+    "competition:premier-league",
+    "competition:uefa-champions-league",
+    "competition:uefa-europa-league",
+    "competition:uefa-conference-league",
+    "competition:uefa-super-cup",
+    "rule:premier-league-teams",
+  ];
+
+  assert.equal(matchPassesFixtureViewOptions({
+    league: "FA Cup",
+    home_team: "Arsenal",
+    away_team: "Watford",
+  }, preset, context), true);
+  assert.equal(matchPassesFixtureViewOptions({
+    league: "EFL Cup",
+    home_team: "Coventry City",
+    away_team: "Aston Villa",
+  }, preset, context), true);
+  assert.equal(matchPassesFixtureViewOptions({
+    league: "FA Cup",
+    home_team: "Watford",
+    away_team: "Coventry City",
+  }, preset, context), false);
+});
+
+test("Premier League teams all-competitions preset drives notification coverage", () => {
+  const preferences = {
+    notificationsEnabled: true,
+    notificationDelayMinutes: 0,
+    notificationEventTypes: ["goal"],
+    notificationMatchesFixturesEnabled: false,
+    notificationAllMajorMatchesEnabled: false,
+    selectedNotificationViewOptionIDs: [
+      "competition:premier-league",
+      "competition:uefa-champions-league",
+      "competition:uefa-europa-league",
+      "competition:uefa-conference-league",
+      "competition:uefa-super-cup",
+      "rule:premier-league-teams",
+    ],
+  };
+  const user = { apnsToken: "test-token", preferences };
+  matchMonitorTestHooks.setNotificationFixtureCategoryFilter((_user, match, context) =>
+    matchPassesFixtureViewOptions(match, context.optionIDs, {
+      isPremierLeagueTeam: (team) => team === "Arsenal" || team === "Aston Villa",
+    })
+  );
+  try {
+    const premierLeagueTeamDecision = matchMonitorTestHooks.evaluateUserNotificationDecision(
+      user,
+      {
+        league: "FA Cup",
+        home_team: "Arsenal",
+        away_team: "Watford",
+        tv_channels: [],
+      },
+      { type: "goal" }
+    );
+    const otherTeamsDecision = matchMonitorTestHooks.evaluateUserNotificationDecision(
+      user,
+      {
+        league: "FA Cup",
+        home_team: "Watford",
+        away_team: "Coventry City",
+        tv_channels: [],
+      },
+      { type: "goal" }
+    );
+
+    assert.equal(premierLeagueTeamDecision.shouldNotify, true);
+    assert.equal(otherTeamsDecision.shouldNotify, false);
+    assert.equal(otherTeamsDecision.reason, "notification_view_filtered_out");
+  } finally {
+    matchMonitorTestHooks.setNotificationFixtureCategoryFilter(null);
+  }
 });
 
 test("GET /api/v1/competitions/weights returns competition names and weights", async () => {

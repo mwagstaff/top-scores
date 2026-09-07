@@ -11,6 +11,31 @@ const {
 
 const FIXED_NOW = new Date("2026-03-22T12:00:00.000Z");
 
+test("Live Activity harness resolves crests by BSD IDs even when display names disagree", () => {
+  const state = buildLiveActivityTestContentState({
+    mode: "single_live",
+    matches: [{
+      homeTeam: "Arsenal",
+      home_team_id: "17",
+      awayTeam: "Chelsea",
+      awayTeamId: 12,
+      homeScore: 2,
+      awayScore: 2,
+      matchTime: "75",
+    }],
+  }, FIXED_NOW);
+  assert.equal(state.matches[0].homeLogoKey, "Man United");
+  assert.equal(state.matches[0].awayLogoKey, "Man City");
+});
+
+test("Live Activity harness leaves an unknown BSD ID unresolved", () => {
+  const state = buildLiveActivityTestContentState({
+    mode: "single_live",
+    matches: [{ homeTeam: "Reading", home_team_id: "8554", awayTeam: "Chelsea" }],
+  }, FIXED_NOW);
+  assert.equal(state.matches[0].homeLogoKey, undefined);
+});
+
 test("buildLiveActivityTestPresets exposes the dense footer regression preset", () => {
   const presets = buildLiveActivityTestPresets(FIXED_NOW);
   const densePreset = presets.find((preset) => preset.id === "single_live_trailing_footer");

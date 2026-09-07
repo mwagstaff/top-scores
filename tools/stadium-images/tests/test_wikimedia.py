@@ -11,6 +11,7 @@ def test_license_allowlist_is_explicit() -> None:
     assert license_allowed("Public domain")
     assert license_allowed("CC BY 4.0")
     assert license_allowed("CC BY-SA 3.0")
+    assert license_allowed("CC BY 2.0 de")
     assert not license_allowed("CC BY-NC 4.0")
     assert not license_allowed("CC BY-ND 4.0")
     assert not license_allowed("")

@@ -17,6 +17,7 @@ const {
 } = require("./mongo_client");
 const { BSD_LEAGUE_ALLOWLIST } = require("./bsd_config");
 const { bsdPlayerImageUrl } = require("./player_images");
+const BSD_VENUE_IMAGE_CATALOG = require("./bsd_venue_image_overrides.json");
 const SunCalc = require("suncalc");
 
 // BSD league_id → canonical league name used by clients and preferences.
@@ -26,6 +27,7 @@ const BSD_LEAGUE_NAME_MAP = {
   "12": "Championship",
   "86": "League One",
   "87": "League Two",
+  "91": "National League",
   "13": "Scottish Premiership",
   "5": "Bundesliga",
   "4": "Serie A",
@@ -52,9 +54,10 @@ const BSD_LEAGUE_NAME_MAP = {
 
 // BSD serves a tiny placeholder for venues whose source image is missing.
 // Keep verified replacements explicit so clients never render that placeholder.
-const BSD_VENUE_IMAGE_OVERRIDES = {
-  "198": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/ce/Coventry_Building_Society_Arena_november_2025.jpg/1280px-Coventry_Building_Society_Arena_november_2025.jpg",
-};
+const BSD_VENUE_IMAGE_OVERRIDES = BSD_VENUE_IMAGE_CATALOG.venues || {};
+const BSD_PLACEHOLDER_VENUE_IDS = new Set(
+  BSD_VENUE_IMAGE_CATALOG.upstream_placeholder_venue_ids || []
+);
 
 // BSD's standings endpoint can omit teams until they have played their first
 // match of a new season. For domestic round-robin leagues, complete the table
@@ -66,6 +69,7 @@ const BSD_FIXTURE_SEEDED_STANDINGS_TEAM_COUNTS = new Map([
   ["12", 24], // Championship
   ["86", 24], // League One
   ["87", 24], // League Two
+  ["91", 24], // National League
   ["13", 12], // Scottish Premiership
   ["5", 18],  // Bundesliga
   ["4", 20],  // Serie A
@@ -640,8 +644,11 @@ function bsdVenueDetails(venueId, venue) {
     return Number.isFinite(parsed) ? parsed : null;
   };
 
+  const venueIdString = String(venueId);
+  const imageOverride = BSD_VENUE_IMAGE_OVERRIDES[venueIdString];
+
   return {
-    id: String(venueId),
+    id: venueIdString,
     name,
     city: String(venue.city || "").trim() || null,
     country: String(venue.country || "").trim() || null,
@@ -649,8 +656,10 @@ function bsdVenueDetails(venueId, venue) {
     built_year: finiteNumber(venue.built_year),
     latitude: finiteNumber(venue.latitude),
     longitude: finiteNumber(venue.longitude),
-    image_url: BSD_VENUE_IMAGE_OVERRIDES[String(venueId)]
-      || `https://sports.bzzoiro.com/img/venue/${encodeURIComponent(String(venueId))}/`,
+    image_url: imageOverride?.image_url
+      || (BSD_PLACEHOLDER_VENUE_IDS.has(venueIdString)
+        ? null
+        : `https://sports.bzzoiro.com/img/venue/${encodeURIComponent(venueIdString)}/`),
   };
 }
 

@@ -1926,6 +1926,12 @@ enum MatchStatusFormatter {
         return inProgressTokens.contains(token)
     }
 
+    /// Half-time remains in progress for refreshes, but does not represent active play.
+    nonisolated static func isActivelyPlaying(_ rawStatus: String) -> Bool {
+        let status = canonicalStatus(rawStatus) ?? normalized(rawStatus)
+        return status != "HT" && isInProgress(status)
+    }
+
     nonisolated static func isFinished(_ rawStatus: String) -> Bool {
         let status = canonicalStatus(rawStatus) ?? normalized(rawStatus)
         guard !status.isEmpty else { return false }

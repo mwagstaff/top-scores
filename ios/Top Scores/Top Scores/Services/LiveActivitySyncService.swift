@@ -149,6 +149,7 @@ struct TopScoresLiveActivityAttributes: ActivityAttributes {
     }
 
     let appScope: String
+    var startedAtEpochSeconds: Int? = nil
 }
 
 final class LiveActivitySyncService {
@@ -165,6 +166,10 @@ final class LiveActivitySyncService {
     private let staticForegroundActivityStaleAfter: TimeInterval = 4 * 60 * 60
 
     private let lock = NSLock()
+    private let sharedWidgetDiagnosticsQueue = DispatchQueue(
+        label: "dev.skynolimit.topscores.widget-diagnostics",
+        qos: .utility
+    )
     private var started = false
     private var lastForegroundReconcileAt: Date?
     private var lastObservedScenePhase: ScenePhase = .background
@@ -208,7 +213,7 @@ final class LiveActivitySyncService {
             pushToStartTask = Task(priority: .background) {
                 for await tokenData in Activity<TopScoresLiveActivityAttributes>.pushToStartTokenUpdates {
                     await self.uploadPushToStartToken(tokenData)
-                    self.flushSharedWidgetDiagnostics()
+                    self.scheduleSharedWidgetDiagnosticsFlush()
                 }
             }
             diagnosticLog("[LiveActivitySync] Monitoring push-to-start token updates")
@@ -227,7 +232,7 @@ final class LiveActivitySyncService {
 
             activityUpdatesTask = Task(priority: .background) {
                 for await activity in Activity<TopScoresLiveActivityAttributes>.activityUpdates {
-                    self.flushSharedWidgetDiagnostics()
+                    self.scheduleSharedWidgetDiagnosticsFlush()
                     self.beginObserving(activity)
                     // Deduplicate immediately when a new activity appears (e.g. a second
                     // push-to-start while one is already active) so the lock screen never
@@ -264,11 +269,8 @@ final class LiveActivitySyncService {
         lastForegroundReconcileAt = now
         lock.unlock()
 
-        diagnosticLog(
-            "[LiveActivitySync] reconcileOnForeground scheduling activeCount=%d",
-            Activity<TopScoresLiveActivityAttributes>.activities.count
-        )
-        flushSharedWidgetDiagnostics()
+        diagnosticLog("[LiveActivitySync] reconcileOnForeground scheduling")
+        scheduleSharedWidgetDiagnosticsFlush()
 
         let shouldStartTask = lock.withLock { () -> Bool in
             if foregroundReconcileInFlight {
@@ -293,7 +295,7 @@ final class LiveActivitySyncService {
     }
 
     func handleScenePhaseChange(_ newPhase: ScenePhase) {
-        flushSharedWidgetDiagnostics()
+        scheduleSharedWidgetDiagnosticsFlush()
         let pendingStartToRetry: TopScoresLiveActivityAttributes.ContentState?
         let pendingPushToStartTokenData: Data?
         lock.lock()
@@ -338,7 +340,7 @@ final class LiveActivitySyncService {
             Self.contentStateSummary(Self.currentContentState(for: activity))
         )
         #endif
-        flushSharedWidgetDiagnostics()
+        scheduleSharedWidgetDiagnosticsFlush()
 
         if activity.activityState == .ended || activity.activityState == .dismissed {
             lock.withLock {
@@ -375,7 +377,7 @@ final class LiveActivitySyncService {
                     activityID,
                     Self.shortHex(tokenData)
                 )
-                self.flushSharedWidgetDiagnostics()
+                self.scheduleSharedWidgetDiagnosticsFlush()
                 if activity.activityState == .ended || activity.activityState == .dismissed {
                     diagnosticLog(
                         "[LiveActivitySync] Ignoring token update for inactive activity %@ state=%@",
@@ -400,7 +402,7 @@ final class LiveActivitySyncService {
                         Self.contentStateSummary(content.state)
                     )
                     #endif
-                    self.flushSharedWidgetDiagnostics()
+                    self.scheduleSharedWidgetDiagnosticsFlush()
                 }
             }
         } else {
@@ -415,7 +417,7 @@ final class LiveActivitySyncService {
                     activityID,
                     String(describing: state)
                 )
-                self.flushSharedWidgetDiagnostics()
+                self.scheduleSharedWidgetDiagnosticsFlush()
                 if state == .ended || state == .dismissed {
                     ended = true
                     _ = self.lock.withLock {
@@ -425,6 +427,16 @@ final class LiveActivitySyncService {
                         activityID: activityID,
                         reason: state == .dismissed ? "dismissed" : "ended"
                     )
+                    if state == .ended {
+                        await activity.end(nil, dismissalPolicy: .immediate)
+                        let isAppActive = await MainActor.run {
+                            UIApplication.shared.applicationState == .active
+                        }
+                        if isAppActive {
+                            self.lock.withLock { self.lastForegroundReconcileAt = nil }
+                            self.reconcileOnForeground()
+                        }
+                    }
                     break
                 }
             }
@@ -476,7 +488,7 @@ final class LiveActivitySyncService {
             "[LiveActivitySync] reconcileLiveActivityStateOnForeground begin activeCount=%d",
             Activity<TopScoresLiveActivityAttributes>.activities.count
         )
-        flushSharedWidgetDiagnostics()
+        scheduleSharedWidgetDiagnosticsFlush()
 
         let activeActivities = await enforceSingleActiveActivity(among: Activity<TopScoresLiveActivityAttributes>.activities)
         if activeActivities.isEmpty {
@@ -512,7 +524,7 @@ final class LiveActivitySyncService {
             reconcileResponse.startContentState == nil ? 0 : 1,
             reconcileResponse.requiresActivityRestart ? 1 : 0
         )
-        flushSharedWidgetDiagnostics()
+        scheduleSharedWidgetDiagnosticsFlush()
 
         if reconcileResponse.requiresActivityRestart, !currentActivities.isEmpty,
            let contentState = reconcileResponse.startContentState ?? reconcileResponse.updateContentState {
@@ -540,6 +552,21 @@ final class LiveActivitySyncService {
         #endif
     }
 
+    // Ended activities can remain on the Lock Screen for four hours. Their
+    // presence in Activity.activities must not block a replacement or get
+    // reported to the server as an activity that can still receive updates.
+    @available(iOS 16.1, *)
+    static func canUpdateActivity(in state: ActivityState) -> Bool {
+        state == .active || state == .stale
+    }
+
+    @available(iOS 16.1, *)
+    private static var updatableActivities: [Activity<TopScoresLiveActivityAttributes>] {
+        Activity<TopScoresLiveActivityAttributes>.activities.filter {
+            canUpdateActivity(in: $0.activityState)
+        }
+    }
+
     @available(iOS 16.1, *)
     private func enforceSingleActiveActivity(
         among activities: [Activity<TopScoresLiveActivityAttributes>]
@@ -547,9 +574,18 @@ final class LiveActivitySyncService {
         let signpost = PerformanceSignposter.liveActivity.beginInterval("LiveActivityEnforceSingle")
         defer { PerformanceSignposter.liveActivity.endInterval("LiveActivityEnforceSingle", signpost) }
 
+        for activity in activities where activity.activityState == .ended {
+            stopObserving(activityID: activity.id, cancelStateTask: true)
+            _ = lock.withLock { endedActivityIDs.insert(activity.id) }
+            await activity.end(nil, dismissalPolicy: .immediate)
+        }
+        let activities = activities.filter { Self.canUpdateActivity(in: $0.activityState) }
         guard activities.count > 1 else { return activities }
 
         let sortedActivities = activities.sorted { lhs, rhs in
+            let leftStarted = lhs.attributes.startedAtEpochSeconds ?? 0
+            let rightStarted = rhs.attributes.startedAtEpochSeconds ?? 0
+            if leftStarted != rightStarted { return leftStarted > rightStarted }
             let leftState = Self.currentContentState(for: lhs)
             let rightState = Self.currentContentState(for: rhs)
             if leftState.generatedAtEpochSeconds != rightState.generatedAtEpochSeconds {
@@ -576,6 +612,15 @@ final class LiveActivitySyncService {
             diagnosticLog("[LiveActivitySync] Pre-uploaded survivor token before ending duplicates %@", survivor.id)
         }
 
+        guard survivor.pushToken != nil else { return [survivor] }
+        // A server renewal is retired by the server only after token registration
+        // succeeds. Do not remove the old card on a failed/in-flight upload.
+        if survivor.attributes.startedAtEpochSeconds != nil,
+           sortedActivities.dropFirst().contains(where: {
+               $0.attributes.startedAtEpochSeconds != survivor.attributes.startedAtEpochSeconds
+           }) {
+            return [survivor]
+        }
         for duplicate in sortedActivities.dropFirst() {
             diagnosticLog("[LiveActivitySync] Ending duplicate activity %@", duplicate.id)
             stopObserving(activityID: duplicate.id, cancelStateTask: true)
@@ -645,6 +690,7 @@ final class LiveActivitySyncService {
         }
 
         guard let endpoint = await endpointURL(path: "live-activity/activity-token") else { return }
+        let activity = Activity<TopScoresLiveActivityAttributes>.activities.first { $0.id == activityID }
         let generatedAtEpochSeconds = Self.currentContentState(for: activityID)?.generatedAtEpochSeconds
         diagnosticLog(
             "[LiveActivitySync] Upload activity token activityId=%@ token=%@ generatedAt=%@",
@@ -656,10 +702,23 @@ final class LiveActivitySyncService {
             "deviceToken": DeviceIdentity.currentToken,
             "activityId": activityID,
             "activityPushToken": tokenHex,
+            "activityStartedAtEpochSeconds": activity?.attributes.startedAtEpochSeconds as Any,
             "activityGeneratedAtEpochSeconds": generatedAtEpochSeconds as Any,
             "isDevelopmentBuild": await MainActor.run { NotificationManager.shared.isDevelopmentBuild }
         ]
-        await sendJSONRequest(url: endpoint, payload: payload, logContext: "activity-token")
+        for attempt in 0..<3 {
+            guard !Task.isCancelled else { break }
+            if await sendJSONRequestReturningData(url: endpoint, payload: payload, logContext: "activity-token") != nil {
+                return
+            }
+            do { try await Task.sleep(nanoseconds: UInt64(attempt + 1) * 1_000_000_000) }
+            catch { break }
+        }
+        lock.withLock {
+            if lastUploadedActivityPushTokenHexByActivityID[activityID] == tokenHex {
+                lastUploadedActivityPushTokenHexByActivityID.removeValue(forKey: activityID)
+            }
+        }
     }
 
     private func uploadActivityStarted(
@@ -696,7 +755,7 @@ final class LiveActivitySyncService {
         guard let endpoint = await endpointURL(path: "live-activity/activity-ended") else { return }
         let activeCount: Int
         if #available(iOS 16.1, *) {
-            activeCount = Activity<TopScoresLiveActivityAttributes>.activities.count
+            activeCount = Self.updatableActivities.count
         } else {
             activeCount = -1
         }
@@ -725,7 +784,7 @@ final class LiveActivitySyncService {
             requiresActivityRestart: false
         )
         guard let endpoint = await endpointURL(path: "live-activity/reconcile") else { return emptyResponse }
-        let activeActivities = Activity<TopScoresLiveActivityAttributes>.activities
+        let activeActivities = Self.updatableActivities
         let payload: [String: Any] = [
             "deviceToken": DeviceIdentity.currentToken,
             "isDevelopmentBuild": await MainActor.run { NotificationManager.shared.isDevelopmentBuild },
@@ -801,7 +860,7 @@ final class LiveActivitySyncService {
     ) async {
         let sanitizedState = sanitizedContentState(contentState)
         let staleDate = Date().addingTimeInterval(staleAfter(for: sanitizedState))
-        for activity in activities {
+        for activity in activities where Self.canUpdateActivity(in: activity.activityState) {
             let currentState = Self.currentContentState(for: activity)
             guard sanitizedState.generatedAtEpochSeconds >= currentState.generatedAtEpochSeconds else {
                 diagnosticLog(
@@ -864,7 +923,7 @@ final class LiveActivitySyncService {
         }
 
         do {
-            let attributes = TopScoresLiveActivityAttributes(appScope: "top-scores")
+            let attributes = TopScoresLiveActivityAttributes(appScope: "top-scores", startedAtEpochSeconds: Int(Date().timeIntervalSince1970))
             let sanitizedState = sanitizedContentState(contentState)
             let staleAfterSeconds = staleAfter(for: sanitizedState)
             let staleDate = Date().addingTimeInterval(staleAfterSeconds)
@@ -885,7 +944,7 @@ final class LiveActivitySyncService {
                 activity.id,
                 staleDate.description
             )
-            flushSharedWidgetDiagnostics()
+            scheduleSharedWidgetDiagnosticsFlush()
             lock.withLock {
                 pendingForegroundStartContentState = nil
                 pendingForegroundStartRetryTask?.cancel()
@@ -916,7 +975,7 @@ final class LiveActivitySyncService {
         contentState: TopScoresLiveActivityAttributes.ContentState
     ) async {
         guard let endpoint = await endpointURL(path: "live-activity/reconcile") else { return }
-        let activeActivities = Activity<TopScoresLiveActivityAttributes>.activities
+        let activeActivities = Self.updatableActivities
         let payload: [String: Any] = [
             "deviceToken": DeviceIdentity.currentToken,
             "isDevelopmentBuild": await MainActor.run { NotificationManager.shared.isDevelopmentBuild },
@@ -944,7 +1003,7 @@ final class LiveActivitySyncService {
             return pendingForegroundStartContentState == contentState
         }
         guard shouldRetry else { return }
-        guard Activity<TopScoresLiveActivityAttributes>.activities.isEmpty else {
+        guard Self.updatableActivities.isEmpty else {
             lock.withLock {
                 pendingForegroundStartContentState = nil
             }
@@ -984,7 +1043,7 @@ final class LiveActivitySyncService {
                 guard isAppActive else { continue }
 
                 guard #available(iOS 16.1, *) else { return }
-                if Activity<TopScoresLiveActivityAttributes>.activities.isEmpty {
+                if Self.updatableActivities.isEmpty {
                     diagnosticLog("[LiveActivitySync] Retrying pending foreground start after delayed active transition")
                     await self.startForegroundActivityIfNeeded(contentState: pendingContentState)
                 }
@@ -1170,6 +1229,14 @@ final class LiveActivitySyncService {
     private static func shortString(_ value: String) -> String {
         guard value.count > 16 else { return value }
         return "\(value.prefix(16))..."
+    }
+
+    private func scheduleSharedWidgetDiagnosticsFlush() {
+        #if DEBUG
+        sharedWidgetDiagnosticsQueue.async { [weak self] in
+            self?.flushSharedWidgetDiagnostics()
+        }
+        #endif
     }
 
     private func flushSharedWidgetDiagnostics() {

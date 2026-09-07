@@ -1,4 +1,11 @@
 #!/usr/bin/env node
+const {
+  NOTIFICATION_RIVALRIES,
+  bsdTeamID,
+  buildNotificationTeamRegistry,
+  migrateNotificationTeamSubscriptions,
+  matchHasBSDTeam,
+} = require("./notification_team_subscriptions");
 /* eslint-disable no-console */
 const fs = require("fs");
 const path = require("path");
@@ -126,8 +133,10 @@ const {
   normalizeTeamIdentityName,
   canonicalTeamName,
   teamIdentityNames,
+  teamNamesEquivalent,
   buildFantasyShortNameMappings,
 } = require("./team_identity");
+const { bsdTeamLogoAsset, legacyBsdTeamLogoAsset } = require("./bsd_team_logo_assets");
 const {
   buildTeamCatalog,
   buildTeamCatalogIndex,
@@ -195,10 +204,6 @@ const LIVE_FOOTBALL_TV_STALE_AFTER_MS = Number(
 const LIVE_FOOTBALL_TV_ADMIN_TOKEN = String(
   process.env.LIVE_FOOTBALL_TV_ADMIN_TOKEN || ""
 ).trim();
-const parsedEplTeamMinConfidence = Number(process.env.EPL_TEAM_MIN_CONFIDENCE || 0.82);
-const EPL_TEAM_MIN_CONFIDENCE = Number.isFinite(parsedEplTeamMinConfidence)
-  ? Math.min(1, Math.max(0, parsedEplTeamMinConfidence))
-  : 0.82;
 const LEAGUE_TABLES_OUTPUT_PATH =
   process.env.LEAGUE_TABLES_OUTPUT_PATH || DEFAULT_BBC_LEAGUE_TABLES_OUTPUT;
 const parsedLeagueTablesIntervalMs = Number(
@@ -736,6 +741,7 @@ registerGoalGuesserTestHarnessRoutes(app, {
   databaseName: process.env.GOAL_GUESSER_TEST_DATABASE,
 });
 registerStadiumArtworkRoutes(app, { apiPrefix: API_PREFIX });
+require("./reference_api").registerReferenceRoutes(app);
 
 const appUsageMetrics = {
   apiRequestsTotal: 0,
@@ -1048,11 +1054,13 @@ async function fetchBsdMatchDetails(matchId) {
 
 function currentTeamCatalogSnapshot() {
   const premierLeagueDataset = currentPremierLeagueTeamsDatasetSnapshot();
+  const teamIdentityUpdatedAt = loadTeamIdentityConfig().updatedAt;
   const version = [
     cachedBsdMatchesUpdatedAt || "unknown",
     cachedBsdMatches.length,
     premierLeagueDataset.updated_at || "unknown",
     premierLeagueDataset.items.length,
+    teamIdentityUpdatedAt || "unknown",
   ].join(":");
   if (cachedTeamCatalogVersion !== version) {
     cachedTeamCatalog = buildTeamCatalog(cachedBsdMatches, buildCompetitionCatalog(), {
@@ -1066,7 +1074,10 @@ function currentTeamCatalogSnapshot() {
   return {
     teams: cachedTeamCatalog,
     byID: cachedTeamCatalogIndex,
-    updatedAt: cachedBsdMatchesUpdatedAt,
+    updatedAt: newestIsoTimestamp([
+      cachedBsdMatchesUpdatedAt,
+      teamIdentityUpdatedAt,
+    ]),
   };
 }
 
@@ -2137,6 +2148,21 @@ function extractPremierLeagueTeamsFromTables(tables) {
   return premier.rows
     .map((row) => String((row && row.team) || "").trim())
     .filter(Boolean);
+}
+
+function buildBsdTableOperationalWrites(tables, updatedAt) {
+  return [
+    {
+      name: OP_DATASET_LEAGUE_TABLES,
+      payload: tables,
+      options: { updated_at: updatedAt, source: SOURCE_BSD_LEAGUE_TABLES },
+    },
+    {
+      name: OP_DATASET_PREMIER_LEAGUE_TEAMS,
+      payload: extractPremierLeagueTeamsFromTables(tables),
+      options: { updated_at: updatedAt, source: SOURCE_BSD_PREMIER_LEAGUE },
+    },
+  ];
 }
 
 /**
@@ -13204,6 +13230,8 @@ function toMonitorCandidateFromDetailsPayload(payload, options = {}) {
     details_url: String(payload.details_url || "").trim() || null,
     tv_channels: [],
     source_details_updated_at: String(payload.updated_at || "").trim() || null,
+    home_team_id: bsdTeamID(payload.home_team_id),
+    away_team_id: bsdTeamID(payload.away_team_id),
   };
 
   if (homeScore !== null) candidate.home_score = homeScore;
@@ -16333,15 +16361,9 @@ function teamMatchesPremierLeague(teamName, premierLeagueTeams) {
     return false;
   }
 
-  const normalizedTeamName = String(teamName).trim();
-  return premierLeagueTeams.some((candidate) => {
-    if (!candidate) return false;
-    const normalizedCandidate = String(candidate).trim();
-    if (compareInsensitive(normalizedTeamName, normalizedCandidate) === 0) {
-      return true;
-    }
-    return similarityScore(normalizedTeamName, normalizedCandidate) >= EPL_TEAM_MIN_CONFIDENCE;
-  });
+  // Eligibility needs a known identity, not a fuzzy resemblance (for example,
+  // Newcastle Town must never match Newcastle United's "Newcastle" alias).
+  return premierLeagueTeams.some((candidate) => candidate && teamNamesEquivalent(teamName, candidate));
 }
 
 function matchIncludesPremierLeagueTeam(match, premierLeagueTeams) {
@@ -16401,7 +16423,9 @@ function matchPassesCategoryFilters(match, options = {}) {
   const predicates = [];
   if (options.eplOnly) {
     predicates.push((candidate) =>
-      matchIncludesPremierLeagueTeam(candidate, options.premierLeagueTeams)
+      options.premierLeagueTeamIDs instanceof Set
+        ? matchHasBSDTeam(candidate, options.premierLeagueTeamIDs)
+        : matchIncludesPremierLeagueTeam(candidate, options.premierLeagueTeams)
     );
   }
   if (options.majorUefa) {
@@ -16432,13 +16456,7 @@ const FIXTURE_VIEW_TEAM_ALIASES = Object.freeze({
   marseille: ["Marseille", "Olympique Marseille", "Olympique de Marseille", "OM"],
 });
 
-const FIXTURE_VIEW_RIVALRIES = Object.freeze({
-  "el-clasico": ["barcelona", "real-madrid"],
-  "old-firm": ["celtic", "rangers"],
-  "der-klassiker": ["bayern-munich", "borussia-dortmund"],
-  "derby-della-madonnina": ["inter", "ac-milan"],
-  "le-classique": ["paris-saint-germain", "marseille"],
-});
+const FIXTURE_VIEW_RIVALRIES = NOTIFICATION_RIVALRIES;
 
 const UEFA_CLUB_COMPETITION_IDS = new Set([
   "uefa-champions-league",
@@ -16448,6 +16466,13 @@ const UEFA_CLUB_COMPETITION_IDS = new Set([
 ]);
 const FIXTURE_VIEW_UEFA_TEAM_RULE_IDS = new Set([
   "rule:top-uefa-clubs",
+  "rule:premier-league-teams",
+]);
+// The iOS quick filter persists this bundle as one preset. Match it before the
+// generic UEFA rule handling so Premier League teams remain visible in cups.
+const PREMIER_LEAGUE_TEAMS_ALL_COMPETITIONS_OPTION_IDS = new Set([
+  "competition:premier-league",
+  ...Array.from(UEFA_CLUB_COMPETITION_IDS, (id) => `competition:${id}`),
   "rule:premier-league-teams",
 ]);
 const TOP_TEAMS_PRESET_ID = String(DEFAULT_TOP_TEAMS_CONFIG.id || "preset:top-teams");
@@ -16507,7 +16532,8 @@ function matchPassesTopTeamsPreset(match, context = {}) {
   if (competitionID === TOP_TEAMS_PREMIER_LEAGUE_ID) {
     return true;
   }
-  if (teamNames.some((teamName) => context.isPremierLeagueTeam?.(teamName))) {
+  if (context.isPremierLeagueTeam?.(match.home_team, match.home_team_id) ||
+      context.isPremierLeagueTeam?.(match.away_team, match.away_team_id)) {
     return true;
   }
   if (teamNames.some((teamName) => configuredTopTeamsTeamMatches(
@@ -16546,8 +16572,13 @@ function fixtureViewTeamMatches(
   teamID,
   manualMappings = null,
   teamCatalogByID = null,
-  sourceTeamID = null
+  sourceTeamID = null,
+  notificationTeamBindings = null
 ) {
+  if (notificationTeamBindings) {
+    const selectedID = bsdTeamID(notificationTeamBindings[teamID]);
+    return Boolean(selectedID && selectedID === bsdTeamID(sourceTeamID));
+  }
   const catalogEntry = teamCatalogByID instanceof Map ? teamCatalogByID.get(teamID) : null;
   if (
     catalogEntry &&
@@ -16574,16 +16605,16 @@ function fixtureViewTeamMatches(
   return Boolean(teamKey && teamKey === String(teamID || "").trim().toLowerCase());
 }
 
-function fixtureViewRivalryMatches(match, rivalryID, manualMappings = null, teamCatalogByID = null) {
+function fixtureViewRivalryMatches(match, rivalryID, manualMappings = null, teamCatalogByID = null, notificationTeamBindings = null) {
   const teams = FIXTURE_VIEW_RIVALRIES[rivalryID];
   if (!match || !teams) return false;
   const [firstTeamID, secondTeamID] = teams;
   return (
-    fixtureViewTeamMatches(match.home_team, firstTeamID, manualMappings, teamCatalogByID, match.home_team_id) &&
-    fixtureViewTeamMatches(match.away_team, secondTeamID, manualMappings, teamCatalogByID, match.away_team_id)
+    fixtureViewTeamMatches(match.home_team, firstTeamID, manualMappings, teamCatalogByID, match.home_team_id, notificationTeamBindings) &&
+    fixtureViewTeamMatches(match.away_team, secondTeamID, manualMappings, teamCatalogByID, match.away_team_id, notificationTeamBindings)
   ) || (
-    fixtureViewTeamMatches(match.home_team, secondTeamID, manualMappings, teamCatalogByID, match.home_team_id) &&
-    fixtureViewTeamMatches(match.away_team, firstTeamID, manualMappings, teamCatalogByID, match.away_team_id)
+    fixtureViewTeamMatches(match.home_team, secondTeamID, manualMappings, teamCatalogByID, match.home_team_id, notificationTeamBindings) &&
+    fixtureViewTeamMatches(match.away_team, firstTeamID, manualMappings, teamCatalogByID, match.away_team_id, notificationTeamBindings)
   );
 }
 
@@ -16948,6 +16979,20 @@ function matchPassesFixtureViewOptions(match, optionIDs, context = {}) {
   if (normalizedOptionIDs.length === 0 || normalizedOptionIDs.includes("scope:all")) {
     return true;
   }
+  const normalizedOptionIDSet = new Set(normalizedOptionIDs);
+  if (
+    normalizedOptionIDSet.size === PREMIER_LEAGUE_TEAMS_ALL_COMPETITIONS_OPTION_IDS.size &&
+    Array.from(PREMIER_LEAGUE_TEAMS_ALL_COMPETITIONS_OPTION_IDS).every((optionID) =>
+      normalizedOptionIDSet.has(optionID)
+    )
+  ) {
+    const isPremierLeagueTeam =
+      typeof context.isPremierLeagueTeam === "function"
+        ? context.isPremierLeagueTeam
+        : () => false;
+    return isPremierLeagueTeam(match.home_team, match.home_team_id) ||
+      isPremierLeagueTeam(match.away_team, match.away_team_id);
+  }
   if (normalizedOptionIDs.includes(TOP_TEAMS_PRESET_ID)) {
     if (matchPassesTopTeamsPreset(match, context)) return true;
     normalizedOptionIDs = normalizedOptionIDs.filter((optionID) => optionID !== TOP_TEAMS_PRESET_ID);
@@ -16976,13 +17021,15 @@ function matchPassesFixtureViewOptions(match, optionIDs, context = {}) {
         teamID,
         manualMappings,
         teamCatalogByID,
-        match.home_team_id
+        match.home_team_id,
+        context.notificationTeamBindings
       ) || fixtureViewTeamMatches(
         match.away_team,
         teamID,
         manualMappings,
         teamCatalogByID,
-        match.away_team_id
+        match.away_team_id,
+        context.notificationTeamBindings
       );
     }
     if (optionID.startsWith("rivalry:")) {
@@ -16990,7 +17037,8 @@ function matchPassesFixtureViewOptions(match, optionIDs, context = {}) {
         match,
         optionID.slice("rivalry:".length),
         manualMappings,
-        teamCatalogByID
+        teamCatalogByID,
+        context.notificationTeamBindings
       );
     }
     return false;
@@ -17019,7 +17067,8 @@ function matchPassesFixtureViewOptions(match, optionIDs, context = {}) {
         typeof context.isPremierLeagueTeam === "function"
           ? context.isPremierLeagueTeam
           : () => false;
-      return isPremierLeagueTeam(match.home_team) || isPremierLeagueTeam(match.away_team);
+      return isPremierLeagueTeam(match.home_team, match.home_team_id) ||
+      isPremierLeagueTeam(match.away_team, match.away_team_id);
     }
     return false;
   });
@@ -17070,9 +17119,10 @@ function matchesFilters(match, filters) {
   const channelList = Array.isArray(match.tv_channels) ? match.tv_channels : [];
   const channelOk =
     channels.length === 0 ||
-    channelList.some((channel) =>
-      channels.some((selection) => channelMatchesSelection(channel, selection))
-    );
+    channelList.some((channel) => {
+      const channelName = channel && typeof channel === "object" ? channel.name : channel;
+      return channels.some((selection) => channelMatchesSelection(channelName, selection));
+    });
   if (!channelOk) return false;
 
   if (dateFrom || dateTo) {
@@ -21777,6 +21827,17 @@ async function updateLeagueTables(options = {}) {
     leagueTablesLastUpdated = cachedBsdTablesUpdatedAt;
     cachedPremierLeagueTeams = extractPremierLeagueTeamsFromTables(cachedBsdTables);
     eplLastUpdated = cachedBsdTablesUpdatedAt;
+    await Promise.all(
+      buildBsdTableOperationalWrites(cachedBsdTables, cachedBsdTablesUpdatedAt).map(
+        ({ name, payload, options: persistOptions }) =>
+          persistOperationalDatasetSafe(name, payload, persistOptions)
+      )
+    );
+    invalidateCacheDomains(["tables", "teams"], {
+      reason: "bsd_league_tables_refresh",
+      source: SOURCE_BSD_LEAGUE_TABLES,
+      updated_at: cachedBsdTablesUpdatedAt,
+    });
     setSourceCacheSize("bsd_league_tables", leagueTableRowsCount(cachedBsdTables));
     logPollSuccess("bsd_league_tables", {
       source: "bsd_league_tables",
@@ -27144,7 +27205,7 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
     epl_last_updated: teamsDataset.updated_at || eplLastUpdated,
     epl_output_path: path.resolve(EPL_OUTPUT_PATH),
     epl_interval_ms: EPL_INTERVAL_MS,
-    epl_team_min_confidence: EPL_TEAM_MIN_CONFIDENCE,
+    epl_team_matching: "exact_identity",
     fpl_bootstrap_source_url: FPL_BOOTSTRAP_SOURCE_URL,
     fpl_bootstrap_interval_ms: FPL_BOOTSTRAP_INTERVAL_MS,
     fpl_bootstrap_timeout_ms: FPL_BOOTSTRAP_TIMEOUT_MS,
@@ -27688,6 +27749,12 @@ app.post(`${API_PREFIX}/live-activity/activity-started`, async (req, res) => {
       res.status(200).json({ success: true, ignored: true, reason: "recently_ended_activity" });
       return;
     }
+    if (existingLiveActivity.currentActivityPushToken) {
+      // The update-token callback owns handover; a start acknowledgement alone
+      // is not enough to retire the current activity or erase its token.
+      res.status(200).json({ success: true, awaitingActivityToken: true });
+      return;
+    }
     const hooks = matchMonitor && matchMonitor.__testHooks ? matchMonitor.__testHooks : null;
     const normalizedContentState =
       contentState && typeof contentState === "object" && !Array.isArray(contentState)
@@ -27767,6 +27834,7 @@ app.post(`${API_PREFIX}/live-activity/activity-token`, async (req, res) => {
     activityId,
     activityPushToken,
     activityGeneratedAtEpochSeconds,
+    activityStartedAtEpochSeconds,
     isDevelopmentBuild,
   } = req.body || {};
   const resolvedDeviceToken = req.deviceToken || normalizeDeviceToken(deviceToken);
@@ -27822,6 +27890,7 @@ app.post(`${API_PREFIX}/live-activity/activity-token`, async (req, res) => {
       activityId: normalizedActivityId,
       activityPushToken: normalizedActivityPushToken,
       activityGeneratedAtEpochSeconds: normalizedActivityGeneratedAtEpochSeconds,
+      activityStartedAtEpochSeconds: Number(activityStartedAtEpochSeconds) || null,
       isDevelopmentBuild: resolvedIsDevelopmentBuild,
     });
     console.log(
@@ -27860,6 +27929,11 @@ app.post(`${API_PREFIX}/live-activity/activity-token`, async (req, res) => {
     }
 
     const nowIso = new Date().toISOString();
+    const isNewActivity = existingLiveActivity.currentActivityId !== normalizedActivityId;
+    const startedAtSeconds = Number(activityStartedAtEpochSeconds);
+    const newStartedAt = Number.isFinite(startedAtSeconds) && startedAtSeconds > 0 && startedAtSeconds <= Date.now() / 1000
+      ? new Date(startedAtSeconds * 1000).toISOString()
+      : existingLiveActivity.renewalRequestedAt || nowIso;
     const saved = await updateUserLiveActivityState(
       resolvedDeviceToken,
       {
@@ -27868,6 +27942,15 @@ app.post(`${API_PREFIX}/live-activity/activity-token`, async (req, res) => {
         currentActivityTokenUpdatedAt: nowIso,
         currentActivityGeneratedAtEpochSeconds: normalizedActivityGeneratedAtEpochSeconds,
         pendingStartAt: null,
+        ...(isNewActivity ? {
+          lastStartAt: newStartedAt,
+          currentActivityStartedAt: newStartedAt,
+          retiredActivityId: existingLiveActivity.currentActivityId || existingLiveActivity.retiredActivityId || null,
+          renewalForActivityId: null,
+          renewalRequestedAt: null,
+          renewalLastAttemptAt: null,
+          renewalAttempts: 0,
+        } : {}),
         pushToStartAttempts: 0,
         invalidatedActivityId: null,
         invalidatedAt: null,
@@ -27987,6 +28070,10 @@ app.post(`${API_PREFIX}/live-activity/activity-ended`, async (req, res) => {
       const storedActivityId = liveActivity.currentActivityId
         ? String(liveActivity.currentActivityId).trim() : null;
 
+      if (liveActivity.retiredActivityId === normalizedActivityId) {
+        res.status(200).json({ success: true, stale: true });
+        return;
+      }
       if (storedActivityId && storedActivityId !== normalizedActivityId) {
         if (reportsNoLocalActivities) {
           console.log(
@@ -30443,7 +30530,10 @@ function liveActivityTestTeamDisplayName(teamName, explicitShortName = "") {
   return LIVE_ACTIVITY_TEST_TEAM_SHORT_NAMES.get(normalizeTeamShortNameKey(trimmedTeamName)) || trimmedTeamName;
 }
 
-function liveActivityTestTeamLogoKey(teamName, displayName = "") {
+function liveActivityTestTeamLogoKey(teamName, displayName = "", teamID = null) {
+  if (String(teamID ?? "").trim()) return bsdTeamLogoAsset(teamID);
+  const legacy = legacyBsdTeamLogoAsset(teamName);
+  if (legacy) return legacy;
   const explicit = resolveKnownTeamLogoAsset(teamName);
   if (explicit) return explicit;
   const display = resolveKnownTeamLogoAsset(displayName);
@@ -30512,7 +30602,9 @@ function normalizeLiveActivityTestMatch(rawMatch, index = 0, now = new Date()) {
   if (match.homeLogoKey || match.home_logo_key) {
     normalized.homeLogoKey = String(match.homeLogoKey || match.home_logo_key).trim();
   } else {
-    const homeLogoKey = liveActivityTestTeamLogoKey(homeTeam, homeDisplayName);
+    const homeLogoKey = liveActivityTestTeamLogoKey(
+      homeTeam, homeDisplayName, match.home_team_id ?? match.homeTeamId
+    );
     if (homeLogoKey) {
       normalized.homeLogoKey = homeLogoKey;
     }
@@ -30520,7 +30612,9 @@ function normalizeLiveActivityTestMatch(rawMatch, index = 0, now = new Date()) {
   if (match.awayLogoKey || match.away_logo_key) {
     normalized.awayLogoKey = String(match.awayLogoKey || match.away_logo_key).trim();
   } else {
-    const awayLogoKey = liveActivityTestTeamLogoKey(awayTeam, awayDisplayName);
+    const awayLogoKey = liveActivityTestTeamLogoKey(
+      awayTeam, awayDisplayName, match.away_team_id ?? match.awayTeamId
+    );
     if (awayLogoKey) {
       normalized.awayLogoKey = awayLogoKey;
     }
@@ -31207,6 +31301,7 @@ function resolveLiveActivityTestUserDeviceToken(req, body = {}) {
 
 function liveActivityEndedTombstoneMatches(liveActivity, activityId) {
   if (!liveActivity || typeof liveActivity !== "object" || !activityId) return false;
+  if (liveActivity.retiredActivityId === activityId) return true;
   const lastEndedActivityId = normalizeDeviceToken(liveActivity.lastEndedActivityId);
   if (!lastEndedActivityId || lastEndedActivityId !== activityId) return false;
   const lastEndedAtMs = liveActivity.lastEndedAt ? Date.parse(String(liveActivity.lastEndedAt)) : null;
@@ -31223,6 +31318,7 @@ async function endSupersededLiveActivityIfNeeded({
   activityId,
   activityPushToken,
   activityGeneratedAtEpochSeconds,
+  activityStartedAtEpochSeconds,
   isDevelopmentBuild,
 }) {
   const liveActivityState =
@@ -31251,10 +31347,17 @@ async function endSupersededLiveActivityIfNeeded({
     return { endedExisting: false, reason: "same_activity" };
   }
 
-  const incomingIsOlderThanExisting =
-    Number.isFinite(existingActivityGeneratedAtEpochSeconds) &&
-    Number.isFinite(activityGeneratedAtEpochSeconds) &&
-    activityGeneratedAtEpochSeconds < existingActivityGeneratedAtEpochSeconds;
+  const existingStartedAt = Date.parse(liveActivityState.currentActivityStartedAt || liveActivityState.lastStartAt || "");
+  const incomingStartedAt = Number(activityStartedAtEpochSeconds) * 1000;
+  const renewalRequestedAt = Date.parse(liveActivityState.renewalRequestedAt || "");
+  const isExpectedRenewal = liveActivityState.renewalForActivityId === existingActivityId &&
+    activityId !== existingActivityId && Number.isFinite(renewalRequestedAt) &&
+    activityGeneratedAtEpochSeconds >= Math.floor(renewalRequestedAt / 1000);
+  const incomingIsOlderThanExisting = incomingStartedAt > 0 && Number.isFinite(existingStartedAt)
+    ? incomingStartedAt < existingStartedAt
+    : !isExpectedRenewal && Number.isFinite(existingActivityGeneratedAtEpochSeconds) &&
+      Number.isFinite(activityGeneratedAtEpochSeconds) &&
+      activityGeneratedAtEpochSeconds < existingActivityGeneratedAtEpochSeconds;
   if (incomingIsOlderThanExisting) {
     const timestamp = Math.floor(Date.now() / 1000);
     const result = await sendLiveActivityPush({
@@ -32820,6 +32923,29 @@ if (typeof matchMonitor.setLiveActivityFixtureCategoryFilter === "function") {
     });
   });
 }
+let notificationTeamRegistryVersion = null;
+let notificationTeamRegistry = null;
+function currentNotificationTeamRegistry() {
+  const snapshot = currentTeamCatalogSnapshot();
+  if (notificationTeamRegistryVersion !== snapshot.teams) {
+    notificationTeamRegistry = buildNotificationTeamRegistry(snapshot.teams);
+    notificationTeamRegistryVersion = snapshot.teams;
+  }
+  return notificationTeamRegistry;
+}
+require("./redis_client").setNotificationTeamSubscriptionResolver((user) =>
+  migrateNotificationTeamSubscriptions(user, currentNotificationTeamRegistry()));
+
+function notificationFixtureContext(user, registry = currentNotificationTeamRegistry(), baseContext = currentFixtureViewFilterContext()) {
+  const subscriptions = user.notificationTeamSubscriptions?.version === 1
+    ? user.notificationTeamSubscriptions : { bindings: {} };
+  return {
+    ...baseContext,
+    notificationTeamBindings: subscriptions.bindings || {},
+    isPremierLeagueTeam: (_name, id) => registry.premierLeagueIDs.has(bsdTeamID(id)),
+  };
+}
+
 if (typeof matchMonitor.setNotificationFixtureCategoryFilter === "function") {
   matchMonitor.setNotificationFixtureCategoryFilter((user, match, context = {}) => {
     const preferences =
@@ -32830,7 +32956,7 @@ if (typeof matchMonitor.setNotificationFixtureCategoryFilter === "function") {
         return matchPassesFixtureViewOptions(
           match,
           fixtureViewOptionIDs,
-          currentFixtureViewFilterContext()
+          notificationFixtureContext(user)
         );
       }
       const fixtureAllMajorMatchesEnabled =
@@ -32843,7 +32969,7 @@ if (typeof matchMonitor.setNotificationFixtureCategoryFilter === "function") {
         majorUefa: preferences.majorUEFAClubGamesEnabled === true,
         homeNations: preferences.homeNationsFilterEnabled === true,
         majorTournaments: preferences.majorTournamentsFilterEnabled === true,
-        premierLeagueTeams: currentPremierLeagueTeamsDatasetSnapshot().items,
+        premierLeagueTeamIDs: currentNotificationTeamRegistry().premierLeagueIDs,
       });
     }
 
@@ -32851,7 +32977,7 @@ if (typeof matchMonitor.setNotificationFixtureCategoryFilter === "function") {
       return matchPassesFixtureViewOptions(
         match,
         Array.isArray(context.optionIDs) ? context.optionIDs : [],
-        currentFixtureViewFilterContext()
+        notificationFixtureContext(user)
       );
     }
 
@@ -32860,7 +32986,7 @@ if (typeof matchMonitor.setNotificationFixtureCategoryFilter === "function") {
       majorUefa: context.mode === "all_major",
       homeNations: context.mode === "all_major",
       majorTournaments: context.mode === "all_major",
-      premierLeagueTeams: currentPremierLeagueTeamsDatasetSnapshot().items,
+      premierLeagueTeamIDs: currentNotificationTeamRegistry().premierLeagueIDs,
     });
   });
 }
@@ -33619,6 +33745,7 @@ module.exports = {
     isChampionsLeagueQualifyingMatch,
     matchPassesTopTeamsPreset,
     matchPassesFixtureViewOptions,
+    notificationFixtureContext,
     matchesVisibleForScoresPreferences,
     normalizeCalendarSubscriptionToken,
     calendarSubscriptionTokenHash,
@@ -33665,5 +33792,6 @@ module.exports = {
     bsdMatchesForTable,
     normalizeLeagueName,
     withNormalizedTableLeagueName,
+    buildBsdTableOperationalWrites,
   },
 };

@@ -25,6 +25,7 @@ struct Top_ScoresApp: App {
 
     init() {
         PerformanceSignposter.startup.emitEvent("AppInit")
+        AppDiagnosticsMonitor.shared.start()
         BackgroundRefreshManager.register()
         PhoneWatchSyncService.shared.activate()
     }
@@ -41,13 +42,25 @@ struct Top_ScoresApp: App {
                     await stadiumBackdropStore.runHourlyRotation()
                 }
                 .task(id: preferences.apiBaseURL) {
-                    await TopTeamsPresetStore.shared.ensureFresh(
+                    async let topTeams: Void = TopTeamsPresetStore.shared.ensureFresh(
                         apiBaseURL: preferences.apiBaseURL
                     )
+                    async let premierLeagueTeams: Void = PremierLeagueTeamsStore.shared.ensureFresh(
+                        apiBaseURL: preferences.apiBaseURL
+                    )
+                    _ = await (topTeams, premierLeagueTeams)
                 }
                 .task(id: preferences.apiBaseURL) {
                     await stadiumArtworkStore.ensureFresh(
                         apiBaseURL: preferences.apiBaseURL
+                    )
+                }
+                .task(id: preferences.apiBaseURL, priority: .utility) {
+                    try? await Task.sleep(for: .seconds(1.5))
+                    guard !Task.isCancelled else { return }
+                    await StadiumPhotoPrewarmer.shared.prewarm(
+                        apiBaseURL: preferences.apiBaseURL,
+                        preferences: preferences.snapshot
                     )
                 }
         }
@@ -68,13 +81,26 @@ struct Top_ScoresApp: App {
                 let snapshot = preferences.showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
                 matchesStore.refreshOnForeground(preferences: snapshot)
                 Task {
-                    await TopTeamsPresetStore.shared.ensureFresh(
+                    async let topTeams: Void = TopTeamsPresetStore.shared.ensureFresh(
                         apiBaseURL: preferences.apiBaseURL
                     )
+                    async let premierLeagueTeams: Void = PremierLeagueTeamsStore.shared.ensureFresh(
+                        apiBaseURL: preferences.apiBaseURL
+                    )
+                    _ = await (topTeams, premierLeagueTeams)
                 }
                 Task {
                     await stadiumArtworkStore.ensureFresh(
                         apiBaseURL: preferences.apiBaseURL
+                    )
+                }
+                let stadiumPhotoSnapshot = preferences.snapshot
+                Task(priority: .utility) {
+                    try? await Task.sleep(for: .seconds(1.5))
+                    guard !Task.isCancelled else { return }
+                    await StadiumPhotoPrewarmer.shared.prewarm(
+                        apiBaseURL: stadiumPhotoSnapshot.apiBaseURL,
+                        preferences: stadiumPhotoSnapshot
                     )
                 }
                 scheduleDeferredStartupWork(snapshot: preferences.snapshot)
@@ -102,15 +128,6 @@ struct Top_ScoresApp: App {
 
             PerformanceSignposter.startup.emitEvent("DeferredStartupAppMetric")
             await AppMetricsService.shared.sendAppOpenMetric(apiBaseURL: snapshot.apiBaseURL)
-            guard !Task.isCancelled else { return }
-
-            try? await Task.sleep(nanoseconds: startupDeferredSpacingNanos)
-            guard !Task.isCancelled else { return }
-
-            PerformanceSignposter.startup.emitEvent("DeferredStartupMissingLogoAuditCleanup")
-            await MissingTeamLogoAuditCleanupService.shared.pruneIfNeeded(
-                apiBaseURL: snapshot.apiBaseURL
-            )
             guard !Task.isCancelled else { return }
 
             try? await Task.sleep(nanoseconds: startupDeferredSpacingNanos)
@@ -237,14 +254,21 @@ actor MissingTeamLogoAuditCleanupService {
             guard !missingTeamNames.isEmpty else { return }
 
             let alternateLookup = Self.buildAlternateLookup(shortNames: shortNamesResponse.shortNames)
-            let resolvedEntries = await MainActor.run {
-                missingTeamNames.filter { teamName in
+            var resolvedEntries: [String] = []
+            resolvedEntries.reserveCapacity(missingTeamNames.count)
+            for teamName in missingTeamNames {
+                guard !Task.isCancelled else { return }
+                let isResolved = await MainActor.run {
                     let alternates = alternateLookup[Self.normalizedTeamKey(teamName)] ?? []
                     return LogoResolver.shared.hasDedicatedLogo(
                         for: teamName,
                         alternateNames: alternates
                     )
                 }
+                if isResolved {
+                    resolvedEntries.append(teamName)
+                }
+                await Task.yield()
             }
 
             guard !resolvedEntries.isEmpty else { return }

@@ -7,9 +7,205 @@
 
 import Foundation
 import Testing
+import UIKit
 @testable import Top_Scores
 
 struct Top_ScoresTests {
+
+    @Test func bundledCompetitionLogos_coverEveryConfiguredCompetition() {
+        let configuredCompetitions = [
+            ("premier-league", "Premier League"),
+            ("uefa-champions-league", "UEFA Champions League"),
+            ("fifa-world-cup-2026", "FIFA World Cup 2026"),
+            ("uefa-europa-league", "UEFA Europa League"),
+            ("uefa-conference-league", "UEFA Conference League"),
+            ("uefa-nations-league", "UEFA Nations League"),
+            ("uefa-super-cup", "UEFA Super Cup"),
+            ("fa-cup", "FA Cup"),
+            ("english-league-cup", "EFL Cup"),
+            ("la-liga", "La Liga"),
+            ("copa-del-rey", "Copa del Rey"),
+            ("bundesliga", "Bundesliga"),
+            ("german-super-cup", "DFL-Supercup"),
+            ("serie-a", "Serie A"),
+            ("ligue-1", "Ligue 1"),
+            ("championship", "Championship"),
+            ("scottish-premiership", "Scottish Premiership"),
+            ("scottish-championship", "Scottish Championship"),
+            ("scottish-league-one", "Scottish League One"),
+            ("scottish-league-two", "Scottish League Two"),
+            ("league-one", "EFL League One"),
+            ("league-two", "EFL League Two"),
+            ("national-league", "National League"),
+            ("international-friendly", "International Friendly")
+        ]
+        for (competitionID, competitionName) in configuredCompetitions {
+            #expect(
+                BundledCompetitionLogo.assetName(
+                    competitionID: competitionID,
+                    competitionName: competitionName
+                ) != nil,
+                "Missing logo mapping for \(competitionName)"
+            )
+        }
+
+        let requiredAssetNames = [
+            "CompetitionLogo3",
+            "CompetitionLogo4",
+            "CompetitionLogo5",
+            "CompetitionLogo6",
+            "CompetitionLogo7",
+            "CompetitionLogo8",
+            "CompetitionLogo10",
+            "CompetitionLogo12",
+            "CompetitionLogo13",
+            "CompetitionLogo27",
+            "CompetitionLogo39",
+            "CompetitionLogo40",
+            "CompetitionLogo41",
+            "CompetitionLogo42",
+            "CompetitionLogo43",
+            "CompetitionLogo44",
+            "CompetitionLogo64",
+            "CompetitionLogo83",
+            "CompetitionLogo86",
+            "CompetitionLogo87",
+            "CompetitionLogo90",
+            "CompetitionLogo91",
+            "CompetitionLogoGermanSuperCup",
+            "CompetitionLogoInternationalFriendly",
+            "FantasyPremierLeagueLion"
+        ]
+
+        for assetName in requiredAssetNames {
+            #expect(
+                UIImage(named: assetName) != nil,
+                "Missing competition logo asset \(assetName)"
+            )
+        }
+    }
+
+    @Test func fixtureCompetitionRenderWindow_boundsLargeCompetitionInitially() {
+        #expect(
+            FixtureCompetitionRenderWindow.displayedCount(
+                totalCount: 104,
+                configuredLimit: nil
+            ) == 12
+        )
+        #expect(
+            FixtureCompetitionRenderWindow.nextLimit(
+                displayedCount: 12,
+                totalCount: 104
+            ) == 32
+        )
+        #expect(
+            FixtureCompetitionRenderWindow.nextLimit(
+                displayedCount: 92,
+                totalCount: 104
+            ) == 104
+        )
+        #expect(
+            FixtureCompetitionRenderWindow.displayedCount(
+                totalCount: 5,
+                configuredLimit: nil
+            ) == 5
+        )
+    }
+
+    @Test func fixtureBrowseGroupingWorkPlan_prioritizesOnlyTheSelectedFilteredPage() {
+        let changedDateKeys: Set<String> = ["2026-09-04", "2026-09-05", "2026-09-06"]
+        let plan = FixtureBrowseGroupingWorkPlan(
+            changedDateKeys: changedDateKeys,
+            selectedDateKey: "2026-09-05"
+        )
+
+        #expect(plan.immediateFilteredDateKeys == ["2026-09-05"])
+        #expect(plan.deferredFilteredDateKeys == ["2026-09-04", "2026-09-06"])
+        #expect(plan.deferredUnfilteredDateKeys == changedDateKeys)
+        #expect(plan.hasDeferredWork)
+    }
+
+    @Test @MainActor func logoResolver_resolvesLargeUnknownTeamBatchWithoutBlocking() {
+        _ = LogoResolver.shared.hasDedicatedLogo(for: "Arsenal")
+        let startedAt = Date()
+
+        for index in 0..<208 {
+            _ = LogoResolver.shared.hasDedicatedLogo(
+                for: "Amateur Cup Side \(index) Uncatalogued"
+            )
+        }
+
+        #expect(Date().timeIntervalSince(startedAt) < 1)
+    }
+
+    @Test @MainActor func logoResolver_retainsFuzzyTypoMatching() {
+        #expect(LogoResolver.shared.hasDedicatedLogo(for: "Arsenel"))
+    }
+
+    @Test func playerDatePresentation_formatsExpectedReturnDateWithOrdinalDay() {
+        #expect(
+            PlayerDatePresentation.expectedReturnDisplayDate("2026-09-30") ==
+                "September 30th"
+        )
+        #expect(PlayerDatePresentation.expectedReturnDisplayDate("2026-09-01") == "September 1st")
+        #expect(PlayerDatePresentation.expectedReturnDisplayDate("not-a-date") == nil)
+    }
+
+    @Test @MainActor func fantasyPlayerAvailabilityResolver_mapsFPLPlayerToBSDInjuryDate() {
+        let catalog = TeamCatalogResponse(
+            teams: [
+                TeamCatalogEntry(
+                    id: "leeds-united",
+                    name: "Leeds United",
+                    aliases: ["LEE", "Leeds"],
+                    competitionIDs: ["1"],
+                    competitionNames: ["Premier League"],
+                    sourceTeamIDs: ["19"]
+                )
+            ],
+            count: 1,
+            totalCount: 1,
+            offset: 0,
+            limit: 20,
+            hasMore: false,
+            updatedAt: nil,
+            source: "test"
+        )
+        let squad = TeamSquadResponse(
+            teamID: "19",
+            count: 1,
+            players: [
+                PlayerDetails(
+                    id: "363",
+                    name: "Joe Rodon",
+                    availability: "injured",
+                    injuryType: "Hamstring Injury",
+                    injuryExpectedReturn: "2026-09-30",
+                    fplElementID: 329
+                )
+            ],
+            exchangeRate: nil
+        )
+
+        #expect(
+            FantasyPlayerAvailabilityResolver.bsdTeamID(
+                forFPLTeamName: "Leeds",
+                in: catalog
+            ) == "19"
+        )
+        #expect(
+            FantasyPlayerAvailabilityResolver.injuryExpectedReturn(
+                forElementID: 329,
+                in: squad
+            ) == "2026-09-30"
+        )
+        #expect(
+            FantasyPlayerAvailabilityResolver.injuryExpectedReturn(
+                forElementID: 330,
+                in: squad
+            ) == nil
+        )
+    }
 
     @Test func fantasyEntryInPlaySelection_matchesSelectedPlayerTeamToLiveFixture() {
         let vanDijkElementID = 350
@@ -372,6 +568,31 @@ struct Top_ScoresTests {
         let reloaded = PreferencesStore(userDefaults: defaults)
         #expect(reloaded.hasSavedFavouriteFixtureView)
         #expect(reloaded.favouriteFixtureViewOptionIDs == [FixtureViewOptionID.competition("fa-cup")])
+    }
+
+    @Test @MainActor func preferencesStore_batchUpdatePersistsFinalFixtureView() async throws {
+        let defaults = UserDefaults(suiteName: #function)!
+        defaults.removePersistentDomain(forName: #function)
+
+        let store = PreferencesStore(userDefaults: defaults)
+        store.performBatchUpdate {
+            store.fixtureAllMajorMatchesEnabled = false
+            store.competitionFilterEnabled = false
+            store.englishPremierLeagueTeamsOnly = false
+            store.majorUEFAClubGamesEnabled = false
+            store.homeNationsFilterEnabled = false
+            store.majorTournamentsFilterEnabled = false
+            store.showAllMatches = true
+        }
+
+        let reloaded = PreferencesStore(userDefaults: defaults)
+        #expect(!reloaded.fixtureAllMajorMatchesEnabled)
+        #expect(!reloaded.competitionFilterEnabled)
+        #expect(!reloaded.englishPremierLeagueTeamsOnly)
+        #expect(!reloaded.majorUEFAClubGamesEnabled)
+        #expect(!reloaded.homeNationsFilterEnabled)
+        #expect(!reloaded.majorTournamentsFilterEnabled)
+        #expect(reloaded.showAllMatches)
     }
 
     @Test @MainActor func preferencesStore_migratesUnsavedLegacyDefaultToTopTeams() async throws {
@@ -1074,6 +1295,54 @@ struct Top_ScoresTests {
         #expect(available.map(\.date) == ["2026-08-22"])
     }
 
+    @Test func fixtureBrowserSelection_tvListingsShowsDatesOutsideFixtureFilter() {
+        let days = [
+            FixtureCalendarDay(
+                date: "2026-09-01",
+                matchCount: 8,
+                topMatchCount: 0,
+                hasUnfinished: true,
+                topMatchesHaveUnfinished: false,
+                competitions: [
+                    FixtureCalendarCompetition(
+                        id: "championship",
+                        matchCount: 8,
+                        hasUnfinished: true
+                    ),
+                ]
+            ),
+            FixtureCalendarDay(
+                date: "2026-09-04",
+                matchCount: 4,
+                topMatchCount: 1,
+                hasUnfinished: true,
+                topMatchesHaveUnfinished: true,
+                competitions: [
+                    FixtureCalendarCompetition(
+                        id: "premier-league",
+                        matchCount: 1,
+                        hasUnfinished: true
+                    ),
+                ]
+            ),
+        ]
+
+        let fixtureDates = FixtureBrowseSelectionResolver.availableDays(
+            calendarDays: days,
+            topMatchesOnly: true,
+            selectedCompetitionIDs: []
+        )
+        let tvListingDates = FixtureBrowseSelectionResolver.availableDays(
+            calendarDays: days,
+            topMatchesOnly: true,
+            selectedCompetitionIDs: [],
+            showAllMatches: true
+        )
+
+        #expect(fixtureDates.map(\.date) == ["2026-09-04"])
+        #expect(tvListingDates.map(\.date) == ["2026-09-01", "2026-09-04"])
+    }
+
     @Test func fixtureBrowserSelection_defaultsToNextUnfinishedSelectedDate() {
         let days = [
             FixtureCalendarDay(
@@ -1106,6 +1375,217 @@ struct Top_ScoresTests {
         )
 
         #expect(selectedDate == "2026-08-22")
+    }
+
+    @Test @MainActor func fixtureBrowserTodayContext_refreshesNextMatchJumpAfterCalendarDayChanges() throws {
+        let store = FixtureBrowserStore()
+        let calendar = Calendar.current
+        let september2 = try #require(
+            calendar.date(from: DateComponents(year: 2026, month: 9, day: 2, hour: 12))
+        )
+        let september4 = try #require(
+            calendar.date(from: DateComponents(year: 2026, month: 9, day: 4, hour: 12))
+        )
+        let days = [
+            FixtureCalendarDay(
+                date: "2026-09-02",
+                matchCount: 1,
+                topMatchCount: 1,
+                hasUnfinished: true,
+                topMatchesHaveUnfinished: true,
+                competitions: []
+            ),
+            FixtureCalendarDay(
+                date: "2026-09-04",
+                matchCount: 1,
+                topMatchCount: 1,
+                hasUnfinished: true,
+                topMatchesHaveUnfinished: true,
+                competitions: []
+            ),
+        ]
+
+        func nextMatchDateKey() -> String? {
+            FixtureBrowseSelectionResolver.upcomingDateKey(
+                from: days,
+                todayKey: store.todayDateKey,
+                topMatchesOnly: false,
+                selectedCompetitionIDs: [],
+                selectionApplied: true
+            )
+        }
+
+        store.refreshToday(now: september2)
+        #expect(
+            FixtureBrowseSelectionResolver.dateJumpDirection(
+                from: "2026-09-04",
+                to: nextMatchDateKey()
+            ) == .earlier
+        )
+
+        store.refreshToday(now: september4)
+
+        #expect(store.todayDateKey == "2026-09-04")
+        #expect(nextMatchDateKey() == "2026-09-04")
+        #expect(
+            FixtureBrowseSelectionResolver.dateJumpDirection(
+                from: "2026-09-04",
+                to: nextMatchDateKey()
+            ) == nil
+        )
+    }
+
+    @Test func fixtureBrowserNextMatch_ignoresKnownDatesWithoutRelevantMatches() {
+        let futureMatch = Match(
+            date: "2026-09-04",
+            time: "20:00",
+            homeTeam: "Ipswich Town",
+            awayTeam: "Liverpool",
+            league: "Premier League",
+            tvChannels: []
+        )
+        let calendarDays = [
+            FixtureCalendarDay(
+                date: "2026-09-02",
+                matchCount: 8,
+                topMatchCount: 2,
+                hasUnfinished: true,
+                topMatchesHaveUnfinished: true,
+                competitions: []
+            ),
+            FixtureCalendarDay(
+                date: "2026-09-04",
+                matchCount: 6,
+                topMatchCount: 2,
+                hasUnfinished: true,
+                topMatchesHaveUnfinished: true,
+                competitions: []
+            ),
+        ]
+
+        #expect(
+            !FixtureBrowseSelectionResolver.containsNextScheduledMatch(
+                [],
+                dateKey: "2026-09-02",
+                todayKey: "2026-09-02"
+            )
+        )
+        #expect(
+            FixtureBrowseSelectionResolver.containsNextScheduledMatch(
+                [futureMatch],
+                dateKey: "2026-09-04",
+                todayKey: "2026-09-02"
+            )
+        )
+        #expect(
+            FixtureBrowseSelectionResolver.availableDays(
+                calendarDays: calendarDays,
+                topMatchesOnly: false,
+                selectedCompetitionIDs: [],
+                selectionApplied: true,
+                knownMatchCountsByDate: [
+                    "2026-09-02": 0,
+                    "2026-09-04": 1,
+                ]
+            ).map(\.date) == ["2026-09-04"]
+        )
+    }
+
+    @Test func fixtureBrowserAvailability_limitsImmediateWorkToNearbyDates() {
+        let days = (1...20).map { day in
+            FixtureCalendarDay(
+                date: String(format: "2026-09-%02d", day),
+                matchCount: 10,
+                topMatchCount: 2,
+                hasUnfinished: true,
+                topMatchesHaveUnfinished: true,
+                competitions: []
+            )
+        }
+
+        let immediateDateKeys = FixtureBrowseAvailabilityPlanner.immediateDateKeys(
+            calendarDays: days,
+            selectedDateKey: "2026-09-20",
+            todayKey: "2026-09-01",
+            selectedDateRadius: 3
+        )
+
+        #expect(immediateDateKeys.count == 18)
+        #expect(immediateDateKeys.contains("2026-09-01"))
+        #expect(immediateDateKeys.contains("2026-09-14"))
+        #expect(!immediateDateKeys.contains("2026-09-15"))
+        #expect(!immediateDateKeys.contains("2026-09-16"))
+        #expect(immediateDateKeys.contains("2026-09-17"))
+        #expect(immediateDateKeys.contains("2026-09-20"))
+    }
+
+    @Test func matchGroupingPolicy_skipsHiddenAndFixtureBrowserOwnedDatasets() {
+        #expect(
+            !MatchGroupingPolicy.shouldPrepareFullDataset(
+                mode: .fixtures,
+                isVisible: true,
+                fixtureBrowserOwnsVisibleFixtures: true
+            )
+        )
+        #expect(
+            !MatchGroupingPolicy.shouldPrepareFullDataset(
+                mode: .results,
+                isVisible: false,
+                fixtureBrowserOwnsVisibleFixtures: false
+            )
+        )
+        #expect(
+            MatchGroupingPolicy.shouldPrepareFullDataset(
+                mode: .results,
+                isVisible: true,
+                fixtureBrowserOwnsVisibleFixtures: false
+            )
+        )
+        #expect(
+            MatchGroupingPolicy.shouldPrepareFullDataset(
+                mode: .fixtures,
+                isVisible: true,
+                fixtureBrowserOwnsVisibleFixtures: false
+            )
+        )
+    }
+
+    @Test @MainActor func fixtureBrowseGrouping_preparesOnlySuppliedPages() async {
+        let store = MatchesStore()
+        let first = makeMatch(
+            date: "2026-09-03",
+            homeScore: nil,
+            awayScore: nil,
+            aggregateHomeScore: nil,
+            aggregateAwayScore: nil,
+            scoreStatus: nil
+        )
+        let second = makeMatch(
+            date: "2026-09-04",
+            homeScore: nil,
+            awayScore: nil,
+            aggregateHomeScore: nil,
+            aggregateAwayScore: nil,
+            scoreStatus: nil
+        )
+        let snapshot = PreferencesSnapshot(
+            selectedLeagues: PreferencesStore.defaultSelectedLeagues,
+            selectedChannels: PreferencesStore.defaultSelectedChannels,
+            englishPremierLeagueTeamsOnly: false,
+            apiBaseURL: PreferencesStore.defaultApiBaseURL,
+            refreshIntervalMinutes: PreferencesStore.defaultRefreshIntervalMinutes,
+            matchGroupSortOrder: .alphabetical
+        )
+
+        let result = await store.groupFixtureBrowsePages(
+            filteredMatchesByDate: [first.date: [first], second.date: [second]],
+            unfilteredMatchesByDate: [first.date: [first]],
+            preferences: snapshot
+        )
+
+        #expect(Set(result?.filtered.keys.map { $0 } ?? []) == Set([first.date, second.date]))
+        #expect(Set(result?.unfiltered.keys.map { $0 } ?? []) == Set([first.date]))
+        #expect(result?.filtered[first.date]?.first?.leagues.first?.matches == [first])
     }
 
     @Test func fixtureBrowserSelection_mapsFavouriteCompetitionsFromPreferenceDefaults() {
@@ -1468,6 +1948,32 @@ struct Top_ScoresTests {
             league: "EFL Cup",
             tvChannels: []
         )
+        let premierLeagueTeamMatcher = PremierLeagueTeamMatcher(teams: [
+            TeamCatalogEntry(
+                id: "newcastle-united",
+                name: "Newcastle United",
+                aliases: ["Newcastle"],
+                competitionIDs: ["premier-league"],
+                competitionNames: ["Premier League"],
+                sourceTeamIDs: []
+            ),
+            TeamCatalogEntry(
+                id: "tottenham-hotspur",
+                name: "Tottenham Hotspur",
+                aliases: ["Tottenham", "Spurs"],
+                competitionIDs: ["premier-league"],
+                competitionNames: ["Premier League"],
+                sourceTeamIDs: []
+            ),
+            TeamCatalogEntry(
+                id: "everton",
+                name: "Everton",
+                aliases: [],
+                competitionIDs: ["premier-league"],
+                competitionNames: ["Premier League"],
+                sourceTeamIDs: []
+            ),
+        ])
 
         let filtered = FixtureBrowseSelectionResolver.filterMatches(
             [newcastle, tottenham, everton, nonPremierLeague],
@@ -1475,7 +1981,8 @@ struct Top_ScoresTests {
             selectedCompetitionIDs: [],
             competitions: competitions,
             fixtureViewOptionIDs: FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs,
-            includePostponed: false
+            includePostponed: false,
+            premierLeagueTeamMatcher: premierLeagueTeamMatcher
         )
 
         #expect(filtered.map(\.id) == [newcastle.id, tottenham.id, everton.id])
@@ -2391,6 +2898,69 @@ struct Top_ScoresTests {
         #expect(filtered.compactMap(\.matchDetailsID) == ["manutdbrentford", "psgbayern"])
     }
 
+    @Test func applyPreferenceFilters_results_usesCurrentPremierLeagueRosterForPreset() async throws {
+        let snapshot = PreferencesSnapshot(
+            selectedLeagues: [],
+            selectedFixtureViewOptionIDs:
+                FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs.sorted(),
+            selectedChannels: [],
+            fixtureAllMajorMatchesEnabled: false,
+            competitionFilterEnabled: true,
+            channelFilterEnabled: false,
+            englishPremierLeagueTeamsOnly: false,
+            majorUEFAClubGamesEnabled: false,
+            homeNationsFilterEnabled: false,
+            majorTournamentsFilterEnabled: false,
+            apiBaseURL: PreferencesStore.defaultApiBaseURL,
+            refreshIntervalMinutes: PreferencesStore.defaultRefreshIntervalMinutes
+        )
+        let currentRoster = PremierLeagueTeamMatcher(teams: [
+            TeamCatalogEntry(
+                id: "arsenal",
+                name: "Arsenal",
+                aliases: ["Arsenal FC"],
+                competitionIDs: ["premier-league"],
+                competitionNames: ["Premier League"],
+                sourceTeamIDs: ["18"]
+            ),
+        ])
+        let matches = [
+            Match(
+                date: formattedDate(offsetDays: -2),
+                time: "15:00",
+                homeTeam: "Arsenal",
+                awayTeam: "Watford",
+                league: "FA Cup",
+                matchDetailsID: "arsenal-cup",
+                tvChannels: [],
+                homeScore: 2,
+                awayScore: 0,
+                scoreStatus: "FT"
+            ),
+            Match(
+                date: formattedDate(offsetDays: -2),
+                time: "15:00",
+                homeTeam: "West Ham United",
+                awayTeam: "Wolverhampton Wanderers",
+                league: "Championship",
+                matchDetailsID: "former-premier-league-teams",
+                tvChannels: [],
+                homeScore: 4,
+                awayScore: 2,
+                scoreStatus: "FT"
+            ),
+        ]
+
+        let filtered = MatchesStore.applyPreferenceFilters(
+            to: matches,
+            snapshot: snapshot,
+            mode: .results,
+            premierLeagueTeamMatcher: currentRoster
+        )
+
+        #expect(filtered.compactMap(\.matchDetailsID) == ["arsenal-cup"])
+    }
+
     @Test func applyPreferenceFilters_results_emptySelectionDoesNotHideServerResultsLocally() async throws {
         let snapshot = PreferencesSnapshot(
             selectedLeagues: [],
@@ -2506,6 +3076,17 @@ struct Top_ScoresTests {
         #expect(MatchStatusFormatter.preferredStatus(current: "45+5", incoming: "HT") == "HT")
         #expect(MatchStatusFormatter.preferredStatus(current: "HT", incoming: "45+5") == "HT")
         #expect(MatchStatusFormatter.preferredStatus(current: "47", incoming: "HT") == "47")
+    }
+
+    @Test func matchStatusFormatter_onlyAnimatesActivePlay() {
+        for status in ["HT", " ht ", "FT", "AET", "PENS", "POSTPONED", "15:00", "", "SUSPENDED"] {
+            #expect(!MatchStatusFormatter.isActivelyPlaying(status))
+        }
+        for status in ["1H", "2H", "LIVE", "INPLAY", "ET", "23'", "45+5", "ET 101'", "P 3-2"] {
+            #expect(MatchStatusFormatter.isActivelyPlaying(status))
+        }
+        // Half-time still needs live data refreshes even though its badge is static.
+        #expect(MatchStatusFormatter.isInProgress("HT"))
     }
 
     @Test func matchStatusFormatter_formatsExtraTimeMinutes() async throws {
@@ -3586,6 +4167,63 @@ struct Top_ScoresTests {
         #expect(rogersScore.total == 4)
     }
 
+    @Test func fantasyLiveScoring_identifiesPlayerSubstitutedOffByAbbreviatedName() {
+        let tzolis = makeFantasyPlayer(
+            elementID: 101,
+            pickPosition: 7,
+            positionType: .midfielder,
+            displayName: "Tzolis",
+            fullName: "Christos Tzolis",
+            teamName: "Arsenal",
+            hasStartedFixtureThisGameweek: true,
+            hasUpcomingFixtureThisGameweek: false,
+            hasActiveFixtureThisGameweek: true
+        )
+        let lineup = MatchTeamLineup(
+            team: "Arsenal",
+            manager: nil,
+            formation: "4-3-3",
+            startingLineup: [],
+            substitutes: [],
+            substitutions: [
+                MatchLineupSubstitution(
+                    minute: "46'",
+                    playerOff: MatchLineupPlayer(
+                        number: 7,
+                        name: "C. Tzolis",
+                        positionCategory: "midfielder",
+                        formationRowIndex: nil,
+                        formationSlotIndex: nil,
+                        formationRowSize: nil
+                    ),
+                    playerOn: MatchLineupPlayer(
+                        number: 10,
+                        name: "E. Eze",
+                        positionCategory: "midfielder",
+                        formationRowIndex: nil,
+                        formationSlotIndex: nil,
+                        formationRowSize: nil
+                    )
+                )
+            ]
+        )
+
+        #expect(FantasyLiveScoringEngine.hasBeenSubstitutedOff(player: tzolis, lineup: lineup))
+        #expect(
+            !FantasyLiveScoringEngine.hasBeenSubstitutedOff(
+                player: makeFantasyPlayer(
+                    elementID: 102,
+                    pickPosition: 8,
+                    positionType: .midfielder,
+                    displayName: "Saka",
+                    fullName: "Bukayo Saka",
+                    teamName: "Arsenal"
+                ),
+                lineup: lineup
+            )
+        )
+    }
+
     @Test func fantasyProvisionalBonusResolver_handlesTiesUsingFPLRules() {
         #expect(
             FantasyProvisionalBonusResolver.bonusByElementID(
@@ -4266,6 +4904,44 @@ struct Top_ScoresTests {
         #expect(squad.activeChipSummaryText == "Active chip: Free Hit")
     }
 
+    @MainActor
+    @Test func fantasyStandings_usesChipBadgesWithoutScoreAsterisks() throws {
+        for (code, asset, expectedScore) in [
+            ("3xc", "FPLTripleCaptainBadge", "3"),
+            (" 3XC ", "FPLTripleCaptainBadge", "3"),
+            ("wildcard", "FPLWildcardBadge", "3"),
+            ("wildcard_2", "FPLWildcardBadge", "3"),
+            ("freehit", nil, "3*"),
+            ("bboost", nil, "3*"),
+            (nil, nil, "3")
+        ] as [(String?, String?, String)] {
+            let chip = code.map(FantasyChip.init(code:))
+            #expect(chip?.badgeAssetName == asset)
+            if let asset {
+                #expect(UIImage(named: asset) != nil)
+            }
+            let row = FantasyLeagueTableEntry(
+                entryID: 240495,
+                teamName: "Jose's Team",
+                managerName: "Jose Olivares-Chandler",
+                currentGameweekScore: 3,
+                allGameweeksScore: 174,
+                projectedGameweekPoints: nil,
+                isExpectedPointsLoading: false,
+                hasActiveChipInCurrentGameweek: chip != nil,
+                activeBadgeChip: asset == nil ? nil : chip,
+                hasPlayerInPlay: false,
+                squad: nil,
+                clubBadgeSrc: nil,
+                isUser: false
+            )
+            #expect(row.scoreDisplay(for: .currentGameweek) == expectedScore)
+            #expect(row.badgeChip(for: .currentGameweek)?.badgeAssetName == asset)
+            #expect(row.scoreDisplay(for: .allGameweeks) == "174")
+            #expect(row.badgeChip(for: .allGameweeks) == nil)
+        }
+    }
+
     @Test func fantasyChip_recognizesWildcardCodes() {
         #expect(FantasyChip(code: "wildcard").isWildcard)
         #expect(FantasyChip(code: "wildcard_2").isWildcard)
@@ -4354,6 +5030,33 @@ struct Top_ScoresTests {
 
         #expect(FantasyTeamGameweekResolver.currentTeamGameweek(from: events)?.id == 3)
         #expect(FantasyTeamGameweekResolver.previousTeamGameweek(from: events)?.id == 2)
+    }
+
+    @Test func fantasyTeamGameweekResolver_treatsPassedDeadlineAsLiveWhenFlagsLag() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let events = [
+            FantasyGameweek(
+                id: 2,
+                name: "Gameweek 2",
+                isCurrent: true,
+                isNext: false,
+                finished: true,
+                dataChecked: true,
+                deadlineTime: ISO8601DateFormatter().string(from: now.addingTimeInterval(-7 * 24 * 60 * 60))
+            ),
+            FantasyGameweek(
+                id: 3,
+                name: "Gameweek 3",
+                isCurrent: false,
+                isNext: true,
+                finished: false,
+                dataChecked: false,
+                deadlineTime: ISO8601DateFormatter().string(from: now.addingTimeInterval(-90 * 60))
+            )
+        ]
+
+        #expect(FantasyTeamGameweekResolver.isLiveScoringGameweek(events[1], at: now))
+        #expect(FantasyTeamGameweekResolver.latestPublicTeamGameweek(from: events, at: now)?.id == 3)
     }
 
     @Test func fantasyTeamGameweekResolver_usesLatestPublicTeamForLeagueMembers() {
@@ -5345,6 +6048,64 @@ struct Top_ScoresTests {
         #expect(fixture.difficulty(forTeamID: 999) == nil)
     }
 
+    @Test func teamColorsCachePolicy_rejectsOlderDownloadedCatalog() {
+        let team = TeamColorRecordResponse(
+            name: "Hibernian",
+            aliases: ["Hibs"],
+            primary: "#007A33",
+            secondary: "#FFFFFF",
+            scheme: "green-white"
+        )
+        let bundled = TeamColorsCatalogResponse(
+            updatedAt: "2026-09-03",
+            defaultStyle: TeamColorStyleResponse(
+                primary: "#111111",
+                secondary: "#FFFFFF",
+                scheme: "default-dark"
+            ),
+            teams: Array(repeating: team, count: 201),
+            identityGroups: []
+        )
+        let cached = TeamColorsCatalogResponse(
+            updatedAt: "2026-04-06T20:15:00.000Z",
+            defaultStyle: bundled.defaultStyle,
+            teams: Array(repeating: team, count: 53),
+            identityGroups: []
+        )
+
+        #expect(!TeamColorsCatalogCachePolicy.shouldPrefer(cached, over: bundled))
+        #expect(TeamColorsCatalogCachePolicy.shouldPrefer(bundled, over: cached))
+    }
+
+    @Test func teamColorsCachePolicy_prefersMoreCompleteCatalogAtSameVersion() {
+        let team = TeamColorRecordResponse(
+            name: "Hearts",
+            aliases: ["Heart of Midlothian"],
+            primary: "#601F2E",
+            secondary: "#FFFFFF",
+            scheme: "maroon-white"
+        )
+        let smaller = TeamColorsCatalogResponse(
+            updatedAt: "2026-09-03",
+            defaultStyle: TeamColorStyleResponse(
+                primary: "#111111",
+                secondary: "#FFFFFF",
+                scheme: "default-dark"
+            ),
+            teams: [team],
+            identityGroups: []
+        )
+        let larger = TeamColorsCatalogResponse(
+            updatedAt: smaller.updatedAt,
+            defaultStyle: smaller.defaultStyle,
+            teams: [team, team],
+            identityGroups: []
+        )
+
+        #expect(TeamColorsCatalogCachePolicy.shouldPrefer(larger, over: smaller))
+        #expect(!TeamColorsCatalogCachePolicy.shouldPrefer(smaller, over: larger))
+    }
+
     private func formattedDate(offsetDays: Int) -> String {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
@@ -5529,6 +6290,7 @@ struct Top_ScoresTests {
                 redCards: 0
             ),
             statusUpdates: [],
+            injuryExpectedReturn: nil,
             metrics: [
                 .init(title: "Form", value: "0.0"),
                 .init(title: "Pts / Match", value: "0.0")

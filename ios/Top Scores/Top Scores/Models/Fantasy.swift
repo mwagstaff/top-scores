@@ -271,6 +271,16 @@ struct FantasyChip: Hashable, Sendable {
         normalizedCode == "bboost"
     }
 
+    nonisolated var badgeAssetName: String? {
+        if isWildcard { return "FPLWildcardBadge" }
+        if isTripleCaptain { return "FPLTripleCaptainBadge" }
+        return nil
+    }
+
+    nonisolated var isTripleCaptain: Bool {
+        normalizedCode == "3xc"
+    }
+
     nonisolated var isWildcard: Bool {
         normalizedCode.hasPrefix("wildcard")
     }
@@ -394,6 +404,16 @@ nonisolated struct FantasyEntryHistory: Codable, Hashable {
 }
 
 enum FantasyTeamGameweekResolver {
+    static func isLiveScoringGameweek(
+        _ gameweek: FantasyGameweek,
+        at now: Date = Date()
+    ) -> Bool {
+        guard gameweek.dataChecked != true else { return false }
+        if gameweek.isCurrent == true { return true }
+        guard let deadline = parseISO8601Date(gameweek.deadlineTime) else { return false }
+        return deadline <= now
+    }
+
     static func currentTeamGameweek(from events: [FantasyGameweek]) -> FantasyGameweek? {
         if let current = events.first(where: {
             $0.isCurrent == true && $0.dataChecked != true
@@ -418,14 +438,37 @@ enum FantasyTeamGameweekResolver {
             .max(by: { $0.id < $1.id })
     }
 
-    static func latestPublicTeamGameweek(from events: [FantasyGameweek]) -> FantasyGameweek? {
+    static func latestPublicTeamGameweek(
+        from events: [FantasyGameweek],
+        at now: Date = Date()
+    ) -> FantasyGameweek? {
         if let current = events.first(where: {
             $0.isCurrent == true && $0.dataChecked != true
         }) {
             return current
         }
 
+        if let deadlinePassed = events
+            .filter({ isLiveScoringGameweek($0, at: now) })
+            .max(by: { $0.id < $1.id }) {
+            return deadlinePassed
+        }
+
         return previousTeamGameweek(from: events)
+    }
+
+    private static func parseISO8601Date(_ value: String?) -> Date? {
+        guard let value else { return nil }
+
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = fractional.date(from: value) {
+            return date
+        }
+
+        let standard = ISO8601DateFormatter()
+        standard.formatOptions = [.withInternetDateTime]
+        return standard.date(from: value)
     }
 }
 
@@ -2016,6 +2059,16 @@ enum FantasyProvisionalBonusResolver {
 }
 
 enum FantasyLiveScoringEngine {
+    nonisolated static func hasBeenSubstitutedOff(
+        player: FantasyDisplayPlayer,
+        lineup: MatchTeamLineup?
+    ) -> Bool {
+        guard let lineup else { return false }
+        return lineup.substitutions.contains {
+            lineupPlayerMatches($0.playerOff, player: player)
+        }
+    }
+
     nonisolated static func score(
         player: FantasyDisplayPlayer,
         liveElement: FantasyLiveElement?,
@@ -2341,6 +2394,14 @@ struct FantasySquadDisplayData: Hashable, Sendable {
 
     nonisolated var hasBenchBoostActive: Bool {
         activeChips.contains(where: \.isBenchBoost)
+    }
+
+    nonisolated var hasTripleCaptainActive: Bool {
+        activeChips.contains(where: \.isTripleCaptain)
+    }
+
+    nonisolated var activeBadgeChip: FantasyChip? {
+        activeChips.first { $0.badgeAssetName != nil }
     }
 
     nonisolated var hasWildcardActive: Bool {
@@ -2787,6 +2848,7 @@ struct FantasyPlayerDetailsData: Hashable {
     let totalManagers: Int?
     let seasonTotals: SeasonTotals
     let statusUpdates: [StatusUpdate]
+    let injuryExpectedReturn: String?
     let metrics: [Metric]
     let latestPointsBreakdown: [PointsBreakdownItem]
     let formItems: [FormItem]
@@ -2800,7 +2862,40 @@ extension FantasyPlayerDetailsData {
            chance < 100 {
             return true
         }
-        return statusUpdates.contains { $0.severity == .warning }
+        return statusUpdates.contains { $0.severity == .warning } ||
+            PlayerDatePresentation.date(from: injuryExpectedReturn) != nil
+    }
+
+    var hasStatusUpdateContent: Bool {
+        !statusUpdates.isEmpty || PlayerDatePresentation.date(from: injuryExpectedReturn) != nil
+    }
+}
+
+enum FantasyPlayerAvailabilityResolver {
+    static func bsdTeamID(
+        forFPLTeamName teamName: String,
+        in catalog: TeamCatalogResponse
+    ) -> String? {
+        let matchingTeam = catalog.teams.first { team in
+            TeamIdentityStore.shared.matches(team.name, teamName) ||
+                team.aliases.contains { TeamIdentityStore.shared.matches($0, teamName) }
+        }
+        return matchingTeam?.sourceTeamIDs.first {
+            !$0.isEmpty && $0.allSatisfy(\.isNumber)
+        }
+    }
+
+    static func injuryExpectedReturn(
+        forElementID elementID: Int,
+        in squad: TeamSquadResponse
+    ) -> String? {
+        guard let player = squad.players.first(where: { $0.fplElementID == elementID }),
+              player.availability?.trimmingCharacters(in: .whitespacesAndNewlines)
+                .localizedCaseInsensitiveCompare("injured") == .orderedSame,
+              PlayerDatePresentation.date(from: player.injuryExpectedReturn) != nil else {
+            return nil
+        }
+        return player.injuryExpectedReturn
     }
 }
 
@@ -2981,7 +3076,8 @@ enum FantasyPlayerDetailsBuilder {
         elementID: Int,
         gameweekID: Int,
         bootstrap: FantasyBootstrapLookup,
-        summary: FantasyElementSummaryResponse
+        summary: FantasyElementSummaryResponse,
+        injuryExpectedReturn: String? = nil
     ) throws -> FantasyPlayerDetailsData {
         guard let element = bootstrap.elements.first(where: { $0.id == elementID }) else {
             throw FantasyPublicAPIError.decodeFailed(
@@ -3248,6 +3344,7 @@ enum FantasyPlayerDetailsBuilder {
             totalManagers: bootstrap.totalPlayers,
             seasonTotals: seasonTotals,
             statusUpdates: statusUpdates,
+            injuryExpectedReturn: injuryExpectedReturn,
             metrics: metrics,
             latestPointsBreakdown: latestPointsBreakdownItems,
             formItems: formItems,

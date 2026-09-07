@@ -12,6 +12,8 @@ from typing import Any
 
 import yaml
 from PIL import Image, ImageOps
+from .team_folders import identify_team, team_folder
+from .deletions import matches, sync_deletions
 
 SCHEMA_VERSION = 1
 VALID_ROLES = {"generic_backdrop", "generic_match", "team"}
@@ -34,9 +36,11 @@ def build_publish_bundle(
     project_root: Path = DEFAULT_PROJECT_ROOT,
     generated_at: datetime | None = None,
 ) -> dict[str, Any]:
+    deletions = sync_deletions(_load_config(config_path).get("deletion_sync"), project_root)
     config = _load_config_with_optional_includes(config_path, project_root)
     teams = _normalize_teams(config.get("teams"))
     credit_defaults = _mapping(config.get("credit_defaults"), "credit_defaults")
+    focal_points = _mapping(config.get("focal_points"), "focal_points")
     assets = config.get("assets")
     if not isinstance(assets, list) or not assets:
         raise PublishError("assets must contain at least one image")
@@ -49,6 +53,11 @@ def build_publish_bundle(
     seen_ids: set[str] = set()
     try:
         for raw_asset in assets:
+            raw_asset = dict(_mapping(raw_asset, "asset"))
+            if matches(raw_asset, deletions):
+                continue
+            if raw_asset.get("id") in focal_points:
+                raw_asset["focal_point"] = focal_points[raw_asset["id"]]
             asset = _normalize_asset(
                 raw_asset,
                 teams=teams,
@@ -56,6 +65,9 @@ def build_publish_bundle(
                 project_root=project_root,
                 output_dir=asset_output_dir,
             )
+            if matches(asset, deletions):
+                (temporary_dir / asset["asset_path"]).unlink(missing_ok=True)
+                continue
             asset_id = asset["id"]
             if asset_id in seen_ids:
                 raise PublishError(f"duplicate asset id: {asset_id}")
@@ -105,7 +117,7 @@ def validate_publish_bundle(bundle_dir: Path) -> dict[str, Any]:
         asset_path = str(asset.get("asset_path") or "")
         if not HASH_PATTERN.fullmatch(content_hash):
             raise PublishError(f"invalid sha256 for asset {asset.get('id')}")
-        if asset_path != f"assets/{content_hash}.webp":
+        if not re.fullmatch(rf"assets/(?:[a-z0-9][a-z0-9-]*/)?{content_hash}\.webp", asset_path):
             raise PublishError(f"invalid asset_path for asset {asset.get('id')}")
         file_path = bundle_dir / asset_path
         if not file_path.is_file():
@@ -189,6 +201,7 @@ def _merge_team_config(team_id: str, first: Any, second: Any) -> dict[str, Any]:
         raise PublishError(f"conflicting names for included team {team_id}")
     return {
         "name": left_name,
+        "bsd_team_id": right.get("bsd_team_id") or left.get("bsd_team_id"),
         "aliases": sorted(
             set(_text_list(left.get("aliases"))) | set(_text_list(right.get("aliases")))
         ),
@@ -210,9 +223,11 @@ def _normalize_teams(value: Any) -> dict[str, dict[str, Any]]:
         if not ASSET_ID_PATTERN.fullmatch(str(team_id)):
             raise PublishError(f"invalid team id: {team_id}")
         team = _mapping(raw_team, f"team {team_id}")
+        team = identify_team(team)
         name = _required_text(team.get("name"), f"team {team_id} name")
         teams[str(team_id)] = {
             "name": name,
+            "bsd_team_id": team["bsd_team_id"],
             "aliases": _text_list(team.get("aliases")),
             "source_team_ids": _text_list(team.get("source_team_ids")),
             "venue_ids": _text_list(team.get("venue_ids")),
@@ -241,8 +256,6 @@ def _normalize_asset(
         raise PublishError(
             f"invalid light_context for asset {asset_id}: {light_context}"
         )
-    if role in {"generic_match", "team"} and light_context == "any":
-        raise PublishError(f"asset {asset_id} requires day or night light_context")
     if role == "generic_backdrop" and light_context != "any":
         raise PublishError(f"generic backdrop {asset_id} must use light_context: any")
 
@@ -283,24 +296,34 @@ def _normalize_asset(
 
     data, width, height = _webp_derivative(source)
     content_hash = hashlib.sha256(data).hexdigest()
-    destination = output_dir / f"{content_hash}.webp"
-    if not destination.exists():
-        destination.write_bytes(data)
+    folders = [team_folder(teams[team_id]) for team_id in team_ids] or ["generic"]
+    for folder in folders:
+        destination = output_dir / folder / f"{content_hash}.webp"
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if not destination.exists():
+            destination.write_bytes(data)
 
-    return {
+    asset = {
         "id": asset_id,
         "role": role,
         "light_context": light_context,
         "team_ids": team_ids,
         "stadium": _optional_text(raw.get("stadium")),
         "sha256": content_hash,
-        "asset_path": f"assets/{content_hash}.webp",
+        "asset_path": f"assets/{folders[0]}/{content_hash}.webp",
         "content_type": "image/webp",
         "byte_size": len(data),
         "width": width,
         "height": height,
         "credit": normalized_credit,
     }
+    if raw.get("focal_point") is not None:
+        point = _mapping(raw["focal_point"], f"asset {asset_id} focal_point")
+        if any(type(point.get(axis)) not in (int, float) or not 0 <= point[axis] <= 1
+               for axis in ("x", "y")):
+            raise PublishError(f"asset {asset_id} focal_point x and y must be numbers between 0 and 1")
+        asset["focal_point"] = {axis: point[axis] for axis in ("x", "y")}
+    return asset
 
 
 def _webp_derivative(source: Path) -> tuple[bytes, int, int]:

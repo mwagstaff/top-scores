@@ -90,6 +90,15 @@ enum PlayerDatePresentation {
         date(from: value).map(displayFormatter.string(from:))
     }
 
+    static func expectedReturnDisplayDate(_ value: String?) -> String? {
+        guard let date = date(from: value) else { return nil }
+        let day = Calendar(identifier: .gregorian).component(.day, from: date)
+        guard let ordinalDay = ordinalDayFormatter.string(from: NSNumber(value: day)) else {
+            return nil
+        }
+        return "\(expectedReturnMonthFormatter.string(from: date)) \(ordinalDay)"
+    }
+
     static func age(from value: String?, now: Date = Date(), calendar: Calendar = .current) -> Int? {
         guard let birthDate = date(from: value) else { return nil }
         return calendar.dateComponents([.year], from: birthDate, to: now).year
@@ -107,6 +116,21 @@ enum PlayerDatePresentation {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_GB")
         formatter.dateFormat = "d MMM yyyy"
+        return formatter
+    }()
+
+    private static let expectedReturnMonthFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_GB")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.dateFormat = "MMMM"
+        return formatter
+    }()
+
+    private static let ordinalDayFormatter: NumberFormatter = {
+        let formatter = NumberFormatter()
+        formatter.locale = Locale(identifier: "en_GB")
+        formatter.numberStyle = .ordinal
         return formatter
     }()
 }

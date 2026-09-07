@@ -1,0 +1,159 @@
+Incident Identifier: 557A1632-5F7B-470A-BE68-D8FDCB226009
+CrashReporter Key:   80128152fbcf7899979303dbb5e9664b6a740987
+Hardware Model:      iPhone17,2
+Process:             Top Scores [30596]
+Path:                /private/var/containers/Bundle/Application/D02091A2-B633-45B1-9A39-F168E9163CB7/Top Scores.app/Top Scores
+Identifier:          topscores.dev.skynolimit
+Version:             2.0 (2)
+Code Type:           ARM-64 (Native)
+Role:                Foreground
+Parent Process:      launchd [1]
+Coalition:           topscores.dev.skynolimit [5715]
+
+Date/Time:           2026-09-03 00:51:52.9097 +0100
+Launch Time:         2026-09-03 00:40:41.5391 +0100
+OS Version:          iPhone OS 26.6.1 (23G83)
+Release Type:        User
+Baseband Version:    2.70.01
+Report Version:      104
+
+Exception Type:  EXC_CRASH (SIGKILL)
+Exception Codes: 0x0000000000000000, 0x0000000000000000
+Termination Reason: FRONTBOARD 2343432205 
+<RBSTerminateContext| domain:10 code:0x8BADF00D explanation:scene-update watchdog transgression: app<topscores.dev.skynolimit(27E0354F-F31C-41E8-BA1E-2047FC8B491D)>:30596 is stuck ((unknown - 3))
+ProcessVisibility: Foreground
+ProcessState: Running
+WatchdogEvent: scene-update
+WatchdogVisibility: Foreground
+WatchdogCPUStatistics: (
+"Elapsed total CPU time (seconds): 4.960 (user 3.390, system 1.570), 16% CPU",
+"Elapsed application CPU time (seconds): 0.000, 0% CPU"
+)
+ThermalInfo: (
+"Thermal Level:   0",
+"Thermal State:   nominal"
+) reportType:CrashLog maxTerminationResistance:Interactive>
+
+Triggered by Thread:  0
+
+Thread 0 name:   Dispatch queue: com.apple.main-thread
+Thread 0 Crashed:
+0   libsystem_kernel.dylib        	       0x242a95cd4 mach_msg2_trap + 8
+1   libsystem_kernel.dylib        	       0x242a9930c mach_msg2_internal + 75
+2   libsystem_kernel.dylib        	       0x242a9922c mach_msg_overwrite + 423
+3   libsystem_kernel.dylib        	       0x242a99078 mach_msg + 23
+4   CoreFoundation                	       0x1930d8374 __CFRunLoopServiceMachPort + 159
+5   CoreFoundation                	       0x1930a2310 __CFRunLoopRun + 1187
+6   CoreFoundation                	       0x1930a154c _CFRunLoopRunSpecificWithOptions + 531
+7   GraphicsServices              	       0x239075498 GSEventRunModal + 119
+8   UIKitCore                     	       0x198dd5670 -[UIApplication _run] + 795
+9   UIKitCore                     	       0x198d40158 UIApplicationMain + 331
+10  SwiftUI                       	       0x19c12f570 closure #1 in KitRendererCommon(_:) + 167
+11  SwiftUI                       	       0x19c12c0f4 runApp<A>(_:) + 111
+12  SwiftUI                       	       0x19c12bc48 static App.main() + 171
+13  Top Scores.debug.dylib        	       0x10751c5a0 static Top_ScoresApp.$main() + 40
+14  Top Scores.debug.dylib        	       0x1075234dc __debug_main_executable_dylib_entry_point + 12
+15  dyld                          	       0x18fcadc1c start + 6927
+
+Thread 1 name:  com.apple.uikit.eventfetch-thread
+Thread 1:
+0   libsystem_kernel.dylib        	       0x242a95cd4 mach_msg2_trap + 8
+1   libsystem_kernel.dylib        	       0x242a9930c mach_msg2_internal + 75
+2   libsystem_kernel.dylib        	       0x242a9922c mach_msg_overwrite + 423
+3   libsystem_kernel.dylib        	       0x242a99078 mach_msg + 23
+4   CoreFoundation                	       0x1930d8374 __CFRunLoopServiceMachPort + 159
+5   CoreFoundation                	       0x1930a2310 __CFRunLoopRun + 1187
+6   CoreFoundation                	       0x1930a154c _CFRunLoopRunSpecificWithOptions + 531
+7   Foundation                    	       0x19030ecf0 -[NSRunLoop(NSRunLoop) runMode:beforeDate:] + 211
+8   Foundation                    	       0x19030ebd8 -[NSRunLoop(NSRunLoop) runUntilDate:] + 63
+9   UIKitCore                     	       0x198d9aeac -[UIEventFetcher threadMain] + 419
+10  Foundation                    	       0x190392914 __NSThread__start__ + 731
+11  libsystem_pthread.dylib       	       0x1f2a22438 _pthread_start + 135
+12  libsystem_pthread.dylib       	       0x1f2a1e8cc thread_start + 7
+
+Thread 2 name:  com.apple.NSURLConnectionLoader
+Thread 2:
+0   libsystem_kernel.dylib        	       0x242a95cd4 mach_msg2_trap + 8
+1   libsystem_kernel.dylib        	       0x242a9930c mach_msg2_internal + 75
+2   libsystem_kernel.dylib        	       0x242a9922c mach_msg_overwrite + 423
+3   libsystem_kernel.dylib        	       0x242a99078 mach_msg + 23
+4   CoreFoundation                	       0x1930d8374 __CFRunLoopServiceMachPort + 159
+5   CoreFoundation                	       0x1930a2310 __CFRunLoopRun + 1187
+6   CoreFoundation                	       0x1930a154c _CFRunLoopRunSpecificWithOptions + 531
+7   CFNetwork                     	       0x1a85b1b54 +[__CFN_CoreSchedulingSetRunnable _run:] + 415
+8   Foundation                    	       0x190392914 __NSThread__start__ + 731
+9   libsystem_pthread.dylib       	       0x1f2a22438 _pthread_start + 135
+10  libsystem_pthread.dylib       	       0x1f2a1e8cc thread_start + 7
+
+Thread 3 name:  com.apple.UIKit.inProcessAnimationManager
+Thread 3:
+0   libsystem_kernel.dylib        	       0x242a95c50 semaphore_wait_trap + 8
+1   libdispatch.dylib             	       0x102d120dc _dispatch_sema4_wait + 28
+2   libdispatch.dylib             	       0x102d1276c _dispatch_semaphore_wait_slow + 132
+3   UIKitCore                     	       0x19908e1f8 0x19908e1d9 + 31
+4   UIKitCore                     	       0x19908e1b0 0x19908e07d + 307
+5   UIKitCore                     	       0x198cf45c4 0x198cf45a1 + 35
+6   Foundation                    	       0x190392914 __NSThread__start__ + 731
+7   libsystem_pthread.dylib       	       0x1f2a22438 _pthread_start + 135
+8   libsystem_pthread.dylib       	       0x1f2a1e8cc thread_start + 7
+
+Thread 4 name:  caulk::deferred_logger
+Thread 4:
+0   libsystem_kernel.dylib        	       0x242a95c50 semaphore_wait_trap + 8
+1   caulk                         	       0x2adc46c6c caulk::semaphore::timed_wait(double) + 223
+2   caulk                         	       0x2adc46cb8 caulk::concurrent::details::worker_thread::run() + 31
+3   caulk                         	       0x2adc4af54 void* caulk::thread_proxy<std::__1::tuple<caulk::thread::attributes, void (caulk::concurrent::details::worker_thread::*)(), std::__1::tuple<caulk::concurrent::details::worker_thread*>>>(void*) + 95
+4   libsystem_pthread.dylib       	       0x1f2a22438 _pthread_start + 135
+5   libsystem_pthread.dylib       	       0x1f2a1e8cc thread_start + 7
+
+Thread 5 name:  caulk.messenger.shared:high
+Thread 5:
+0   libsystem_kernel.dylib        	       0x242a95c50 semaphore_wait_trap + 8
+1   caulk                         	       0x2adc46c6c caulk::semaphore::timed_wait(double) + 223
+2   caulk                         	       0x2adc46cb8 caulk::concurrent::details::worker_thread::run() + 31
+3   caulk                         	       0x2adc4af54 void* caulk::thread_proxy<std::__1::tuple<caulk::thread::attributes, void (caulk::concurrent::details::worker_thread::*)(), std::__1::tuple<caulk::concurrent::details::worker_thread*>>>(void*) + 95
+4   libsystem_pthread.dylib       	       0x1f2a22438 _pthread_start + 135
+5   libsystem_pthread.dylib       	       0x1f2a1e8cc thread_start + 7
+
+Thread 6:
+
+Thread 7:
+
+
+Thread 0 crashed with ARM Thread State (64-bit):
+    x0: 0x0000000000000000   x1: 0x0000000507000806   x2: 0x0000000200000000   x3: 0x0000510300000000
+    x4: 0x0000000000000000   x5: 0x0000510300000000   x6: 0x0000000000000002   x7: 0x00000000ffffffff
+    x8: 0x0000000000000000   x9: 0x0000000000000000  x10: 0x0000000000000002  x11: 0x0000000000000000
+   x12: 0x0000000000000000  x13: 0x0000000000005103  x14: 0x0000000000003a00  x15: 0x00003a0000003a00
+   x16: 0xffffffffffffffd1  x17: 0x00000001fe19c378  x18: 0x0000000000000000  x19: 0x00000000ffffffff
+   x20: 0x0000000000000002  x21: 0x0000510300000000  x22: 0x0000000000000000  x23: 0x0000510300000000
+   x24: 0x0000000507000806  x25: 0x000000016dc89dc8  x26: 0x0000000200000000  x27: 0xfffffffffffffbbf
+   x28: 0x0000000290434000   fp: 0x000000016dc89d30   lr: 0x0000000242a9930c
+    sp: 0x000000016dc89ce0   pc: 0x0000000242a95cd4 cpsr: 0x00000000
+   far: 0x0000000000000000  esr: 0x56000080 (Syscall)
+
+Binary Images:
+       0x1021ac000 -        0x1021affff libLogRedirect.dylib arm64e  <497887cbd6a23e6b84a0c6a0bd302578> /private/preboot/Cryptexes/OS/usr/lib/libLogRedirect.dylib
+       0x1021c4000 -        0x1021cbfff libBacktraceRecording.dylib arm64e  <04fa1a61f6ce3e01bbdafe3e2a3f13c3> /usr/lib/libBacktraceRecording.dylib
+       0x102230000 -        0x102273fff libMainThreadChecker.dylib arm64e  <0000cc022ea93561a78f2e158c93f217> /usr/lib/libMainThreadChecker.dylib
+       0x1025b0000 -        0x10264bfff libRPAC.dylib arm64e  <5c3036dff932320282d8b782b6ddc8f8> /usr/lib/libRPAC.dylib
+       0x102c6c000 -        0x102ca3fff libViewDebuggerSupport.dylib arm64e  <5b905e284ee13e94b9255ae8564a4fbf> /usr/lib/libViewDebuggerSupport.dylib
+       0x102174000 -        0x10217ffff Top Scores arm64  <84185e1574f7397c82c7e19971f2db12> /private/var/containers/Bundle/Application/D02091A2-B633-45B1-9A39-F168E9163CB7/Top Scores.app/Top Scores
+       0x106668000 -        0x107877fff Top Scores.debug.dylib arm64  <6984a41cc7f23403bd01c4a890ea0035> /private/var/containers/Bundle/Application/D02091A2-B633-45B1-9A39-F168E9163CB7/Top Scores.app/Top Scores.debug.dylib
+       0x102d0c000 -        0x102d5bfff libdispatch.dylib arm64e  <051353ed0742389691c0794653837a30> /usr/lib/system/introspection/libdispatch.dylib
+       0x102e18000 -        0x102e3bfff DebugHierarchyFoundation arm64e  <6cc5859effc03a85af796b49152f6365> /System/Library/PrivateFrameworks/DebugHierarchyFoundation.framework/DebugHierarchyFoundation
+       0x10258c000 -        0x102597fff libobjc-trampolines.dylib arm64e  <004ce93cf1423d68b3c330c6efef4d65> /private/preboot/Cryptexes/OS/usr/lib/libobjc-trampolines.dylib
+       0x242a95000 -        0x242ad0b1f libsystem_kernel.dylib arm64e  <18665b3f6d5133abb9e963062200ec42> /usr/lib/system/libsystem_kernel.dylib
+       0x193073000 -        0x19360fa3f CoreFoundation arm64e  <101eb2f1191534a08bc9631d03753b84> /System/Library/Frameworks/CoreFoundation.framework/CoreFoundation
+       0x239074000 -        0x23907c7bf GraphicsServices arm64e  <411165e2ee8e380eb2549977273971e3> /System/Library/PrivateFrameworks/GraphicsServices.framework/GraphicsServices
+       0x198cb4000 -        0x19b1f763f UIKitCore arm64e  <0d94422ffe7c302eb8963bc5873c0cfc> /System/Library/PrivateFrameworks/UIKitCore.framework/UIKitCore
+       0x19c0ff000 -        0x19d38a99f SwiftUI arm64e  <17adc54e93ab3f13b469e3f53181fc4d> /System/Library/Frameworks/SwiftUI.framework/SwiftUI
+       0x18fca9000 -        0x18fd4e47f dyld arm64e  <0f8d35b6556f3e348eaa80ab54047dc5> /usr/lib/dyld
+               0x0 - 0xffffffffffffffff ??? unknown-arch  <00000000000000000000000000000000> ???
+       0x190304000 -        0x19118dcbf Foundation arm64e  <73841aa3bfdd322d8dc2e5185a14dee1> /System/Library/Frameworks/Foundation.framework/Foundation
+       0x1f2a1e000 -        0x1f2a2a4ef libsystem_pthread.dylib arm64e  <34b44744bc64386eab90eee86b23ac46> /usr/lib/system/libsystem_pthread.dylib
+       0x1a8520000 -        0x1a88d077f CFNetwork arm64e  <3ae849fe8a7d388c86ef64dedb9fc5c6> /System/Library/Frameworks/CFNetwork.framework/CFNetwork
+       0x2adc43000 -        0x2adc6c01f caulk arm64e  <5dd354fba86f37328f36a88736414f79> /System/Library/PrivateFrameworks/caulk.framework/caulk
+
+EOF
+

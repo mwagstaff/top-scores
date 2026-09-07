@@ -24,7 +24,7 @@ test("team_identity merges dedicated alias mappings into the shared canonical la
     colorsPath,
     JSON.stringify(
       {
-        updatedAt: "2026-04-06T20:15:00.000Z",
+        updatedAt: "2026-09-03",
         default: {
           primary: "#111111",
           secondary: "#ffffff",
@@ -70,6 +70,7 @@ test("team_identity merges dedicated alias mappings into the shared canonical la
     assert.equal(teamIdentity.teamNamesEquivalent("West Brom", "West Bromwich Albion"), true);
     assert.equal(teamIdentity.buildFantasyShortNameMappings().QPR, "Queens Park Rangers");
     assert.equal(teamIdentity.buildFantasyShortNameMappings().MCI, "Manchester City");
+    assert.equal(teamIdentity.loadTeamIdentityConfig().updatedAt, "2026-09-03");
   } finally {
     if (originalColorsPath === undefined) {
       delete process.env.TEAM_COLORS_CONFIG_PATH;

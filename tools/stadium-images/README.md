@@ -1,5 +1,10 @@
 # Top Scores stadium image collector
 
+For the rotating iOS club galleries, use the [club image review workflow](collector/README.md).
+It collects stadium, match and supporter photography into a single gallery per club,
+without day/night separation, and preserves approved batches separately from new candidates.
+The older `stadium-images collect` library workflow below retains its legacy day/night folders.
+
 This is a configuration-driven command-line tool for collecting reusable football-stadium photography with its provenance intact. The checked-in Premier League dataset is explicitly labelled for the 2026/27 season; another league or season can be added as a new YAML file without changing collection logic.
 
 Wikimedia Commons, the curated Geograph football-ground collection, and
@@ -97,7 +102,9 @@ To replace an image or change its assignment, edit that YAML file and run:
 stadium-images publish
 ```
 
-Publishing converts the selected sources to bounded WebP files, names them by SHA-256 content hash, validates every assignment and credit, then atomically replaces the ignored `published/` bundle. It does not crop images or modify the source files.
+Publishing converts the selected sources to bounded WebP files, stores them in `published/assets/<team-name>-<bsd-team-id>/` folders (or `generic/`), names them by SHA-256 content hash, validates every assignment and credit, then atomically replaces the ignored `published/` bundle. It does not crop images or modify the source files.
+
+The team-folder layout needs the updated artwork API reader deployed once; image URLs and iOS caches remain unchanged. See the [review workflow](collector/README.md) for editing originals and migrating existing folders.
 
 The normal Top Scores API deployment runs this publish step automatically, uploads new content-addressed files to the persistent directory on `sky`, validates their hashes remotely, and activates the catalogue atomically:
 
@@ -105,7 +112,7 @@ The normal Top Scores API deployment runs this publish step automatically, uploa
 /Users/mwagstaff/dev/server-tooling/deploy/node_project.zsh top-scores sky
 ```
 
-Existing asset files are retained so clients with an older cached catalogue can finish downloads safely. The API serves the catalogue from `/api/v1/stadium-artwork/catalog`; the app checks it on launch and foreground activation at most once every 15 minutes. Bundled artwork remains the fallback when the catalogue or an image is unavailable. Published credits appear under Profile > About > Data sources > Image credits.
+Existing asset files are retained so clients with an older cached catalogue can finish downloads safely. The API serves the catalogue from `/api/v1/stadium-artwork/catalog`; the app checks it on launch, foreground activation, and while a detail page is visible, at most once every 15 minutes after a successful refresh. Bundled artwork remains the fallback when the catalogue or an image is unavailable. Published credits appear under Profile > About > Data sources > Image credits.
 
 ## Add a league or update a season
 

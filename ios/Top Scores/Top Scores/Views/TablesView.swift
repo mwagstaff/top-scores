@@ -1,6 +1,135 @@
 import Combine
 import SwiftUI
 
+enum TableCompetitionOrdering {
+    private enum Tier: Int {
+        case englishDomestic
+        case scottishDomestic
+        case otherEuropeanLeague
+        case otherEuropeanCup
+        case europeanClub
+        case otherClub
+        case international
+    }
+
+    private static let englishDomesticKeys: Set<String> = [
+        "premierleague",
+        "englishpremierleague",
+        "facup",
+        "englishfacup",
+        "englishleaguecup",
+        "eflcup",
+        "carabaocup",
+        "championship",
+        "englishleaguechampionship",
+        "leagueone",
+        "eflleagueone",
+        "englishleague1",
+        "leaguetwo",
+        "eflleaguetwo",
+        "englishleague2",
+        "nationalleague",
+        "englishnationalleague",
+        "enterprisenationalleague"
+    ]
+
+    private static let otherEuropeanLeagueKeys: Set<String> = [
+        "laliga",
+        "spanishlaliga",
+        "bundesliga",
+        "germanbundesliga",
+        "seriea",
+        "italianseriea",
+        "ligue1",
+        "frenchligue1",
+        "dutcheredivisie",
+        "eredivisie"
+    ]
+
+    private static let otherEuropeanCupKeys: Set<String> = [
+        "copadelrey",
+        "dfbpokal",
+        "germansupercup",
+        "dflsupercup",
+        "coppaitalia",
+        "coupedefrance"
+    ]
+
+    private static let europeanClubKeys: Set<String> = [
+        "uefachampionsleague",
+        "championsleague",
+        "uefaeuropaleague",
+        "europaleague",
+        "uefaconferenceleague",
+        "uefaeuropaconferenceleague",
+        "conferenceleague",
+        "uefasupercup"
+    ]
+
+    private static let internationalKeys: Set<String> = [
+        "fifaworldcup2026",
+        "fifaworldcup",
+        "uefanationsleague",
+        "nationsleague",
+        "internationalfriendly",
+        "internationalfriendlies",
+        "worldcupqualifyinguefa",
+        "worldcupqualifyingconcacaf",
+        "worldcupqualifyingconmebol",
+        "worldcupqualifyingofc"
+    ]
+
+    static func sorted(
+        _ leagues: [LeagueTable],
+        competitionWeight: (LeagueTable) -> Double
+    ) -> [LeagueTable] {
+        leagues.sorted { left, right in
+            let leftTier = tier(for: left)
+            let rightTier = tier(for: right)
+            if leftTier != rightTier {
+                return leftTier.rawValue < rightTier.rawValue
+            }
+
+            let leftWeight = competitionWeight(left)
+            let rightWeight = competitionWeight(right)
+            if leftWeight != rightWeight {
+                return leftWeight > rightWeight
+            }
+            return left.leagueName.localizedCaseInsensitiveCompare(right.leagueName) == .orderedAscending
+        }
+    }
+
+    private static func tier(for league: LeagueTable) -> Tier {
+        let keys = [normalizedKey(league.leagueID), normalizedKey(league.leagueName)]
+        if keys.contains(where: englishDomesticKeys.contains) {
+            return .englishDomestic
+        }
+        if keys.contains(where: { $0.contains("scottish") }) {
+            return .scottishDomestic
+        }
+        if keys.contains(where: otherEuropeanLeagueKeys.contains) {
+            return .otherEuropeanLeague
+        }
+        if keys.contains(where: otherEuropeanCupKeys.contains) {
+            return .otherEuropeanCup
+        }
+        if keys.contains(where: europeanClubKeys.contains) {
+            return .europeanClub
+        }
+        if keys.contains(where: internationalKeys.contains) {
+            return .international
+        }
+        return .otherClub
+    }
+
+    private static func normalizedKey(_ value: String) -> String {
+        value
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased()
+            .filter { $0.isLetter || $0.isNumber }
+    }
+}
+
 struct TablesView: View {
     @EnvironmentObject private var preferences: PreferencesStore
 
@@ -31,7 +160,7 @@ struct TablesView: View {
     init() {
         let apiBaseURL = PreferencesStore.resolvedAPIBaseURL()
         let cachedResponse = LeagueTablesCache.load(for: apiBaseURL)?.response
-        let initialLeagues = cachedResponse?.leagues ?? []
+        let initialLeagues = TableCompetitionAvailability.eligibleLeagues(cachedResponse?.leagues ?? [])
 
         _leagues = State(initialValue: initialLeagues)
         _selectedLeagueID = State(initialValue: Self.defaultLeagueID(from: initialLeagues))
@@ -78,6 +207,7 @@ struct TablesView: View {
         .environment(\.colorScheme, .dark)
         .onAppear {
             isVisible = true
+            consumePendingNavigationIfNeeded()
             guard !hasLoaded else {
                 Task {
                     await liveRefreshTables()
@@ -155,20 +285,18 @@ struct TablesView: View {
         "\(preferences.apiBaseURL)|\(selectedLeagueID)"
     }
 
-    // Applies a cross-tab navigation request from MatchDetailView (selects the
-    // league, then scrolls to + highlights the team's row) once the matching
-    // league/row are available, then clears the request. The highlight pulses
-    // indefinitely — it only moves when a new navigation request arrives.
+    // Selects the requested competition, optionally scrolling to and highlighting
+    // a team when the request comes from a team or match detail screen.
     private func consumePendingNavigationIfNeeded() {
         guard let target = navigationCoordinator.pendingTarget else { return }
         guard let league = leagues.first(where: { $0.leagueID == target.leagueID }) else { return }
-        guard let row = matchingRow(forTeamName: target.teamName, in: league) else {
-            _ = navigationCoordinator.consumeTarget()
-            return
-        }
-
         _ = navigationCoordinator.consumeTarget()
         selectedLeagueID = target.leagueID
+        scrollTargetRowID = nil
+        highlightedRowID = nil
+
+        guard let teamName = target.teamName,
+              let row = matchingRow(forTeamName: teamName, in: league) else { return }
 
         // A short delay lets the newly-selected league's rows lay out before
         // ScrollViewReader can resolve the target id.
@@ -240,8 +368,14 @@ struct TablesView: View {
         "Copa del Rey": 49,
         "La Liga": 50,
         "Bundesliga": 48,
+        "DFB-Pokal": 47.5,
+        "DFL-Supercup": 47,
+        "German Super Cup": 47,
         "Serie A": 45,
+        "Coppa Italia": 44.5,
         "Ligue 1": 44,
+        "Coupe de France": 43,
+        "Dutch Eredivisie": 40,
         "Championship": 40,
         "EFL Cup": 60,
         "Scottish Premiership": 30,
@@ -250,18 +384,13 @@ struct TablesView: View {
         "Scottish League Two": 15,
         "League One": 14,
         "League Two": 12,
+        "National League": 11,
         "International Friendly": 10
     ]
 
     private var sortedLeagues: [LeagueTable] {
-        leagues.sorted {
-            if $0.hasLiveRows != $1.hasLiveRows {
-                return $0.hasLiveRows
-            }
-            let weightA = competitionWeight(for: $0)
-            let weightB = competitionWeight(for: $1)
-            if weightA != weightB { return weightA > weightB }
-            return $0.leagueName.localizedCaseInsensitiveCompare($1.leagueName) == .orderedAscending
+        TableCompetitionOrdering.sorted(leagues) {
+            competitionWeight(for: $0)
         }
     }
 
@@ -522,9 +651,9 @@ struct TablesView: View {
     }
 
     private func apply(response: LeagueTablesResponse) {
-        leagues = response.leagues
+        leagues = TableCompetitionAvailability.eligibleLeagues(response.leagues)
         selectedLeagueID = resolvedLeagueID(
-            from: response.leagues,
+            from: leagues,
             currentSelection: selectedLeagueID
         )
     }
@@ -541,16 +670,8 @@ struct TablesView: View {
         if leagues.contains(where: { $0.leagueID == "premier-league" }) {
             return "premier-league"
         }
-        return leagues
-            .sorted {
-                if $0.hasLiveRows != $1.hasLiveRows {
-                    return $0.hasLiveRows
-                }
-                let weightA = fallbackCompetitionWeights[$0.leagueName] ?? 0
-                let weightB = fallbackCompetitionWeights[$1.leagueName] ?? 0
-                if weightA != weightB { return weightA > weightB }
-                return $0.leagueName.localizedCaseInsensitiveCompare($1.leagueName) == .orderedAscending
-            }
+        return TableCompetitionOrdering
+            .sorted(leagues) { fallbackCompetitionWeights[$0.leagueName] ?? 0 }
             .first?
             .leagueID ?? "premier-league"
     }
@@ -941,80 +1062,6 @@ private struct TableCompetitionBadge: View {
     }
 }
 
-private enum BundledCompetitionLogo {
-    private static let assetNamesByLeagueID: [String: String] = [
-        "1": "FantasyPremierLeagueLion",
-        "3": "CompetitionLogo3",
-        "4": "CompetitionLogo4",
-        "5": "CompetitionLogo5",
-        "6": "CompetitionLogo6",
-        "7": "CompetitionLogo7",
-        "8": "CompetitionLogo8",
-        "10": "CompetitionLogo10",
-        "12": "CompetitionLogo12",
-        "13": "CompetitionLogo13",
-        "27": "CompetitionLogo27",
-        "39": "CompetitionLogo39",
-        "40": "CompetitionLogo40",
-        "41": "CompetitionLogo41",
-        "42": "CompetitionLogo42",
-        "43": "CompetitionLogo43",
-        "44": "CompetitionLogo44",
-        "58": "CompetitionLogo27",
-        "59": "CompetitionLogo27",
-        "62": "CompetitionLogo27",
-        "63": "CompetitionLogo27",
-        "64": "CompetitionLogo64",
-        "83": "CompetitionLogo83",
-        "86": "CompetitionLogo86",
-        "87": "CompetitionLogo87",
-        "90": "CompetitionLogo90"
-    ]
-
-    private static let assetNamesByCompetitionName: [String: String] = [
-        "bundesliga": "CompetitionLogo5",
-        "championship": "CompetitionLogo12",
-        "copa del rey": "CompetitionLogo41",
-        "coppa italia": "CompetitionLogo42",
-        "coupe de france": "CompetitionLogo44",
-        "dfb pokal": "CompetitionLogo43",
-        "dutch eredivisie": "CompetitionLogo10",
-        "efl cup": "CompetitionLogo40",
-        "fa cup": "CompetitionLogo39",
-        "fifa world cup 2026": "CompetitionLogo27",
-        "la liga": "CompetitionLogo3",
-        "league one": "CompetitionLogo86",
-        "league two": "CompetitionLogo87",
-        "ligue 1": "CompetitionLogo6",
-        "premier league": "FantasyPremierLeagueLion",
-        "scottish premiership": "CompetitionLogo13",
-        "serie a": "CompetitionLogo4",
-        "uefa champions league": "CompetitionLogo7",
-        "uefa conference league": "CompetitionLogo83",
-        "uefa europa league": "CompetitionLogo8",
-        "uefa nations league": "CompetitionLogo64",
-        "uefa super cup": "CompetitionLogo90",
-        "world cup qualifying concacaf": "CompetitionLogo27",
-        "world cup qualifying conmebol": "CompetitionLogo27",
-        "world cup qualifying ofc": "CompetitionLogo27",
-        "world cup qualifying uefa": "CompetitionLogo27"
-    ]
-
-    static func assetName(competitionID: String, competitionName: String) -> String? {
-        assetNamesByLeagueID[competitionID]
-            ?? assetNamesByCompetitionName[normalizedName(competitionName)]
-    }
-
-    private static func normalizedName(_ value: String) -> String {
-        value
-            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
-            .lowercased()
-            .replacingOccurrences(of: "-", with: " ")
-            .split(whereSeparator: \Character.isWhitespace)
-            .joined(separator: " ")
-    }
-}
-
 private struct LiveCompetitionDot: View {
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @State private var isPulsing = false
@@ -1053,6 +1100,8 @@ private struct LiveCompetitionDot: View {
 }
 
 private struct LeagueTableCard: View {
+    @EnvironmentObject private var preferences: PreferencesStore
+
     let league: LeagueTable
     let showsStats: Bool
     var highlightedRowID: String?
@@ -1193,8 +1242,9 @@ private struct LeagueTableCard: View {
     }
 
     private func rowView(_ row: LeagueTableRow) -> some View {
-        NavigationLink {
-            TeamDetailsView(context: teamDetailsContext(for: row))
+        let destinationContext = teamDetailsContext(for: row)
+        return NavigationLink {
+            TeamDetailsView(context: destinationContext)
         } label: {
             Group {
                 if showsStats {
@@ -1242,6 +1292,10 @@ private struct LeagueTableCard: View {
         .accessibilityValue(accessibilityStats(for: row))
         .accessibilityHint("View team details")
         .id(row.id)
+        .prewarmTeamStadiumPhoto(
+            for: destinationContext,
+            apiBaseURL: preferences.apiBaseURL
+        )
     }
 
     private func tableSeparator(isThick: Bool) -> some View {

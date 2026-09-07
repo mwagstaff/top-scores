@@ -305,6 +305,10 @@ struct MatchRow: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityHint("View team details")
+                .prewarmTeamStadiumPhotoFromEnvironment(
+                    for: teamDetailsContext(isHome: isHome),
+                    candidateMatches: [match]
+                )
             } else {
                 accessibilityCompactTeamName(isHome: isHome)
             }
@@ -356,6 +360,10 @@ struct MatchRow: View {
             }
             .buttonStyle(.plain)
             .accessibilityHint("View team details")
+            .prewarmTeamStadiumPhotoFromEnvironment(
+                for: teamDetailsContext(isHome: isHome),
+                candidateMatches: [match]
+            )
         } else {
             teamNameContent(isHome: isHome)
         }
@@ -1672,30 +1680,45 @@ struct MatchTimeStatusView: View {
 
     @State private var isPulsing = false
 
+    private var showsBadge: Bool {
+        isLive || MatchStatusFormatter.isFinished(text)
+    }
+
+    private var isActivelyPlaying: Bool {
+        isLive && MatchStatusFormatter.isActivelyPlaying(text)
+    }
+
+    private var shouldPulse: Bool {
+        isActivelyPlaying && !accessibilityReduceMotion
+    }
+
     private var tintColor: Color {
-        isFinal ? .finalMatch : .liveMatch
+        isFinal && isActivelyPlaying ? .finalMatch : .liveMatch
     }
 
     var body: some View {
         Text(text)
             .font(statusFont)
-            .fontWeight(isLive ? .semibold : .regular)
-            .foregroundStyle(isLive ? tintColor : Color.secondary)
+            .fontWeight(showsBadge ? .semibold : .regular)
+            .foregroundStyle(showsBadge ? tintColor : Color.secondary)
             .monospacedDigit()
             .lineLimit(1)
             .minimumScaleFactor(0.9)
-            .padding(.horizontal, isLive ? 8 : 0)
-            .padding(.vertical, isLive ? 5 : 0)
-            .frame(minWidth: isLive ? 28 : nil)
+            .padding(.horizontal, showsBadge ? 8 : 0)
+            .padding(.vertical, showsBadge ? 5 : 0)
+            .frame(minWidth: showsBadge ? 28 : nil)
             .background {
-                if isLive {
+                if showsBadge {
+                    // Opaque backing keeps the label readable over any stadium photo.
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(tintColor.opacity(isPulsing ? 0.14 : 0.26))
+                        .fill(Color(white: 0.08))
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(tintColor.opacity(isPulsing ? 0.08 : 0.16))
                         .animation(pulseAnimation, value: isPulsing)
                 }
             }
             .overlay {
-                if isLive {
+                if showsBadge {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .stroke(tintColor.opacity(isPulsing ? 0.45 : 0.95), lineWidth: 1)
                         .scaleEffect(isPulsing ? 1.08 : 1.0)
@@ -1703,18 +1726,15 @@ struct MatchTimeStatusView: View {
                 }
             }
             .onAppear {
-                isPulsing = isLive && !accessibilityReduceMotion
+                isPulsing = shouldPulse
             }
-            .onChange(of: isLive) { _, newValue in
-                isPulsing = newValue && !accessibilityReduceMotion
-            }
-            .onChange(of: accessibilityReduceMotion) { _, newValue in
-                isPulsing = isLive && !newValue
+            .onChange(of: shouldPulse) { _, newValue in
+                isPulsing = newValue
             }
     }
 
     private var pulseAnimation: Animation? {
-        guard isLive, !accessibilityReduceMotion else { return nil }
+        guard shouldPulse else { return nil }
         return .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
     }
 

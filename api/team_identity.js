@@ -45,6 +45,22 @@ function readJsonObject(filePath) {
   }
 }
 
+function latestDeclaredUpdatedAt(...values) {
+  let latest = null;
+
+  values.forEach((value) => {
+    const normalized = String(value || "").trim();
+    if (!normalized) return;
+    const timestamp = Date.parse(normalized);
+    if (!Number.isFinite(timestamp)) return;
+    if (!latest || timestamp > latest.timestamp) {
+      latest = { normalized, timestamp };
+    }
+  });
+
+  return latest ? latest.normalized : null;
+}
+
 function mergedIdentityEntries(entries) {
   const byCanonicalKey = new Map();
 
@@ -169,7 +185,7 @@ function loadTeamIdentityConfig() {
     const latestMtimeMs = Math.max(teamColorsMtimeMs || 0, teamAliasesMtimeMs || 0);
     cachedConfig = Object.freeze({
       updatedAt:
-        String(parsedAliases.updatedAt || parsed.updatedAt || "").trim() ||
+        latestDeclaredUpdatedAt(parsed.updatedAt, parsedAliases.updatedAt) ||
         (latestMtimeMs > 0 ? new Date(latestMtimeMs).toISOString() : new Date().toISOString()),
       default: defaultStyle,
       teams,

@@ -660,6 +660,7 @@ struct TopScoresLiveActivityAttributes: ActivityAttributes {
     }
 
     let appScope: String
+    var startedAtEpochSeconds: Int? = nil
 }
 
 @available(iOSApplicationExtension 16.1, *)

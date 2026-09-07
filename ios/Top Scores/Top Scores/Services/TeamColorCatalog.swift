@@ -40,6 +40,40 @@ private struct TeamColorsCachePayload: Codable, Sendable {
     }
 }
 
+enum TeamColorsCatalogCachePolicy {
+    nonisolated static func shouldPrefer(
+        _ candidate: TeamColorsCatalogResponse,
+        over current: TeamColorsCatalogResponse
+    ) -> Bool {
+        let candidateVersion = versionDate(candidate.updatedAt)
+        let currentVersion = versionDate(current.updatedAt)
+
+        switch (candidateVersion, currentVersion) {
+        case let (candidateVersion?, currentVersion?) where candidateVersion != currentVersion:
+            return candidateVersion > currentVersion
+        case (_?, nil):
+            return true
+        case (nil, _?):
+            return false
+        default:
+            return candidate.teams.count >= current.teams.count
+        }
+    }
+
+    private nonisolated static func versionDate(_ value: String?) -> Date? {
+        guard let value = value?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty else {
+            return nil
+        }
+
+        let formatter = ISO8601DateFormatter()
+        if let date = formatter.date(from: value) {
+            return date
+        }
+        return formatter.date(from: "\(value)T00:00:00Z")
+    }
+}
+
 @MainActor
 final class TeamColorCatalog: ObservableObject {
     static let shared = TeamColorCatalog()
@@ -91,6 +125,15 @@ final class TeamColorCatalog: ObservableObject {
 
         do {
             let payload = try await task.value
+            if let currentCatalog,
+               !TeamColorsCatalogCachePolicy.shouldPrefer(payload, over: currentCatalog) {
+                log(
+                    "Ignoring older team colors response "
+                        + "(remote: \(payload.updatedAt ?? "unknown"), "
+                        + "current: \(currentCatalog.updatedAt ?? "unknown"))."
+                )
+                return
+            }
             apply(catalog: payload, fetchedAt: Date(), notify: true)
             persistCache()
             log("Team colors cache refreshed with \(payload.teams.count) mappings.")
@@ -234,6 +277,16 @@ final class TeamColorCatalog: ObservableObject {
         decoder.dateDecodingStrategy = .iso8601
         guard let payload = try? decoder.decode(TeamColorsCachePayload.self, from: data) else {
             log("Failed to decode team colors cache; ignoring stored data.")
+            return
+        }
+
+        if let currentCatalog,
+           !TeamColorsCatalogCachePolicy.shouldPrefer(payload.catalog, over: currentCatalog) {
+            log(
+                "Ignoring older team colors cache "
+                    + "(cached: \(payload.catalog.updatedAt ?? "unknown"), "
+                    + "bundled: \(currentCatalog.updatedAt ?? "unknown"))."
+            )
             return
         }
 

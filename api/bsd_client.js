@@ -402,14 +402,28 @@ async function _request(path, options = {}) {
 // resolves to a `{ next, results: [...] }` page) until `next` is null or a
 // short page is returned. Returns the concatenated `results`. Extracted so it
 // can be unit-tested without a network round-trip.
-async function _collectPages(fetchPage, { pageLimit = BSD_PAGE_LIMIT, maxPages = BSD_MAX_PAGES } = {}) {
+async function _collectPages(fetchPage, { pageLimit = BSD_PAGE_LIMIT, maxPages = BSD_MAX_PAGES, strict = false } = {}) {
   const all = [];
   for (let page = 0; page < maxPages; page += 1) {
     const offset = page * pageLimit;
     // eslint-disable-next-line no-await-in-loop
     const data = await fetchPage(offset);
+    if (strict && (!data || !Array.isArray(data.results))) {
+      throw new Error("BSD pagination response is missing results");
+    }
     const results = Array.isArray(data && data.results) ? data.results : [];
     all.push(...results);
+    if (strict) {
+      if (data.next && results.length !== pageLimit) throw new Error("BSD pagination returned an incomplete page");
+      if (!data.next) {
+        if (Number.isInteger(data.count) && data.count !== all.length) {
+          throw new Error("BSD pagination count changed or is incomplete");
+        }
+        return all;
+      }
+      if (page === maxPages - 1) throw new Error("BSD pagination exceeded page cap");
+      continue;
+    }
     const hasNext = Boolean(data && data.next) && results.length === pageLimit;
     if (!hasNext) break;
   }
@@ -419,11 +433,11 @@ async function _collectPages(fetchPage, { pageLimit = BSD_PAGE_LIMIT, maxPages =
 // Pages a `{ count, next, previous, results: [...] }` list endpoint, sending
 // `limit=200` and walking `offset`. Returns the concatenated `results` array.
 async function _requestAllPages(path, options = {}) {
-  const { maxPages = BSD_MAX_PAGES, ...requestOptions } = options;
+  const { maxPages = BSD_MAX_PAGES, strict = false, ...requestOptions } = options;
   const baseQuery = { ...(requestOptions.query || {}), limit: BSD_PAGE_LIMIT };
   return _collectPages(
     (offset) => _request(path, { ...requestOptions, query: { ...baseQuery, offset } }),
-    { pageLimit: BSD_PAGE_LIMIT, maxPages }
+    { pageLimit: BSD_PAGE_LIMIT, maxPages, strict }
   );
 }
 
@@ -461,6 +475,15 @@ function getTeam(id, options = {}) {
     source: "bsd_team",
     reason: "team_lookup",
     ...options,
+  });
+}
+
+function getTeams({ leagueId, seasonId } = {}, options = {}) {
+  return _requestAllPages("/teams", {
+    source: "bsd_teams",
+    reason: "competition_teams_fetch",
+    ...options,
+    query: { ...(options.query || {}), league_id: leagueId, season_id: seasonId },
   });
 }
 
@@ -609,6 +632,7 @@ module.exports = {
   getLeague,
   getStandings,
   getTeam,
+  getTeams,
   getTeamSquad,
   getVenue,
   getEvents,
