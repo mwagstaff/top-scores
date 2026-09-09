@@ -194,7 +194,8 @@ nonisolated enum FixtureBrowseSelectionResolver {
         topMatchesOnly: Bool,
         selectedCompetitionIDs: Set<String>,
         selectionApplied: Bool = false,
-        showAllMatches: Bool = false
+        showAllMatches: Bool = false,
+        knownAvailability: [String: FixtureBrowseMatchAvailability] = [:]
     ) -> String? {
         upcomingDateKey(
             from: days,
@@ -202,7 +203,8 @@ nonisolated enum FixtureBrowseSelectionResolver {
             topMatchesOnly: topMatchesOnly,
             selectedCompetitionIDs: selectedCompetitionIDs,
             selectionApplied: selectionApplied,
-            showAllMatches: showAllMatches
+            showAllMatches: showAllMatches,
+            knownAvailability: knownAvailability
         ) ?? days.last?.date
     }
 
@@ -212,10 +214,14 @@ nonisolated enum FixtureBrowseSelectionResolver {
         topMatchesOnly: Bool,
         selectedCompetitionIDs: Set<String>,
         selectionApplied: Bool = false,
-        showAllMatches: Bool = false
+        showAllMatches: Bool = false,
+        knownAvailability: [String: FixtureBrowseMatchAvailability] = [:]
     ) -> String? {
         days.first { day in
             guard day.date >= todayKey else { return false }
+            if let availability = knownAvailability[day.date] {
+                return availability.containsNextScheduledMatch
+            }
             if day.date > todayKey { return true }
             if selectionApplied || showAllMatches { return day.hasUnfinished }
             if topMatchesOnly { return day.topMatchesHaveUnfinished }
@@ -329,6 +335,7 @@ nonisolated enum FixtureBrowseSelectionResolver {
         fixtureViewOptionIDs: Set<String> = [],
         showAllMatches: Bool = false,
         includePostponed: Bool,
+        includeFACupEarlyRounds: Bool = PreferencesStore.defaultShowFACupEarlyRounds,
         topTeamsMatcher: TopTeamsPresetMatcher = TopTeamsPresetMatcher(definition: .fallback),
         premierLeagueTeamMatcher: PremierLeagueTeamMatcher = .empty
     ) -> [Match] {
@@ -340,6 +347,7 @@ nonisolated enum FixtureBrowseSelectionResolver {
             fixtureViewOptionIDs: fixtureViewOptionIDs,
             showAllMatches: showAllMatches,
             includePostponed: includePostponed,
+            includeFACupEarlyRounds: includeFACupEarlyRounds,
             topTeamsMatcher: topTeamsMatcher,
             premierLeagueTeamMatcher: premierLeagueTeamMatcher,
             competitionLookup: nil
@@ -355,6 +363,7 @@ nonisolated enum FixtureBrowseSelectionResolver {
         fixtureViewOptionIDs: Set<String>,
         showAllMatches: Bool,
         includePostponed: Bool,
+        includeFACupEarlyRounds: Bool = PreferencesStore.defaultShowFACupEarlyRounds,
         topTeamsMatcher: TopTeamsPresetMatcher,
         premierLeagueTeamMatcher: PremierLeagueTeamMatcher
     ) -> [String: FixtureBrowseMatchAvailability] {
@@ -366,6 +375,7 @@ nonisolated enum FixtureBrowseSelectionResolver {
             fixtureViewOptionIDs: fixtureViewOptionIDs,
             showAllMatches: showAllMatches,
             includePostponed: includePostponed,
+            includeFACupEarlyRounds: includeFACupEarlyRounds,
             topTeamsMatcher: topTeamsMatcher,
             premierLeagueTeamMatcher: premierLeagueTeamMatcher
         )
@@ -392,6 +402,7 @@ nonisolated enum FixtureBrowseSelectionResolver {
         fixtureViewOptionIDs: Set<String>,
         showAllMatches: Bool,
         includePostponed: Bool,
+        includeFACupEarlyRounds: Bool = PreferencesStore.defaultShowFACupEarlyRounds,
         topTeamsMatcher: TopTeamsPresetMatcher,
         premierLeagueTeamMatcher: PremierLeagueTeamMatcher
     ) -> [String: [Match]] {
@@ -405,6 +416,7 @@ nonisolated enum FixtureBrowseSelectionResolver {
                 fixtureViewOptionIDs: fixtureViewOptionIDs,
                 showAllMatches: showAllMatches,
                 includePostponed: includePostponed,
+                includeFACupEarlyRounds: includeFACupEarlyRounds,
                 topTeamsMatcher: topTeamsMatcher,
                 premierLeagueTeamMatcher: premierLeagueTeamMatcher,
                 competitionLookup: lookup
@@ -421,6 +433,7 @@ nonisolated enum FixtureBrowseSelectionResolver {
         fixtureViewOptionIDs: Set<String>,
         showAllMatches: Bool,
         includePostponed: Bool,
+        includeFACupEarlyRounds: Bool = PreferencesStore.defaultShowFACupEarlyRounds,
         topTeamsMatcher: TopTeamsPresetMatcher,
         premierLeagueTeamMatcher: PremierLeagueTeamMatcher,
         competitionLookup preparedCompetitionLookup: [String: String]?
@@ -469,8 +482,10 @@ nonisolated enum FixtureBrowseSelectionResolver {
                 return selectedCompetitionIDs.contains(competitionID)
             }
         }
-        guard !includePostponed else { return competitionFiltered }
-        return competitionFiltered.filter { !$0.isPostponed }
+        return competitionFiltered.filter {
+            (includePostponed || !$0.isPostponed) &&
+                (includeFACupEarlyRounds || !$0.isFACupEarlyRound)
+        }
     }
 
     static func normalizedKey(_ value: String) -> String {
@@ -1068,12 +1083,13 @@ final class FixtureBrowserStore: ObservableObject {
         let selectedIDs = selectedCompetitionIDs(for: snapshot)
         let requiresMatchLevelFiltering = !isTVListingsModeEnabled &&
             calendarRequiresMatchLevelFiltering(snapshot)
+        let validatesMatchAvailability = requiresMatchLevelFiltering || !snapshot.showFACupEarlyRounds
         let canValidateCachedDates = !requiresMatchLevelFiltering ||
             Set(snapshot.effectiveFixtureViewOptionIDs) !=
                 FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs ||
             !premierLeagueTeamMatcher.isEmpty
         let immediateAvailability: [String: FixtureBrowseMatchAvailability]
-        if requiresMatchLevelFiltering, canValidateCachedDates {
+        if validatesMatchAvailability, canValidateCachedDates {
             let immediateDateKeys = FixtureBrowseAvailabilityPlanner.immediateDateKeys(
                 calendarDays: cachePayload?.calendarDays ?? [],
                 selectedDateKey: selectedDateKey,
@@ -1109,7 +1125,7 @@ final class FixtureBrowserStore: ObservableObject {
         availabilityRefinementTask?.cancel()
         availabilityRefinementTask = nil
         availabilityRefinementRequestID = UUID()
-        if requiresMatchLevelFiltering, canValidateCachedDates {
+        if validatesMatchAvailability, canValidateCachedDates {
             scheduleAvailabilityRefinement(
                 snapshot: snapshot,
                 selectedCompetitionIDs: selectedIDs,
@@ -1152,7 +1168,8 @@ final class FixtureBrowserStore: ObservableObject {
                 topMatchesOnly: calendarUsesTopMatches(snapshot),
                 selectedCompetitionIDs: selectedCompetitionIDs,
                 selectionApplied: false,
-                showAllMatches: calendarShowsAllMatches(snapshot)
+                showAllMatches: calendarShowsAllMatches(snapshot),
+                knownAvailability: knownAvailability
             )
         }
         if nextMatchDateKey != resolvedNextMatchDateKey {
@@ -1173,7 +1190,8 @@ final class FixtureBrowserStore: ObservableObject {
             topMatchesOnly: calendarUsesTopMatches(snapshot),
             selectedCompetitionIDs: selectedCompetitionIDs,
             selectionApplied: requiresMatchLevelFiltering,
-            showAllMatches: calendarShowsAllMatches(snapshot)
+            showAllMatches: calendarShowsAllMatches(snapshot),
+            knownAvailability: knownAvailability
         )
         visibleMatches = []
         applyCachedBucketIfAvailable()
@@ -1192,8 +1210,9 @@ final class FixtureBrowserStore: ObservableObject {
             selectedCompetitionIDs: selectedCompetitionIDs,
             competitions: competitions,
             fixtureViewOptionIDs: Set(snapshot.effectiveFixtureViewOptionIDs),
-            showAllMatches: snapshot.fixtureViewShowsAll,
+            showAllMatches: calendarShowsAllMatches(snapshot),
             includePostponed: snapshot.showPostponedGames,
+            includeFACupEarlyRounds: snapshot.showFACupEarlyRounds,
             topTeamsMatcher: topTeamsMatcher,
             premierLeagueTeamMatcher: premierLeagueTeamMatcher
         )
@@ -1221,8 +1240,9 @@ final class FixtureBrowserStore: ObservableObject {
         let todayKey = todayDateKey
         let topMatchesOnly = calendarUsesTopMatches(snapshot)
         let fixtureViewOptionIDs = Set(snapshot.effectiveFixtureViewOptionIDs)
-        let showAllMatches = snapshot.fixtureViewShowsAll
+        let showAllMatches = calendarShowsAllMatches(snapshot)
         let includePostponed = snapshot.showPostponedGames
+        let includeFACupEarlyRounds = snapshot.showFACupEarlyRounds
         let competitionSnapshot = competitions
         let topTeamsMatcherSnapshot = topTeamsMatcher
         let premierLeagueTeamMatcherSnapshot = premierLeagueTeamMatcher
@@ -1249,6 +1269,7 @@ final class FixtureBrowserStore: ObservableObject {
                 fixtureViewOptionIDs: fixtureViewOptionIDs,
                 showAllMatches: showAllMatches,
                 includePostponed: includePostponed,
+                includeFACupEarlyRounds: includeFACupEarlyRounds,
                 topTeamsMatcher: topTeamsMatcherSnapshot,
                 premierLeagueTeamMatcher: premierLeagueTeamMatcherSnapshot
             )
@@ -1305,7 +1326,7 @@ final class FixtureBrowserStore: ObservableObject {
         applyAvailableDays(
             snapshot: snapshot,
             selectedCompetitionIDs: selectedCompetitionIDs,
-            requiresMatchLevelFiltering: true,
+            requiresMatchLevelFiltering: !isTVListingsModeEnabled && calendarRequiresMatchLevelFiltering(snapshot),
             knownAvailability: refinedAvailability.merging(immediateAvailability) { _, latest in latest },
             keepCurrentDate: true
         )
@@ -1790,6 +1811,7 @@ final class FixtureBrowserStore: ObservableObject {
         let fixtureViewOptionIDs = Set(snapshot.effectiveFixtureViewOptionIDs)
         let showAllMatches = snapshot.fixtureViewShowsAll
         let includePostponed = snapshot.showPostponedGames
+        let includeFACupEarlyRounds = snapshot.showFACupEarlyRounds
         let topTeamsMatcherSnapshot = topTeamsMatcher
         let premierLeagueTeamMatcherSnapshot = premierLeagueTeamMatcher
 
@@ -1802,6 +1824,7 @@ final class FixtureBrowserStore: ObservableObject {
                 fixtureViewOptionIDs: fixtureViewOptionIDs,
                 showAllMatches: showAllMatches,
                 includePostponed: includePostponed,
+                includeFACupEarlyRounds: includeFACupEarlyRounds,
                 topTeamsMatcher: topTeamsMatcherSnapshot,
                 premierLeagueTeamMatcher: premierLeagueTeamMatcherSnapshot
             ).filter { !$0.value.isEmpty }
@@ -1972,6 +1995,7 @@ final class FixtureBrowserStore: ObservableObject {
             fixtureViewOptionIDs: Set(snapshot.effectiveFixtureViewOptionIDs),
             showAllMatches: snapshot.fixtureViewShowsAll,
             includePostponed: snapshot.showPostponedGames,
+            includeFACupEarlyRounds: snapshot.showFACupEarlyRounds,
             topTeamsMatcher: topTeamsMatcher,
             premierLeagueTeamMatcher: premierLeagueTeamMatcher
         )
@@ -1987,7 +2011,8 @@ final class FixtureBrowserStore: ObservableObject {
             selectedCompetitionIDs: [],
             competitions: competitions,
             showAllMatches: true,
-            includePostponed: snapshot.showPostponedGames
+            includePostponed: snapshot.showPostponedGames,
+            includeFACupEarlyRounds: snapshot.showFACupEarlyRounds
         )
     }
 

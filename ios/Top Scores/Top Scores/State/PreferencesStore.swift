@@ -206,6 +206,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
     let showFantasyRealTimePoints: Bool
     let premierLeagueMatchesFirst: Bool
     let showPostponedGames: Bool
+    let showFACupEarlyRounds: Bool
 
     nonisolated var showsFantasyDataInFixtures: Bool {
         showFantasyFixtureLogos || showFantasyExpectedPoints || showFantasyRealTimePoints
@@ -284,7 +285,8 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         showFantasyExpectedPoints: Bool = PreferencesStore.defaultShowFantasyExpectedPoints,
         showFantasyRealTimePoints: Bool = PreferencesStore.defaultShowFantasyRealTimePoints,
         premierLeagueMatchesFirst: Bool = PreferencesStore.defaultPremierLeagueMatchesFirst,
-        showPostponedGames: Bool = PreferencesStore.defaultShowPostponedGames
+        showPostponedGames: Bool = PreferencesStore.defaultShowPostponedGames,
+        showFACupEarlyRounds: Bool = PreferencesStore.defaultShowFACupEarlyRounds
     ) {
         self.selectedLeagues = selectedLeagues
         self.selectedFixtureViewOptionIDs = selectedFixtureViewOptionIDs
@@ -324,6 +326,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         self.showFantasyRealTimePoints = showFantasyRealTimePoints
         self.premierLeagueMatchesFirst = premierLeagueMatchesFirst
         self.showPostponedGames = showPostponedGames
+        self.showFACupEarlyRounds = showFACupEarlyRounds
     }
 
     enum CodingKeys: String, CodingKey {
@@ -365,6 +368,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         case showFantasyRealTimePoints
         case premierLeagueMatchesFirst
         case showPostponedGames
+        case showFACupEarlyRounds
     }
 
     private enum LegacyCodingKeys: String, CodingKey {
@@ -428,6 +432,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         showFantasyRealTimePoints = try container.decodeIfPresent(Bool.self, forKey: .showFantasyRealTimePoints) ?? legacyShowFantasyMatchPills
         premierLeagueMatchesFirst = try container.decodeIfPresent(Bool.self, forKey: .premierLeagueMatchesFirst) ?? PreferencesStore.defaultPremierLeagueMatchesFirst
         showPostponedGames = try container.decodeIfPresent(Bool.self, forKey: .showPostponedGames) ?? PreferencesStore.defaultShowPostponedGames
+        showFACupEarlyRounds = try container.decodeIfPresent(Bool.self, forKey: .showFACupEarlyRounds) ?? PreferencesStore.defaultShowFACupEarlyRounds
     }
 
     nonisolated func encode(to encoder: Encoder) throws {
@@ -470,6 +475,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         try container.encode(showFantasyRealTimePoints, forKey: .showFantasyRealTimePoints)
         try container.encode(premierLeagueMatchesFirst, forKey: .premierLeagueMatchesFirst)
         try container.encode(showPostponedGames, forKey: .showPostponedGames)
+        try container.encode(showFACupEarlyRounds, forKey: .showFACupEarlyRounds)
     }
 
     nonisolated static func == (lhs: PreferencesSnapshot, rhs: PreferencesSnapshot) -> Bool {
@@ -510,7 +516,8 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         lhs.showFantasyExpectedPoints == rhs.showFantasyExpectedPoints &&
         lhs.showFantasyRealTimePoints == rhs.showFantasyRealTimePoints &&
         lhs.premierLeagueMatchesFirst == rhs.premierLeagueMatchesFirst &&
-        lhs.showPostponedGames == rhs.showPostponedGames
+        lhs.showPostponedGames == rhs.showPostponedGames &&
+        lhs.showFACupEarlyRounds == rhs.showFACupEarlyRounds
     }
 }
 
@@ -619,6 +626,7 @@ final class PreferencesStore: ObservableObject {
     nonisolated static let defaultShowFantasyMatchPills = false
     nonisolated static let defaultPremierLeagueMatchesFirst = true
     nonisolated static let defaultShowPostponedGames = false
+    nonisolated static let defaultShowFACupEarlyRounds = false
     nonisolated static let defaultShowPredictedScores = false
 
     @Published var selectedLeagues: [String] {
@@ -777,6 +785,10 @@ final class PreferencesStore: ObservableObject {
         didSet { persist() }
     }
 
+    @Published var showFACupEarlyRounds: Bool {
+        didSet { persist() }
+    }
+
     /// Whether predicted scores are shown inline on Fixtures/Results rows. Purely a
     /// display toggle — not part of `PreferencesSnapshot` since it doesn't affect what
     /// matches are fetched or filtered, only how a row already on screen is rendered.
@@ -904,6 +916,8 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultPremierLeagueMatchesFirst
         let showPostponedGames = userDefaults.object(forKey: Keys.showPostponedGames) as? Bool
             ?? Self.defaultShowPostponedGames
+        let showFACupEarlyRounds = userDefaults.object(forKey: Keys.showFACupEarlyRounds) as? Bool
+            ?? Self.defaultShowFACupEarlyRounds
         let showPredictedScores = userDefaults.object(forKey: Keys.showPredictedScores) as? Bool
             ?? Self.defaultShowPredictedScores
 
@@ -946,6 +960,7 @@ final class PreferencesStore: ObservableObject {
         self.showFantasyRealTimePoints = showFantasyRealTimePoints
         self.premierLeagueMatchesFirst = premierLeagueMatchesFirst
         self.showPostponedGames = showPostponedGames
+        self.showFACupEarlyRounds = showFACupEarlyRounds
         self.showPredictedScores = showPredictedScores
 
         if !showTodayUnfinishedFixturesBadge {
@@ -994,7 +1009,8 @@ final class PreferencesStore: ObservableObject {
             showFantasyExpectedPoints: showFantasyExpectedPoints,
             showFantasyRealTimePoints: showFantasyRealTimePoints,
             premierLeagueMatchesFirst: premierLeagueMatchesFirst,
-            showPostponedGames: showPostponedGames
+            showPostponedGames: showPostponedGames,
+            showFACupEarlyRounds: showFACupEarlyRounds
         )
     }
 
@@ -1060,7 +1076,8 @@ final class PreferencesStore: ObservableObject {
             showFantasyExpectedPoints: showFantasyExpectedPoints,
             showFantasyRealTimePoints: showFantasyRealTimePoints,
             premierLeagueMatchesFirst: premierLeagueMatchesFirst,
-            showPostponedGames: showPostponedGames
+            showPostponedGames: showPostponedGames,
+            showFACupEarlyRounds: showFACupEarlyRounds
         )
     }
 
@@ -1105,6 +1122,7 @@ final class PreferencesStore: ObservableObject {
         userDefaults.set(showFantasyRealTimePoints, forKey: Keys.showFantasyRealTimePoints)
         userDefaults.set(premierLeagueMatchesFirst, forKey: Keys.premierLeagueMatchesFirst)
         userDefaults.set(showPostponedGames, forKey: Keys.showPostponedGames)
+        userDefaults.set(showFACupEarlyRounds, forKey: Keys.showFACupEarlyRounds)
         userDefaults.set(showsFantasyDataInFixtures, forKey: Keys.showFantasyMatchPills)
         userDefaults.set(showPredictedScores, forKey: Keys.showPredictedScores)
         SharedMatchesBridge.saveSnapshotToSharedDefaults(snapshot)
@@ -1234,6 +1252,8 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultPremierLeagueMatchesFirst
         let showPostponedGames = userDefaults.object(forKey: Keys.showPostponedGames) as? Bool
             ?? Self.defaultShowPostponedGames
+        let showFACupEarlyRounds = userDefaults.object(forKey: Keys.showFACupEarlyRounds) as? Bool
+            ?? Self.defaultShowFACupEarlyRounds
 
         return PreferencesSnapshot(
             selectedLeagues: leagues,
@@ -1273,7 +1293,8 @@ final class PreferencesStore: ObservableObject {
             showFantasyExpectedPoints: showFantasyExpectedPoints,
             showFantasyRealTimePoints: showFantasyRealTimePoints,
             premierLeagueMatchesFirst: premierLeagueMatchesFirst,
-            showPostponedGames: showPostponedGames
+            showPostponedGames: showPostponedGames,
+            showFACupEarlyRounds: showFACupEarlyRounds
         )
     }
 
@@ -1318,6 +1339,7 @@ final class PreferencesStore: ObservableObject {
         static let showFantasyMatchPills = "preferences.showFantasyMatchPills"
         static let premierLeagueMatchesFirst = "preferences.premierLeagueMatchesFirst"
         static let showPostponedGames = "preferences.showPostponedGames"
+        static let showFACupEarlyRounds = "preferences.showFACupEarlyRounds"
         static let showPredictedScores = "preferences.showPredictedScores"
     }
 }

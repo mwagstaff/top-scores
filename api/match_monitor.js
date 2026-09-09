@@ -1,3 +1,4 @@
+const { pushToStartAttemptsForDay, latestPushToStartBudget } = require("./live_activity_start_policy");
 const { renewLiveActivityIfNeeded } = require("./live_activity_renewal");
 const {
   getAllUserPreferences,
@@ -5132,18 +5133,14 @@ function mergeDuplicateLiveActivityTargetState(owner, records) {
       : latest;
   }, owner);
   const latestStartedState = liveActivityStateForUser(latestStartedRecord);
-  const maxPushToStartAttempts = records.reduce(
-    (maximum, candidate) =>
-      Math.max(maximum, Math.max(0, Number(liveActivityStateForUser(candidate).pushToStartAttempts) || 0)),
-    Math.max(0, Number(ownerState.pushToStartAttempts) || 0)
-  );
+  const budget = latestPushToStartBudget([ownerState, ...records.map(liveActivityStateForUser)]);
 
   return {
     ...owner,
     liveActivity: {
       ...ownerState,
       lastStartAt: latestStartedState.lastStartAt || ownerState.lastStartAt || null,
-      pushToStartAttempts: maxPushToStartAttempts,
+      ...budget,
     },
   };
 }
@@ -6202,32 +6199,36 @@ function shouldSkipLiveActivityUpdate(state, payloadHash, mode, forceDispatch = 
 }
 
 /**
- * Returns the current hour (0–23) in Europe/London, falling back to UTC on error.
+ * Returns the current minute of day (0–1439) in Europe/London, falling back to UTC on error.
  */
 const londonHourFormatter = new Intl.DateTimeFormat("en-GB", {
   timeZone: LIVE_ACTIVITY_WINDOW_TIMEZONE,
   hour: "numeric",
-  hour12: false,
+  minute: "numeric",
+  hourCycle: "h23",
 });
 
-function londonHour(nowMs) {
+function londonMinutes(nowMs) {
   try {
     const parts = londonHourFormatter.formatToParts(new Date(nowMs));
     const hourPart = parts.find((p) => p.type === "hour");
     const h = hourPart ? parseInt(hourPart.value, 10) : NaN;
-    return Number.isFinite(h) ? h : new Date(nowMs).getUTCHours();
+    const minute = Number(parts.find((p) => p.type === "minute")?.value || 0);
+    return Number.isFinite(h) ? h * 60 + minute : new Date(nowMs).getUTCHours() * 60 + new Date(nowMs).getUTCMinutes();
   } catch {
-    return new Date(nowMs).getUTCHours();
+    return new Date(nowMs).getUTCHours() * 60 + new Date(nowMs).getUTCMinutes();
   }
 }
 
 /**
  * Returns true when the current time falls within the default Live Activity active window
  * (LIVE_ACTIVITY_WINDOW_START_HOUR to LIVE_ACTIVITY_WINDOW_END_HOUR, Europe/London).
+ * Retain an existing activity in the five minutes before opening; new pushes still wait.
  */
-function isWithinLiveActivityActiveWindow(nowMs) {
-  const h = londonHour(nowMs);
-  return h >= LIVE_ACTIVITY_WINDOW_START_HOUR && h < LIVE_ACTIVITY_WINDOW_END_HOUR;
+function isWithinLiveActivityActiveWindow(nowMs, hasExistingActivity = false) {
+  const minutes = londonMinutes(nowMs);
+  const startMinutes = LIVE_ACTIVITY_WINDOW_START_HOUR * 60 - (hasExistingActivity ? 5 : 0);
+  return minutes >= startMinutes && minutes < LIVE_ACTIVITY_WINDOW_END_HOUR * 60;
 }
 
 /**
@@ -6303,14 +6304,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     state,
     nowMs
   );
-  const pushToStartAttempts = (() => {
-    const raw = Number.isFinite(Number(state.pushToStartAttempts)) ? Math.max(0, Number(state.pushToStartAttempts)) : 0;
-    if (raw === 0) return 0;
-    // Reset across UTC day boundaries so each new match day gets a full attempt budget.
-    const lastStartDay = state.lastStartAt ? String(state.lastStartAt).slice(0, 10) : null;
-    const today = new Date(nowMs).toISOString().slice(0, 10);
-    return (lastStartDay && lastStartDay !== today) ? 0 : raw;
-  })();
+  const pushToStartAttempts = pushToStartAttemptsForDay(state, nowMs);
   const testHoldUntilMs = Date.parse(String(state.testHoldUntil || ""));
   const isTestHoldActive = Number.isFinite(testHoldUntilMs) && nowMs < testHoldUntilMs;
   const shouldDisplay = Boolean(presentation && presentation.mode && presentation.matches.length > 0);
@@ -6496,7 +6490,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
   // --- Active-window gate ---
   // Outside 08:00–23:00 Europe/London, end any running activity and suppress push-to-start
   // unless a match is live/recent-kickoff or close enough to kickoff to be useful.
-  const withinActiveWindow = isWithinLiveActivityActiveWindow(nowMs);
+  const withinActiveWindow = isWithinLiveActivityActiveWindow(nowMs, Boolean(activityPushToken));
   const hasImminentUpcomingMatch = hasImminentUpcomingLiveActivityMatch(
     presentation.matches,
     nowMs
@@ -6870,6 +6864,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
       lastScoreHash: null,
       lastMode: null,
       pushToStartAttempts: newAttemptCount,
+      pushToStartAttemptsUpdatedAt: new Date(nowMs).toISOString(),
     });
     if (newAttemptCount >= LIVE_ACTIVITY_PUSH_TO_START_MAX_ATTEMPTS) {
       console.log(
@@ -7039,6 +7034,8 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     });
     await persistLiveActivityPatch(user, {
       pendingStartAt: new Date(nowMs).toISOString(),
+      pushToStartAttempts,
+      pushToStartAttemptsUpdatedAt: new Date(nowMs).toISOString(),
       lastStartAt: new Date(nowMs).toISOString(),
       lastPayloadHash: payloadHash,
       lastScoreHash: scoreHash,
@@ -8269,6 +8266,7 @@ module.exports = {
     isEligibleForLiveActivityByPreferences,
     shouldAllowInactiveLiveActivityEvaluation,
     hasImminentUpcomingLiveActivityMatch,
+    isWithinLiveActivityActiveWindow,
     firstFixtureSectionMatches,
     isFantasyDeadlineReminderDue,
     isEnglishPremierLeagueTeam,

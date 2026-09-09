@@ -518,6 +518,7 @@ actor PreferencesSyncService {
             "showFantasyRealTimePoints": snapshot.showFantasyRealTimePoints,
             "showFantasyMatchPills": snapshot.showsFantasyDataInFixtures,
             "showPostponedGames": snapshot.showPostponedGames,
+            "showFACupEarlyRounds": snapshot.showFACupEarlyRounds,
             "deviceLocale": Locale.current.identifier,
             "deviceTimeZone": TimeZone.current.identifier
         ]
@@ -661,7 +662,8 @@ actor PreferencesSyncService {
                 showKickoffTimeDividers: preferences["showKickoffTimeDividers"] as? Bool ?? PreferencesStore.defaultShowKickoffTimeDividers,
                 showFantasyFixtureLogos: preferences["showFantasyFixtureLogos"] as? Bool ?? legacyShowFantasyMatchPills,
                 showFantasyExpectedPoints: preferences["showFantasyExpectedPoints"] as? Bool ?? legacyShowFantasyMatchPills,
-                showFantasyRealTimePoints: preferences["showFantasyRealTimePoints"] as? Bool ?? legacyShowFantasyMatchPills
+                showFantasyRealTimePoints: preferences["showFantasyRealTimePoints"] as? Bool ?? legacyShowFantasyMatchPills,
+                showFACupEarlyRounds: preferences["showFACupEarlyRounds"] as? Bool ?? PreferencesStore.defaultShowFACupEarlyRounds
             )
 
             diagnosticLog("[PreferencesSync] Successfully fetched preferences from Redis")

@@ -962,6 +962,33 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         "\(date)|\(time)|\(league)|\(homeTeam)|\(awayTeam)"
     }
 
+    nonisolated var isFACupEarlyRound: Bool {
+        let competitionID = leagueId?.lowercased()
+        let competitionOption = FixtureViewOptionID.legacyCompetition(league)
+        guard competitionID == "39" || competitionID == "fa-cup" ||
+                competitionID == "english-fa-cup" ||
+                competitionOption == FixtureViewOptionID.competition("fa-cup") else {
+            return false
+        }
+
+        // BSD exposes round_name as league_subcategory. Named stages take
+        // precedence because qualifying and knockout rounds can reuse numbers.
+        let round = (leagueSubcategory ?? "")
+            .lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .map(String.init)
+        guard !round.isEmpty else {
+            return roundNumber == 1 || roundNumber == 2
+        }
+        if round.contains(where: { $0.hasPrefix("qualif") || $0 == "preliminary" }) {
+            return true
+        }
+        let properRound = round.filter { $0 != "proper" && $0 != "replay" && $0 != "replays" }
+            .joined(separator: " ")
+        return ["1", "2", "round 1", "round 2", "1st round", "2nd round",
+                "first round", "second round", "round one", "round two"].contains(properRound)
+    }
+
     nonisolated var displayHomeTeam: String {
         let trimmed = homeShortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? homeTeam : trimmed

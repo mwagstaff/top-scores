@@ -118,7 +118,7 @@ test("dedupeLiveActivityUsers keeps the latest owner of a shared push-to-start t
   assert.equal(deduped[0].deviceToken, "current-device");
   assert.equal(deduped[0].preferences.englishPremierLeagueTeamsOnly, true);
   assert.equal(deduped[0].liveActivity.lastStartAt, "2026-08-03T07:00:10.547Z");
-  assert.equal(deduped[0].liveActivity.pushToStartAttempts, 5);
+  assert.equal(deduped[0].liveActivity.pushToStartAttempts, 0);
 });
 
 test("dedupeLiveActivityUsers keeps distinct physical targets", () => {

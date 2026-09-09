@@ -325,7 +325,8 @@ enum SharedMatchesBridge {
         let today = calendar.startOfDay(for: generatedAt)
         let compactMatches = sourceMatches
             .filter { match in
-                guard !match.isFinished, let date = match.dateOnly else { return false }
+                guard snapshot.showFACupEarlyRounds || !match.isFACupEarlyRound,
+                      !match.isFinished, let date = match.dateOnly else { return false }
                 return calendar.startOfDay(for: date) >= today
             }
             .sorted(by: ascendingMatchDate)
@@ -412,8 +413,12 @@ enum SharedMatchesBridge {
     ) -> Data? {
         let payload = WatchSharedMatchesTransferPayload(
             snapshot: snapshot,
-            matches: watchMatches(from: matches),
-            unfilteredMatches: matches.isEmpty ? watchMatches(from: unfilteredMatches) : [],
+            matches: watchMatches(from: matches.filter {
+                snapshot.showFACupEarlyRounds || !$0.isFACupEarlyRound
+            }),
+            unfilteredMatches: matches.isEmpty ? watchMatches(from: unfilteredMatches.filter {
+                snapshot.showFACupEarlyRounds || !$0.isFACupEarlyRound
+            }) : [],
             lastUpdated: lastUpdated,
             generatedAt: generatedAt
         )

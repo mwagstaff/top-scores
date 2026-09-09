@@ -224,6 +224,11 @@ struct PreferencesView: View {
 
                     if showsOnlyAdvancedSettings {
                     Section("Display") {
+                        Toggle("Show early FA Cup rounds", isOn: $preferences.showFACupEarlyRounds)
+                        Text("Includes qualifying rounds and rounds 1 and 2. When off, FA Cup matches are shown from round 3, when Premier League teams enter.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
                         Toggle("Show postponed games", isOn: showPostponedGamesBinding)
                         Text("When off, postponed matches are hidden from the Fixtures screen.")
                             .font(.footnote)

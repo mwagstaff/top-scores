@@ -135,14 +135,11 @@ final class FixturesViewCoordinator: ObservableObject {
     @Published private(set) var isSaveFixtureViewPromptVisible = false
     @Published private(set) var isFixtureSaveRecoveryButtonVisible = false
     @Published var isDockEnabled = true
-    @Published private(set) var isCompetitionDockExpanded = true
-    @Published private(set) var isCompetitionDockIntroPending = false
-    @Published private(set) var hasPresentedCompetitionDockIntro = false
+    @Published private(set) var isCompetitionDockExpanded = false
     @Published private(set) var toastMessage: String?
     @Published private(set) var predictionWarmRequestToken = 0
 
     private var toastTask: Task<Void, Never>?
-    private var competitionDockAutoCollapseTask: Task<Void, Never>?
     private var dateSwipeNavigationReleaseTask: Task<Void, Never>?
     private var isDateSwipeSuppressingMatchNavigation = false
 
@@ -176,9 +173,6 @@ final class FixturesViewCoordinator: ObservableObject {
     }
 
     func resetPresentation() {
-        competitionDockAutoCollapseTask?.cancel()
-        competitionDockAutoCollapseTask = nil
-        isCompetitionDockIntroPending = false
         isCompetitionDockExpanded = false
         expandedFixtureRegionID = nil
         fixturePickerDraftOptionIDs = nil
@@ -217,63 +211,27 @@ final class FixturesViewCoordinator: ObservableObject {
         isDateSwipeSuppressingMatchNavigation = false
     }
 
-    func prepareCompetitionDockForScoresEntry() {
-        competitionDockAutoCollapseTask?.cancel()
-        competitionDockAutoCollapseTask = nil
-
-        guard !hasPresentedCompetitionDockIntro else {
-            isCompetitionDockIntroPending = false
-            isCompetitionDockExpanded = false
-            return
-        }
-
-        hasPresentedCompetitionDockIntro = true
-        isCompetitionDockIntroPending = true
-        isCompetitionDockExpanded = true
-    }
-
-    func scheduleCompetitionDockAutoCollapse(
-        reduceMotion: Bool,
-        voiceOverRunning: Bool,
-        delayNanoseconds: UInt64 = 1_750_000_000
-    ) {
-        guard isCompetitionDockIntroPending else { return }
-        isCompetitionDockIntroPending = false
-        competitionDockAutoCollapseTask?.cancel()
-
-        guard !voiceOverRunning else { return }
-
-        competitionDockAutoCollapseTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: delayNanoseconds)
-            guard !Task.isCancelled,
-                  let self,
-                  self.isCompetitionDockExpanded,
-                  !self.hasExpandedPanel,
-                  !self.isTeamPickerPresented else {
-                return
-            }
-            withAnimation(reduceMotion ? nil : Self.competitionDockCollapseAnimation) {
-                self.isCompetitionDockExpanded = false
-            }
-            self.competitionDockAutoCollapseTask = nil
-        }
-    }
-
-    func noteCompetitionDockInteraction() {
-        isCompetitionDockIntroPending = false
-        competitionDockAutoCollapseTask?.cancel()
-        competitionDockAutoCollapseTask = nil
-    }
-
-    func expandCompetitionDock(reduceMotion: Bool) {
-        noteCompetitionDockInteraction()
+    func toggleMatchFilters(reduceMotion: Bool) {
+        fixturePickerDraftOptionIDs = nil
+        fixturePickerBaselineOptionIDs = nil
         withAnimation(reduceMotion ? nil : Self.competitionDockExpandAnimation) {
+            expandedFixtureRegionID = nil
+            isCompetitionDockExpanded = false
+            isFixtureFavouritesMenuExpanded.toggle()
+        }
+    }
+
+    func showCustomFixtureFilters(reduceMotion: Bool) {
+        fixturePickerDraftOptionIDs = nil
+        fixturePickerBaselineOptionIDs = nil
+        withAnimation(reduceMotion ? nil : Self.competitionDockExpandAnimation) {
+            expandedFixtureRegionID = nil
+            isFixtureFavouritesMenuExpanded = false
             isCompetitionDockExpanded = true
         }
     }
 
     func collapseCompetitionDock(reduceMotion: Bool) {
-        noteCompetitionDockInteraction()
         fixturePickerDraftOptionIDs = nil
         fixturePickerBaselineOptionIDs = nil
         withAnimation(reduceMotion ? nil : Self.competitionDockCollapseAnimation) {
@@ -584,9 +542,6 @@ struct MatchesView: View {
             updateFixtureDockAvailability()
             refreshVisibleGroupedDays(from: sourceGroupedDays)
             guard isSelected else { return }
-            if mode == .fixtures, !isTVListingsPresented {
-                fixturesCoordinator.prepareCompetitionDockForScoresEntry()
-            }
             runActivationIfNeeded(logEvent: "onAppear")
             beginScreenViewTiming()
         }
@@ -602,9 +557,6 @@ struct MatchesView: View {
                 screenOpenedAt = nil
                 screenViewSentForActivation = false
                 return
-            }
-            if mode == .fixtures, !isTVListingsPresented {
-                fixturesCoordinator.prepareCompetitionDockForScoresEntry()
             }
             updateFixtureDockAvailability()
             refreshVisibleGroupedDays(from: sourceGroupedDays)
@@ -729,6 +681,9 @@ struct MatchesView: View {
             diagnosticLog("[MatchesView] fixture_date_change date=%@", dateKey)
         }
         .onChange(of: preferences.showPostponedGames) { _, _ in
+            refreshVisibleGroupedDays(from: sourceGroupedDays, force: true)
+        }
+        .onChange(of: preferences.showFACupEarlyRounds) { _, _ in
             refreshVisibleGroupedDays(from: sourceGroupedDays, force: true)
         }
         .onReceive(NotificationCenter.default.publisher(for: FixturePredictionStore.didChangeNotification)) { _ in
@@ -2081,28 +2036,6 @@ struct FixtureCompetitionDockView: View {
             }
         }
         .environment(\.colorScheme, .dark)
-        .task(id: competitionDockIntroTaskID) {
-            guard content == .rail,
-                  coordinator.isCompetitionDockIntroPending else {
-                return
-            }
-            if !competitionDockContentIsReady {
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
-                guard !Task.isCancelled else { return }
-            }
-            coordinator.scheduleCompetitionDockAutoCollapse(
-                reduceMotion: accessibilityReduceMotion,
-                voiceOverRunning: UIAccessibility.isVoiceOverRunning
-            )
-        }
-    }
-
-    private var competitionDockContentIsReady: Bool {
-        !fixtureBrowser.competitions.isEmpty || fixtureBrowser.errorMessage != nil
-    }
-
-    private var competitionDockIntroTaskID: String {
-        "\(content.rawValue)-\(coordinator.isCompetitionDockIntroPending)-\(competitionDockContentIsReady)"
     }
 
     private var fixtureCompetitionAccessory: some View {
@@ -2193,7 +2126,7 @@ struct FixtureCompetitionDockView: View {
 
     private var collapsedFixtureCompetitionDock: some View {
         Button {
-            coordinator.expandCompetitionDock(reduceMotion: accessibilityReduceMotion)
+            coordinator.toggleMatchFilters(reduceMotion: accessibilityReduceMotion)
         } label: {
             HStack(spacing: 14) {
                 Group {
@@ -2207,7 +2140,7 @@ struct FixtureCompetitionDockView: View {
                 .foregroundStyle(Color.primary)
                 .opacity(0.5)
 
-                Image(systemName: "chevron.right")
+                Image(systemName: isFixtureFavouritesMenuExpanded ? "chevron.down" : "chevron.up")
                     .font(.system(size: 15, weight: .bold))
                     .foregroundStyle(Color.secondary)
                     .opacity(0.5)
@@ -2230,9 +2163,9 @@ struct FixtureCompetitionDockView: View {
             .interaction,
             RoundedRectangle(cornerRadius: 29, style: .continuous)
         )
-        .accessibilityLabel("Competition filters")
+        .accessibilityLabel("Match filters")
         .accessibilityValue(fixtureViewOptionsAccessibilityValue)
-        .accessibilityHint("Expands country and competition filters")
+        .accessibilityHint(isFixtureFavouritesMenuExpanded ? "Closes match filters" : "Choose which matches to show")
     }
 
     @ViewBuilder
@@ -2344,13 +2277,7 @@ struct FixtureCompetitionDockView: View {
     private var fixtureCompetitionRail: some View {
         HStack(spacing: 6) {
             Button {
-                coordinator.noteCompetitionDockInteraction()
-                fixturePickerDraftOptionIDs = nil
-                fixturePickerBaselineOptionIDs = nil
-                withAnimation(.easeOut(duration: 0.2)) {
-                    expandedFixtureRegionID = nil
-                    isFixtureFavouritesMenuExpanded.toggle()
-                }
+                coordinator.toggleMatchFilters(reduceMotion: accessibilityReduceMotion)
             } label: {
                 FixtureRegionDockButton(
                     systemSymbol: isPremierLeagueMatchesPresetSelected ? nil : fixtureViewOptionsSymbol,
@@ -2434,12 +2361,6 @@ struct FixtureCompetitionDockView: View {
                     }
                 }
                 .scrollIndicators(.hidden)
-                .simultaneousGesture(
-                    DragGesture(minimumDistance: 4)
-                        .onChanged { _ in
-                            coordinator.noteCompetitionDockInteraction()
-                        }
-                )
             }
 
             fixtureDockSeparator
@@ -2483,6 +2404,7 @@ struct FixtureCompetitionDockView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+                .fixedSize(horizontal: false, vertical: true)
                 Spacer()
                 Button {
                     withAnimation(.easeOut(duration: 0.2)) {
@@ -2502,6 +2424,30 @@ struct FixtureCompetitionDockView: View {
 
             Divider()
 
+            ViewThatFits(in: .vertical) {
+                fixtureFavouritesActions
+                ScrollView {
+                    fixtureFavouritesActions
+                }
+                .scrollBounceBehavior(.basedOnSize)
+            }
+        }
+        .frame(maxWidth: 420)
+        .background {
+            FixtureGlassSurface(cornerRadius: 22)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .stroke(Color(.separator).opacity(0.55), lineWidth: 0.5)
+        }
+        .shadow(color: .black.opacity(0.28), radius: 24, y: 10)
+        .accessibilityAction(.escape) {
+            coordinator.collapseCompetitionDock(reduceMotion: accessibilityReduceMotion)
+        }
+    }
+
+    private var fixtureFavouritesActions: some View {
+        VStack(spacing: 0) {
             if preferences.hasSavedFavouriteFixtureView {
                 fixtureFavouritesActionRow(
                     title: "Show favourites",
@@ -2535,16 +2481,20 @@ struct FixtureCompetitionDockView: View {
                 isSelected: preferences.showAllMatches,
                 action: selectAllFixtureCompetitions
             )
+            Divider().padding(.leading, 58)
+            fixtureFavouritesActionRow(
+                title: "Custom",
+                subtitle: "Choose competitions by country or individual teams",
+                icon: .system("slider.horizontal.3"),
+                isSelected: !preferences.fixtureAllMajorMatchesEnabled &&
+                    !preferences.showAllMatches &&
+                    !isTopTeamsPresetSelected &&
+                    !isPremierLeagueMatchesPresetSelected,
+                action: {
+                    coordinator.showCustomFixtureFilters(reduceMotion: accessibilityReduceMotion)
+                }
+            )
         }
-        .frame(maxWidth: 420)
-        .background {
-            FixtureGlassSurface(cornerRadius: 22)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .stroke(Color(.separator).opacity(0.55), lineWidth: 0.5)
-        }
-        .shadow(color: .black.opacity(0.28), radius: 24, y: 10)
     }
 
     private var fixtureDockSeparator: some View {
@@ -2607,16 +2557,19 @@ struct FixtureCompetitionDockView: View {
                         .foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.tertiary)
             }
             .padding(.horizontal, 14)
-            .frame(height: 58)
+            .padding(.vertical, 10)
+            .frame(minHeight: 58)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(title)
+        .accessibilityValue(isSelected ? "Selected" : "")
         .accessibilityHint(subtitle)
     }
 
@@ -2871,7 +2824,6 @@ struct FixtureCompetitionDockView: View {
     }
 
     private func toggleFixtureCompetitionPicker(for regionID: String) {
-        coordinator.noteCompetitionDockInteraction()
         guard expandedFixtureRegionID != regionID else {
             dismissFixtureCompetitionPicker()
             return
@@ -2891,7 +2843,6 @@ struct FixtureCompetitionDockView: View {
     }
 
     private func presentTeamPicker() {
-        coordinator.noteCompetitionDockInteraction()
         teamPickerDraftTeamIDs = selectedFixtureTeamIDs
         withAnimation(.easeOut(duration: 0.2)) {
             expandedFixtureRegionID = nil

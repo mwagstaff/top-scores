@@ -253,49 +253,55 @@ struct Top_ScoresTests {
         defaults.removePersistentDomain(forName: suiteName)
     }
 
-    @Test @MainActor func competitionDockIntro_isPresentedOnlyOncePerSession() {
+    @Test @MainActor func matchFilters_opensMenuWithoutRevealingCustomFilters() {
         let coordinator = FixturesViewCoordinator()
+        #expect(!coordinator.isCompetitionDockExpanded)
 
-        coordinator.prepareCompetitionDockForScoresEntry()
+        coordinator.toggleMatchFilters(reduceMotion: true)
+
+        #expect(coordinator.isFixtureFavouritesMenuExpanded)
+        #expect(!coordinator.isCompetitionDockExpanded)
+        #expect(coordinator.hasExpandedPanel)
+        #expect(!coordinator.isDateSwipeEnabled)
+
+        coordinator.toggleMatchFilters(reduceMotion: true)
+
+        #expect(!coordinator.hasExpandedPanel)
+        #expect(coordinator.isDateSwipeEnabled)
+    }
+
+    @Test @MainActor func matchFilters_customOpensRailAndReturningToMenuDiscardsDraft() {
+        let coordinator = FixturesViewCoordinator()
+        coordinator.toggleMatchFilters(reduceMotion: true)
+        coordinator.showCustomFixtureFilters(reduceMotion: true)
 
         #expect(coordinator.isCompetitionDockExpanded)
-        #expect(coordinator.isCompetitionDockIntroPending)
-        #expect(coordinator.hasPresentedCompetitionDockIntro)
+        #expect(!coordinator.isFixtureFavouritesMenuExpanded)
+
+        coordinator.expandedFixtureRegionID = "england"
+        coordinator.fixturePickerDraftOptionIDs = ["competition:39"]
+        coordinator.fixturePickerBaselineOptionIDs = ["competition:1"]
+        coordinator.toggleMatchFilters(reduceMotion: true)
+
+        #expect(coordinator.isFixtureFavouritesMenuExpanded)
+        #expect(!coordinator.isCompetitionDockExpanded)
+        #expect(coordinator.expandedFixtureRegionID == nil)
+        #expect(coordinator.fixturePickerDraftOptionIDs == nil)
+        #expect(coordinator.fixturePickerBaselineOptionIDs == nil)
+    }
+
+    @Test @MainActor func matchFilters_resetHidesCustomFiltersOnScoresReentry() {
+        let coordinator = FixturesViewCoordinator()
+        coordinator.showCustomFixtureFilters(reduceMotion: true)
+        coordinator.expandedFixtureRegionID = "england"
 
         coordinator.resetPresentation()
-        coordinator.prepareCompetitionDockForScoresEntry()
 
         #expect(!coordinator.isCompetitionDockExpanded)
-        #expect(!coordinator.isCompetitionDockIntroPending)
-    }
-
-    @Test @MainActor func competitionDockIntro_interactionCancelsAutomaticCollapse() async {
-        let coordinator = FixturesViewCoordinator()
-        coordinator.prepareCompetitionDockForScoresEntry()
-        coordinator.scheduleCompetitionDockAutoCollapse(
-            reduceMotion: true,
-            voiceOverRunning: false,
-            delayNanoseconds: 20_000_000
-        )
-
-        coordinator.noteCompetitionDockInteraction()
-        try? await Task.sleep(nanoseconds: 40_000_000)
-
-        #expect(coordinator.isCompetitionDockExpanded)
-    }
-
-    @Test @MainActor func competitionDockIntro_voiceOverKeepsCarouselExpanded() {
-        let coordinator = FixturesViewCoordinator()
-        coordinator.prepareCompetitionDockForScoresEntry()
-
-        coordinator.scheduleCompetitionDockAutoCollapse(
-            reduceMotion: false,
-            voiceOverRunning: true,
-            delayNanoseconds: 0
-        )
-
-        #expect(coordinator.isCompetitionDockExpanded)
-        #expect(!coordinator.isCompetitionDockIntroPending)
+        #expect(!coordinator.hasExpandedPanel)
+        coordinator.toggleMatchFilters(reduceMotion: true)
+        #expect(coordinator.isFixtureFavouritesMenuExpanded)
+        #expect(!coordinator.isCompetitionDockExpanded)
     }
 
     @Test @MainActor func dateSwipeInteraction_blocksMatchNavigationThroughSettlingWindow() async {

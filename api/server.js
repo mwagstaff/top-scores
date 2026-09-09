@@ -27678,6 +27678,7 @@ app.post(`${API_PREFIX}/live-activity/push-to-start-token`, async (req, res) => 
     // token gets a full LIVE_ACTIVITY_PUSH_TO_START_MAX_ATTEMPTS budget.
     if (tokenChanged) {
       patch.pushToStartAttempts = 0;
+      patch.pushToStartAttemptsUpdatedAt = nowIso;
     }
 
     const saved = await updateUserLiveActivityState(
@@ -27783,6 +27784,7 @@ app.post(`${API_PREFIX}/live-activity/activity-started`, async (req, res) => {
         currentActivityGeneratedAtEpochSeconds: normalizedActivityGeneratedAtEpochSeconds,
         pendingStartAt: null,
         pushToStartAttempts: 0,
+        pushToStartAttemptsUpdatedAt: nowIso,
         lastStartAt: nowIso,
         lastDispatchAt: normalizedContentState ? nowIso : null,
         lastMode,
@@ -27952,6 +27954,7 @@ app.post(`${API_PREFIX}/live-activity/activity-token`, async (req, res) => {
           renewalAttempts: 0,
         } : {}),
         pushToStartAttempts: 0,
+        pushToStartAttemptsUpdatedAt: nowIso,
         invalidatedActivityId: null,
         invalidatedAt: null,
       },
@@ -28176,7 +28179,7 @@ app.post(`${API_PREFIX}/live-activity/activity-ended`, async (req, res) => {
 app.post(`${API_PREFIX}/live-activity/foreground-start-failed`, async (req, res) => {
   setCacheOnlyHeaders(res);
 
-  const { deviceToken, isDevelopmentBuild, error } = req.body || {};
+  const { deviceToken, error } = req.body || {};
   const resolvedDeviceToken = req.deviceToken || normalizeDeviceToken(deviceToken);
 
   if (!resolvedDeviceToken) {
@@ -28187,29 +28190,10 @@ app.post(`${API_PREFIX}/live-activity/foreground-start-failed`, async (req, res)
   }
 
   try {
-    const existingRecord = await getUserPreferences(resolvedDeviceToken);
-    const state =
-      existingRecord && existingRecord.liveActivity && typeof existingRecord.liveActivity === "object"
-        ? existingRecord.liveActivity
-        : {};
-    const currentAttempts = Number.isFinite(Number(state.pushToStartAttempts))
-      ? Math.max(0, Number(state.pushToStartAttempts))
-      : 0;
-    const newAttempts = currentAttempts + 1;
-
-    await updateUserLiveActivityState(
-      resolvedDeviceToken,
-      {
-        pendingStartAt: null,
-        pushToStartAttempts: newAttempts,
-      },
-      {
-        isDevelopmentBuild: typeof isDevelopmentBuild === "boolean" ? isDevelopmentBuild : undefined,
-      }
-    );
-
+    // Foreground Activity.request failures are not unanswered APNs starts.
+    // They must not consume the background budget or clear a pending push.
     console.log(
-      `[API] Foreground start failed: device=${resolvedDeviceToken.slice(0, 12)}... error="${String(error || "unknown")}" attempts=${newAttempts}`
+      `[API] Foreground start failed: device=${resolvedDeviceToken.slice(0, 12)}... error="${String(error || "unknown")}"`
     );
     res.status(200).json({ success: true });
   } catch (err) {

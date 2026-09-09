@@ -1777,7 +1777,8 @@ final class MatchesStore: ObservableObject {
         force: Bool = false
     ) {
         let usedPremierLeaguePreset = previousSnapshot.map(Self.usesPremierLeagueTeamsPreset) ?? false
-        guard force || usedPremierLeaguePreset || Self.usesPremierLeagueTeamsPreset(snapshot) else {
+        let earlyRoundsChanged = previousSnapshot?.showFACupEarlyRounds != snapshot.showFACupEarlyRounds
+        guard force || earlyRoundsChanged || usedPremierLeaguePreset || Self.usesPremierLeagueTeamsPreset(snapshot) else {
             // Other fixture-view filters are applied by the server (or by the
             // fixture browser). The currently prepared arrays therefore remain
             // valid until the matching server refresh arrives.
@@ -2482,7 +2483,9 @@ final class MatchesStore: ObservableObject {
         mode: MatchesViewMode,
         premierLeagueTeamMatcher: PremierLeagueTeamMatcher = .empty
     ) -> [Match] {
-        let dateFiltered = filterMatches(matches, for: mode)
+        let dateFiltered = filterMatches(matches, for: mode).filter {
+            snapshot.showFACupEarlyRounds || !$0.isFACupEarlyRound
+        }
         guard usesPremierLeagueTeamsPreset(snapshot) else { return dateFiltered }
         return dateFiltered.filter(premierLeagueTeamMatcher.matches)
     }

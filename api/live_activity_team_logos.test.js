@@ -82,6 +82,13 @@ test("ID-less legacy matches can still resolve Manchester United's existing cres
   assert.equal(matchState({ away_team_id: null }).awayLogoKey, "Man United");
 });
 
+test("South Liverpool FC resolves its dedicated crest rather than Liverpool's", () => {
+  assert.equal(
+    matchState({ away_team_id: null, away_team: "South Liverpool FC" }).awayLogoKey,
+    "South Liverpool FC"
+  );
+});
+
 test("every mapped BSD ID resolves independently of names to a bundled Live Activity crest", () => {
   const manifest = new Set(require("./team_logo_assets.json"));
   const widgetManifest = new Set(require("../ios/Top Scores/Top Scores Widgets/live_activity_team_logo_assets.json"));

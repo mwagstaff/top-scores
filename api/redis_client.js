@@ -759,6 +759,9 @@ function normalizeLiveActivityStatePatch(patch = {}) {
   if (Object.prototype.hasOwnProperty.call(patch, "pushToStartTokenUpdatedAt")) {
     normalized.pushToStartTokenUpdatedAt = normalizeOptionalToken(patch.pushToStartTokenUpdatedAt);
   }
+  if (Object.prototype.hasOwnProperty.call(patch, "pushToStartAttemptsUpdatedAt")) {
+    normalized.pushToStartAttemptsUpdatedAt = normalizeOptionalToken(patch.pushToStartAttemptsUpdatedAt);
+  }
   if (Object.prototype.hasOwnProperty.call(patch, "pushToStartAttempts")) {
     const numericAttempts = Number(patch.pushToStartAttempts);
     normalized.pushToStartAttempts = Number.isFinite(numericAttempts)

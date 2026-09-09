@@ -60,3 +60,12 @@ test("legacy client renewal can register despite newer content on the old activi
   await call("activity-token", { activityId: "new", activityPushToken: "bb".repeat(32), activityGeneratedAtEpochSeconds: Math.floor(Date.now() / 1000) });
   assert.equal(state.currentActivityId, "new");
 });
+
+test("foreground-start failure does not consume background attempts or clear pending push", async () => {
+  reset();
+  state.pendingStartAt = new Date().toISOString();
+  state.pushToStartAttempts = 2;
+  const before = { ...state };
+  await call("foreground-start-failed", { error: "Target is not foreground" });
+  assert.deepEqual(state, before);
+});
