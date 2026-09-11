@@ -321,7 +321,6 @@ struct MatchesView: View {
     @State private var fixtureCompetitionMatchLimits: [String: Int] = [:]
     @State private var isFixtureDatePickerPresented = false
     @State private var fixtureDatePickerSelection = Date()
-    @State private var fixtureDateCarouselPosition: String?
     @State private var isSubscribingToCalendar = false
     @State private var calendarSubscriptionErrorMessage = ""
     @State private var showsCalendarSubscriptionError = false
@@ -1876,59 +1875,64 @@ struct MatchesView: View {
             } else {
                 let jumpDirection = fixtureBrowser.nextMatchDateJumpDirection
                 ZStack {
-                    ScrollView(.horizontal) {
-                        LazyHStack(spacing: 10) {
-                            ForEach(fixtureBrowser.availableDays) { day in
-                                let selected = fixtureBrowser.selectedDateKey == day.date
-                                Button {
-                                    fixtureBrowser.selectDate(day.date)
-                                } label: {
-                                    FixtureDateCarouselTile(
-                                        dateKey: day.date,
-                                        matchCount: fixtureMatchCount(for: day),
-                                        isSelected: selected,
-                                        isToday: day.date == fixtureBrowser.todayDateKey
-                                    )
+                    // Keep selection-to-scroll one-way. A two-way scrollPosition binding can
+                    // write the previously visible tile back while a date tap is relaying out.
+                    ScrollViewReader { proxy in
+                        ScrollView(.horizontal) {
+                            LazyHStack(spacing: 10) {
+                                ForEach(fixtureBrowser.availableDays) { day in
+                                    let selected = fixtureBrowser.selectedDateKey == day.date
+                                    Button {
+                                        fixtureBrowser.selectDate(day.date)
+                                    } label: {
+                                        FixtureDateCarouselTile(
+                                            dateKey: day.date,
+                                            matchCount: fixtureMatchCount(for: day),
+                                            isSelected: selected,
+                                            isToday: day.date == fixtureBrowser.todayDateKey
+                                        )
+                                    }
+                                    .id(day.date)
+                                    .buttonStyle(.plain)
+                                    .accessibilityAddTraits(selected ? .isSelected : [])
                                 }
-                                .id(day.date)
-                                .buttonStyle(.plain)
-                                .accessibilityAddTraits(selected ? .isSelected : [])
+                            }
+                            .scrollTargetLayout()
+                            .padding(.leading, jumpDirection == .earlier ? 66 : 12)
+                            .padding(.trailing, jumpDirection == .later ? 66 : 12)
+                        }
+                        .scrollIndicators(.hidden)
+                        .scrollTargetBehavior(.viewAligned(limitBehavior: .always))
+                        .mask {
+                            HStack(spacing: 0) {
+                                LinearGradient(
+                                    colors: [.clear, .black],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                                .frame(width: 10)
+                                Rectangle().fill(.black)
+                                LinearGradient(
+                                    colors: [.black, .clear],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                                .frame(width: 10)
                             }
                         }
-                        .scrollTargetLayout()
-                        .padding(.leading, jumpDirection == .earlier ? 66 : 12)
-                        .padding(.trailing, jumpDirection == .later ? 66 : 12)
-                    }
-                    .scrollIndicators(.hidden)
-                    .scrollTargetBehavior(.viewAligned(limitBehavior: .always))
-                    .scrollPosition(id: $fixtureDateCarouselPosition, anchor: .center)
-                    .mask {
-                        HStack(spacing: 0) {
-                            LinearGradient(
-                                colors: [.clear, .black],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                            .frame(width: 10)
-                            Rectangle().fill(.black)
-                            LinearGradient(
-                                colors: [.black, .clear],
-                                startPoint: .leading,
-                                endPoint: .trailing
-                            )
-                            .frame(width: 10)
+                        .frame(height: fixtureDateCarouselHeight)
+                        .onAppear {
+                            if let selectedDateKey = fixtureBrowser.selectedDateKey {
+                                proxy.scrollTo(selectedDateKey, anchor: .center)
+                            }
                         }
-                    }
-                    .frame(height: fixtureDateCarouselHeight)
-                    .onAppear {
-                        fixtureDateCarouselPosition = fixtureBrowser.selectedDateKey
-                    }
-                    .onChange(of: fixtureBrowser.selectedDateKey) { _, dateKey in
-                        guard let dateKey else { return }
-                        var transaction = Transaction()
-                        transaction.disablesAnimations = true
-                        withTransaction(transaction) {
-                            fixtureDateCarouselPosition = dateKey
+                        .onChange(of: fixtureBrowser.selectedDateKey) { _, dateKey in
+                            guard let dateKey else { return }
+                            var transaction = Transaction()
+                            transaction.disablesAnimations = true
+                            withTransaction(transaction) {
+                                proxy.scrollTo(dateKey, anchor: .center)
+                            }
                         }
                     }
 
