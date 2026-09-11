@@ -3,7 +3,7 @@ import CoreMotion
 import SwiftUI
 import UIKit
 
-struct StadiumParallaxFilter {
+nonisolated struct StadiumParallaxFilter {
     static let maximumHorizontalTranslation: CGFloat = 24
     static let maximumVerticalTranslation: CGFloat = 20
 
@@ -43,7 +43,7 @@ struct StadiumParallaxFilter {
     }
 }
 
-enum StadiumParallaxScreenOrientation {
+nonisolated enum StadiumParallaxScreenOrientation: Sendable {
     case portrait
     case portraitUpsideDown
     case landscapeLeft
@@ -59,7 +59,7 @@ enum StadiumParallaxScreenOrientation {
     }
 }
 
-struct StadiumParallaxAttitudeProjection {
+nonisolated struct StadiumParallaxAttitudeProjection {
     static func screenAngles(
         quaternion: CMQuaternion,
         orientation: StadiumParallaxScreenOrientation
@@ -89,13 +89,13 @@ struct StadiumParallaxAttitudeProjection {
     }
 }
 
-private final class StadiumParallaxMotionProcessor: @unchecked Sendable {
+private nonisolated final class StadiumParallaxMotionProcessor: @unchecked Sendable {
     private let orientation: StadiumParallaxScreenOrientation
     private var referenceAttitude: CMAttitude?
     private var filter: StadiumParallaxFilter
 
-    init(orientation: UIInterfaceOrientation, initialTranslation: CGSize) {
-        self.orientation = StadiumParallaxScreenOrientation(orientation)
+    init(orientation: StadiumParallaxScreenOrientation, initialTranslation: CGSize) {
+        self.orientation = orientation
         filter = StadiumParallaxFilter(translation: initialTranslation)
     }
 
@@ -119,13 +119,61 @@ private final class StadiumParallaxMotionProcessor: @unchecked Sendable {
     }
 }
 
-@MainActor
-final class StadiumParallaxMotionModel: ObservableObject {
-    static let shared = StadiumParallaxMotionModel()
+nonisolated protocol StadiumParallaxMotionBackend: AnyObject, Sendable {
+    func start(
+        orientation: StadiumParallaxScreenOrientation,
+        initialTranslation: CGSize,
+        onTranslation: @escaping @Sendable (CGSize) -> Void
+    )
+    func stop()
+}
 
-    @Published private(set) var translation = CGSize.zero
+/// The serial queue owns the backend, including its first initialization and shutdown.
+nonisolated final class StadiumParallaxMotionDriver: @unchecked Sendable {
+    private let queue: DispatchQueue
+    private let makeBackend: @Sendable () -> any StadiumParallaxMotionBackend
+    private var backend: (any StadiumParallaxMotionBackend)?
 
-    private let motionManager = CMMotionManager()
+    init(
+        queue: DispatchQueue = DispatchQueue(
+            label: "dev.skynolimit.top-scores.stadium-parallax-control",
+            qos: .userInitiated
+        ),
+        makeBackend: @escaping @Sendable () -> any StadiumParallaxMotionBackend = {
+            CoreMotionStadiumParallaxBackend()
+        }
+    ) {
+        self.queue = queue
+        self.makeBackend = makeBackend
+    }
+
+    deinit {
+        let backend = backend
+        queue.async { backend?.stop() }
+    }
+
+    func start(
+        orientation: StadiumParallaxScreenOrientation,
+        initialTranslation: CGSize,
+        onTranslation: @escaping @Sendable (CGSize) -> Void
+    ) {
+        queue.async { [self] in
+            if backend == nil { backend = makeBackend() }
+            backend?.start(
+                orientation: orientation,
+                initialTranslation: initialTranslation,
+                onTranslation: onTranslation
+            )
+        }
+    }
+
+    func stop() {
+        queue.async { [self] in backend?.stop() }
+    }
+}
+
+private nonisolated final class CoreMotionStadiumParallaxBackend: StadiumParallaxMotionBackend, @unchecked Sendable {
+    private let motionManager: CMMotionManager
     private let motionQueue: OperationQueue = {
         let queue = OperationQueue()
         queue.name = "dev.skynolimit.top-scores.stadium-parallax-motion"
@@ -133,12 +181,66 @@ final class StadiumParallaxMotionModel: ObservableObject {
         queue.qualityOfService = .userInteractive
         return queue
     }()
+
+    init() {
+        let startedAt = DispatchTime.now().uptimeNanoseconds
+        motionManager = CMMotionManager()
+        motionManager.deviceMotionUpdateInterval = 1.0 / 60.0
+        log(stage: "initialize", startedAt: startedAt)
+    }
+
+    func start(
+        orientation: StadiumParallaxScreenOrientation,
+        initialTranslation: CGSize,
+        onTranslation: @escaping @Sendable (CGSize) -> Void
+    ) {
+        let availabilityStartedAt = DispatchTime.now().uptimeNanoseconds
+        let isAvailable = motionManager.isDeviceMotionAvailable
+            && CMMotionManager.availableAttitudeReferenceFrames().contains(.xArbitraryZVertical)
+        log(stage: isAvailable ? "available" : "unavailable", startedAt: availabilityStartedAt)
+        guard isAvailable else { return }
+
+        let processor = StadiumParallaxMotionProcessor(
+            orientation: orientation,
+            initialTranslation: initialTranslation
+        )
+        let startedAt = DispatchTime.now().uptimeNanoseconds
+        motionManager.startDeviceMotionUpdates(using: .xArbitraryZVertical, to: motionQueue) { motion, _ in
+            guard let motion, let nextTranslation = processor.translation(for: motion) else { return }
+            onTranslation(nextTranslation)
+        }
+        log(stage: "start", startedAt: startedAt)
+    }
+
+    func stop() {
+        let startedAt = DispatchTime.now().uptimeNanoseconds
+        motionManager.stopDeviceMotionUpdates()
+        motionQueue.cancelAllOperations()
+        log(stage: "stop", startedAt: startedAt)
+    }
+
+    private func log(stage: String, startedAt: UInt64) {
+        #if DEBUG
+        let now = DispatchTime.now().uptimeNanoseconds
+        let elapsed = (now - startedAt) / 1_000_000
+        diagnosticLogAsync("[StadiumParallaxMotion] stage=\(stage) duration_ms=\(elapsed) uptime_ms=\(now / 1_000_000) main_thread=\(Thread.isMainThread)")
+        #endif
+    }
+}
+
+@MainActor
+final class StadiumParallaxMotionModel: ObservableObject {
+    static let shared = StadiumParallaxMotionModel()
+
+    @Published private(set) var translation = CGSize.zero
+
+    private let driver: StadiumParallaxMotionDriver
     private var activeViews: Set<UUID> = []
     private var orientation: UIInterfaceOrientation = .portrait
     private var generation = UUID()
 
-    private init() {
-        motionManager.deviceMotionUpdateInterval = 1.0 / 60.0
+    init(driver: StadiumParallaxMotionDriver = StadiumParallaxMotionDriver()) {
+        self.driver = driver
     }
 
     func activate(viewID: UUID, orientation: UIInterfaceOrientation) {
@@ -175,21 +277,12 @@ final class StadiumParallaxMotionModel: ObservableObject {
     }
 
     private func startUpdates() {
-        guard motionManager.isDeviceMotionAvailable else { return }
-        let availableFrames = CMMotionManager.availableAttitudeReferenceFrames()
-        guard availableFrames.contains(.xArbitraryZVertical) else { return }
-
         generation = UUID()
         let currentGeneration = generation
-        let processor = StadiumParallaxMotionProcessor(
-            orientation: orientation,
+        driver.start(
+            orientation: StadiumParallaxScreenOrientation(orientation),
             initialTranslation: translation
-        )
-        motionManager.startDeviceMotionUpdates(
-            using: .xArbitraryZVertical,
-            to: motionQueue
-        ) { [weak self] motion, _ in
-            guard let motion, let nextTranslation = processor.translation(for: motion) else { return }
+        ) { [weak self] nextTranslation in
             Task { @MainActor [weak self] in
                 guard let self, self.generation == currentGeneration else { return }
                 self.translation = nextTranslation
@@ -199,8 +292,7 @@ final class StadiumParallaxMotionModel: ObservableObject {
 
     private func stopUpdates(centresImage: Bool = true) {
         generation = UUID()
-        motionManager.stopDeviceMotionUpdates()
-        motionQueue.cancelAllOperations()
+        driver.stop()
         guard centresImage else { return }
         withAnimation(.easeOut(duration: 0.45)) {
             translation = .zero

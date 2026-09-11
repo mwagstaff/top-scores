@@ -5,7 +5,7 @@ import SwiftUI
 import UIKit
 import Vision
 
-func playerPortraitPixelSizeIsRenderable(width: Int, height: Int) -> Bool {
+nonisolated func playerPortraitPixelSizeIsRenderable(width: Int, height: Int) -> Bool {
     width > 1 && height > 1
 }
 
@@ -31,7 +31,7 @@ func portraitURLForLocalBackgroundRemoval(_ url: URL) -> URL {
     return components.url ?? url
 }
 
-private func isRenderablePlayerPortrait(_ image: UIImage) -> Bool {
+nonisolated private func isRenderablePlayerPortrait(_ image: UIImage) -> Bool {
     if let cgImage = image.cgImage {
         return playerPortraitPixelSizeIsRenderable(
             width: cgImage.width,
@@ -102,19 +102,50 @@ private actor PlayerPortraitProcessingLimiter {
     }
 }
 
-private enum PlayerPortraitBackgroundRemover {
-    nonisolated static func transparentPNGData(from imageData: Data) async -> Data? {
+nonisolated enum PlayerPortraitImageProcessor {
+    private static var isProcessingOnMainThread: Bool { Thread.isMainThread }
+
+    static func displayImage(from imageData: Data, removingBackground: Bool) async -> UIImage? {
+        guard !Task.isCancelled else { return nil }
         await PlayerPortraitProcessingLimiter.shared.acquire()
-        let output = await Task.detached(priority: .userInitiated) {
-            autoreleasepool {
-                makeTransparentPNGData(from: imageData)
+        guard !Task.isCancelled else {
+            await PlayerPortraitProcessingLimiter.shared.release()
+            return nil
+        }
+        // Decoding is synchronous, even after an asynchronous download. Keep it
+        // with the bounded background work so new lineups cannot stall navigation.
+        let worker = Task.detached(priority: .userInitiated) { () -> UIImage? in
+            guard !Task.isCancelled else { return nil }
+            let started = ProcessInfo.processInfo.systemUptime
+            defer {
+                let elapsed = (ProcessInfo.processInfo.systemUptime - started) * 1_000
+                if elapsed >= 250 {
+                    diagnosticLog(
+                        "[PlayerPortrait] image_processing elapsed_ms=%.1f bytes=%d remove_background=%@ main_thread=%@",
+                        elapsed, imageData.count, String(removingBackground), String(isProcessingOnMainThread)
+                    )
+                }
             }
-        }.value
+            return autoreleasepool {
+                guard let originalImage = UIImage(data: imageData),
+                      isRenderablePlayerPortrait(originalImage) else { return nil }
+                let image = removingBackground
+                    ? makeTransparentImage(from: imageData) ?? originalImage
+                    : originalImage
+                guard !Task.isCancelled else { return nil }
+                return image.preparingForDisplay()
+            }
+        }
+        let output = await withTaskCancellationHandler {
+            await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
         await PlayerPortraitProcessingLimiter.shared.release()
-        return output
+        return Task.isCancelled ? nil : output
     }
 
-    nonisolated private static func makeTransparentPNGData(from imageData: Data) -> Data? {
+    private static func makeTransparentImage(from imageData: Data) -> UIImage? {
         guard let inputImage = CIImage(
             data: imageData,
             options: [.applyOrientationProperty: true]
@@ -166,7 +197,7 @@ private enum PlayerPortraitBackgroundRemover {
         guard let cgImage = context.createCGImage(outputImage, from: inputImage.extent) else {
             return nil
         }
-        return UIImage(cgImage: cgImage).pngData()
+        return UIImage(cgImage: cgImage)
     }
 
     nonisolated private static func hasUsefulForeground(in pixelBuffer: CVPixelBuffer) -> Bool {
@@ -250,25 +281,12 @@ struct RemotePlayerPortraitImage<Content: View, Placeholder: View>: View {
                    !(200..<300).contains(http.statusCode) {
                     continue
                 }
-                guard let originalImage = UIImage(data: data),
-                      isRenderablePlayerPortrait(originalImage)
-                else {
-                    continue
-                }
-
-                let image: UIImage
-                if portraitURLNeedsBackgroundRemoval(url),
-                   let transparentData = await PlayerPortraitBackgroundRemover.transparentPNGData(
-                       from: data
-                   ),
-                   !Task.isCancelled,
-                   let transparentImage = UIImage(data: transparentData),
-                   isRenderablePlayerPortrait(transparentImage) {
-                    image = transparentImage
-                } else {
-                    guard !Task.isCancelled else { return }
-                    image = originalImage
-                }
+                let processedImage = await PlayerPortraitImageProcessor.displayImage(
+                    from: data,
+                    removingBackground: portraitURLNeedsBackgroundRemoval(url)
+                )
+                guard !Task.isCancelled else { return }
+                guard let image = processedImage else { continue }
 
                 PlayerPortraitImageCache.shared.insert(image, for: url)
                 loadedImage = image

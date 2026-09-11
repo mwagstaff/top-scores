@@ -120,6 +120,7 @@ async function ensureIndexes() {
     collection("bsd_teams").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
     collection("bsd_venues").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
     collection("bsd_events").createIndexes([
+      { key: { league_id: 1, "payload.season_id": 1, "payload.round_number": 1, event_date: 1 }, name: "league_season_round" },
       { key: { updated_at: -1 }, name: "updatedAt_desc" },
       { key: { league_id: 1, status: 1 }, name: "league_status" },
       {
@@ -159,6 +160,54 @@ async function ensureIndexes() {
     collection("gg_players").createIndexes([
       { key: { updated_at: -1 }, name: "updatedAt_desc" },
     ]),
+    collection("pg_players").createIndexes([
+      { key: { gameCenterSubject: 1 }, name: "game_center_unique", unique: true, sparse: true },
+      { key: { statsDirty: 1 }, name: "dirty_stats" },
+    ]),
+    collection("pg_sessions").createIndex({ playerId: 1 }, { name: "player" }),
+    collection("pg_assertions").createIndex({ expiresAt: 1 }, { name: "assertion_expiry", expireAfterSeconds: 0 }),
+    collection("pg_locks").createIndex({ expiresAt: 1 }, { name: "lock_expiry", expireAfterSeconds: 0 }),
+    collection("pg_fixtures").createIndexes([
+      { key: { competitionId: 1, seasonId: 1, roundNumber: 1, kickoffAt: 1 }, name: "competition_gameweek" },
+      { key: { competitionId: 1, kickoffAt: 1 }, name: "competition_kickoff" },
+      { key: { kickoffAt: 1 }, name: "kickoff" },
+      { key: { seasonId: 1, kickoffAt: 1 }, name: "season_kickoff" },
+      { key: { challengeId: 1 }, name: "challenge" },
+    ]),
+    collection("pg_entries").createIndexes([
+      { key: { playerId: 1, competitionId: 1, seasonId: 1, kickoffAt: -1 }, name: "player_competition_history" },
+      { key: { playerId: 1, fixtureId: 1 }, name: "player_fixture", unique: true },
+      { key: { playerId: 1, seasonId: 1, kickoffAt: -1 }, name: "player_season_history" },
+      { key: { playerId: 1, kickoffAt: -1, fixtureId: 1 }, name: "player_history" },
+      { key: { fixtureId: 1, resultRevision: 1 }, name: "fixture_settlement" },
+      { key: { statsPending: 1 }, name: "pending_stats" },
+    ]),
+    collection("pg_challenges").createIndexes([
+      { key: { competitionId: 1, endsAt: 1, startsAt: 1 }, name: "competition_current" },
+      { key: { seasonId: 1 }, name: "season" },
+      { key: { fixtureIds: 1 }, name: "fixture_membership_unique", unique: true },
+    ]),
+    collection("pg_leaderboards").createIndexes([
+      { key: { scope: 1, published: 1, points: -1, displayName: 1, playerId: 1 }, name: "ranked_scope" },
+      { key: { scope: 1, playerId: 1 }, name: "scope_player", unique: true, sparse: true },
+    ]),
+    // Additive private-league migration. Membership and ownership share one
+    // versioned league document; no replica-set transactions are required.
+    collection("pg_mini_leagues").createIndexes([
+      { key: { activePlayerIds: 1, status: 1, createdAt: -1 }, name: "active_member_leagues" },
+      { key: { competitionId: 1, status: 1 }, name: "competition_leagues" },
+      { key: { draftExpiresAt: 1 }, name: "unfinished_league_expiry", expireAfterSeconds: 0 },
+    ]),
+    collection("pg_mini_league_rounds").createIndexes([
+      { key: { competitionId: 1, startsAt: 1 }, name: "competition_rounds" },
+      { key: { fixtureIds: 1 }, name: "round_fixtures_unique", unique: true },
+    ]),
+    collection("pg_mini_league_standings").createIndexes([
+      { key: { leagueId: 1, scope: 1, seasonId: 1 }, name: "league_scope" },
+      { key: { rebuildPending: 1 }, name: "pending_rebuilds" },
+    ]),
+    collection("pg_mini_league_invite_lookup").createIndex({ expiresAt: 1 }, { name: "invitation_expiry", expireAfterSeconds: 0 }),
+    collection("pg_mini_league_attempts").createIndex({ expiresAt: 1 }, { name: "attempt_expiry", expireAfterSeconds: 0 }),
     collection("gg_sessions").createIndexes([
       { key: { player_id: 1 }, name: "player" },
       { key: { updated_at: -1 }, name: "updatedAt_desc" },

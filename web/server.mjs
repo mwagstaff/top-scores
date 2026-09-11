@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
+import { registerLeagueInvitationRoutes } from "./league-invitations.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -105,6 +106,7 @@ async function loadCompetitionWeights() {
 
 const app = express();
 app.disable("x-powered-by");
+registerLeagueInvitationRoutes(app);
 
 app.get("/healthcheck", (_req, res) => {
   res.json({

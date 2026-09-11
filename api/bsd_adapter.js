@@ -268,11 +268,11 @@ function mapBsdStatus(event, options = {}) {
   if (!status || status === "notstarted" || status === "not_started" || status === "ns") {
     return null;
   }
-  if (isFutureScorelessKickoff && !minuteStr && !period) {
-    return null;
-  }
   if (["postponed", "cancelled", "canceled", "abandoned", "suspended", "interrupted", "void"].includes(status)) {
     return "POSTPONED";
+  }
+  if (isFutureScorelessKickoff && !minuteStr && !period) {
+    return null;
   }
   if (periodSummary && periodSummary.penaltyShootout) {
     return "AET";
@@ -1535,6 +1535,9 @@ async function projectBsdMatches() {
   events.forEach((doc) => {
     const event = doc.payload;
     if (!event || !isCurrentSeasonEvent(event, currentSeasonByLeague)) return;
+    // Retain withdrawn events for detail/history lookups, not the fixture list.
+    if (["cancelled", "canceled", "void"].includes(String(event.status || "").trim().toLowerCase())) return;
+    if (/^[1-9]\d*$/.test(String(event.replaced_by || "").trim())) return;
     if (event.league_id != null && !allowlist.has(String(event.league_id))) return;
     const eventId = event && event.id != null ? String(event.id) : null;
     const match = bsdEventToCanonicalMatch(event, {

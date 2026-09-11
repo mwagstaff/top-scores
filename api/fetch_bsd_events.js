@@ -24,8 +24,14 @@ const {
 
 // `started` is historical in BSD (it includes events that started long ago),
 // not a synonym for currently live. Live matches come from /events/live, so
-// bulk ingestion only needs upcoming and finished lists.
+// bulk ingestion uses upcoming and finished lists. Missing scheduled fixtures
+// are checked individually because cancellations disappear from both lists.
 const EVENT_STATUSES = ["notstarted", "finished"];
+const SCHEDULE_RECHECK_LIMIT = 20;
+const SCHEDULE_RECHECK_MS = 15 * 60 * 1000;
+const POSTPONED_RECHECK_MS = 6 * 60 * 60 * 1000;
+const FAILED_SCHEDULE_RECHECK_MS = 60 * 60 * 1000;
+const failedScheduleRechecks = new Map();
 
 function positiveNumber(value, fallback) {
   const parsed = Number(value);
@@ -69,11 +75,10 @@ function eventToRecord(event) {
   };
 }
 
-// An event has playable detail (incidents/lineups) once it is no longer a
-// not-yet-started fixture.
+// Cancelled/postponed fixtures have no playable detail to hydrate.
 function isPlayed(event) {
   const status = String(event && event.status ? event.status : "").toLowerCase();
-  return status !== "notstarted" && status !== "";
+  return !["", "notstarted", "postponed", "cancelled", "canceled", "void"].includes(status);
 }
 
 function hasUnknownOutsideTimelineCardIncident(doc) {
@@ -131,6 +136,60 @@ function selectIncrementalEvents(events, nowMs = Date.now()) {
   return retained;
 }
 
+async function reconcileMissingScheduledEvents(leagueId, fetchedEvents, nowMs = Date.now()) {
+  // Failed IDs must not monopolise the bounded batch on every refresh. Keep
+  // the cooldown in memory so a failed lookup never changes stored evidence.
+  for (const [id, retryAt] of failedScheduleRechecks) {
+    if (retryAt <= nowMs) failedScheduleRechecks.delete(id);
+  }
+  const fetchedIds = fetchedEvents.filter((event) => event && event.id != null)
+    .map((event) => String(event.id));
+  const dayMs = 24 * 60 * 60 * 1000;
+  const candidates = await getBsdRecords("bsd_events", {
+    league_id: { $in: [String(leagueId), Number(leagueId)] },
+    _id: { $nin: [...fetchedIds, ...failedScheduleRechecks.keys()] },
+    event_date: {
+      $gte: new Date(nowMs - 7 * dayMs).toISOString().slice(0, 10),
+      $lt: new Date(nowMs + 31 * dayMs).toISOString().slice(0, 10),
+    },
+    $or: [
+      { status: "notstarted", updated_at: { $lte: new Date(nowMs - SCHEDULE_RECHECK_MS).toISOString() } },
+      { status: "postponed", updated_at: { $lte: new Date(nowMs - POSTPONED_RECHECK_MS).toISOString() } },
+    ],
+  }, {
+    projection: { _id: 1 },
+    sort: { updated_at: 1, _id: 1 },
+    limit: SCHEDULE_RECHECK_LIMIT,
+  });
+  const refreshed = [];
+  for (const doc of candidates) {
+    try {
+      // Absence from a filtered or page-capped list is only a reason to look
+      // up the event, never evidence that it should be deleted/cancelled.
+      // eslint-disable-next-line no-await-in-loop
+      const event = await bsd.getEvent(doc._id, {
+        initiator: "fetch_bsd_events",
+        reason: "missing_scheduled_event",
+      });
+      if (!event || String(event.id) !== String(doc._id) ||
+          String(event.league_id) !== String(leagueId) || !event.status ||
+          !Number.isFinite(Date.parse(event.event_date || ""))) {
+        throw new Error("BSD returned an invalid scheduled event");
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await upsertBsdRecords("bsd_events", [eventToRecord(event)]);
+      refreshed.push(event);
+    } catch (error) {
+      failedScheduleRechecks.set(String(doc._id), nowMs + FAILED_SCHEDULE_RECHECK_MS);
+      console.error(`[bsd] scheduled event ${doc._id} reconciliation failed: ${error.message || error}`);
+    }
+  }
+  if (candidates.length > 0) {
+    console.log(`[bsd] league ${leagueId}: ${refreshed.length}/${candidates.length} missing scheduled events refreshed`);
+  }
+  return refreshed;
+}
+
 async function ingestLeagueEvents(leagueId, options = {}) {
   const statuses = Array.isArray(options.statuses) ? options.statuses : EVENT_STATUSES;
   const maxPagesByStatus = options.maxPagesByStatus || {};
@@ -156,11 +215,16 @@ async function ingestLeagueEvents(leagueId, options = {}) {
     .filter((event) => event && event.id != null)
     .map(eventToRecord);
   await upsertBsdRecords("bsd_events", records);
+  if (statuses.includes("notstarted") && statuses.includes("finished")) {
+    const refreshed = await reconcileMissingScheduledEvents(leagueId, collected, options.nowMs);
+    collected.push(...refreshed);
+  }
   return collected;
 }
 
 async function ingestLeagueIncrementalEvents(leagueId, nowMs = Date.now()) {
   return ingestLeagueEvents(leagueId, {
+    nowMs,
     maxPagesByStatus: {
       notstarted: INCREMENTAL_UPCOMING_MAX_PAGES,
       finished: INCREMENTAL_FINISHED_MAX_PAGES,
@@ -353,6 +417,7 @@ if (require.main === module) {
 module.exports = {
   ingestLeagueEvents,
   ingestLeagueIncrementalEvents,
+  reconcileMissingScheduledEvents,
   hydrateDetail,
   hydrateTeams,
   hydrateVenues,

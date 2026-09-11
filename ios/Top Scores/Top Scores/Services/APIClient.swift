@@ -122,7 +122,7 @@ struct APIClient {
                 isNotModified: true
             )
         }
-        let decodedMatches = try decodeMatches(from: data, operation: "matches_page")
+        let decodedMatches = try await decodeMatches(from: data, operation: "matches_page")
         let matches = hydrateStates
             ? try await hydrateMatchStates(decodedMatches)
             : decodedMatches
@@ -261,7 +261,7 @@ struct APIClient {
         let (data, http) = try await performRequest(request, operation: "matches_for_date")
         try validateSuccess(http, data: data, operation: "matches_for_date")
         return try await hydrateMatchStates(
-            try decodeMatches(from: data, operation: "matches_for_date")
+            try await decodeMatches(from: data, operation: "matches_for_date")
         )
     }
 
@@ -289,7 +289,7 @@ struct APIClient {
             operation: "competition_season_matches"
         )
         try validateSuccess(http, data: data, operation: "competition_season_matches")
-        let matches = try decodeMatches(from: data, operation: "competition_season_matches")
+        let matches = try await decodeMatches(from: data, operation: "competition_season_matches")
         return await hydrateInProgressMatchStatesBestEffort(matches)
     }
 
@@ -322,7 +322,7 @@ struct APIClient {
         try validateSuccess(http, data: data, operation: "team_results_bulk")
 
         return MatchResponse(
-            matches: Array(try decodeMatches(from: data, operation: "team_results_bulk").prefix(max(1, limit))),
+            matches: Array(try await decodeMatches(from: data, operation: "team_results_bulk").prefix(max(1, limit))),
             lastUpdated: Self.lastUpdated(from: http),
             isNotModified: false
         )
@@ -358,7 +358,7 @@ struct APIClient {
         try validateSuccess(http, data: data, operation: operation)
 
         return MatchResponse(
-            matches: Array(try decodeMatches(from: data, operation: operation).prefix(max(1, limit))),
+            matches: Array(try await decodeMatches(from: data, operation: operation).prefix(max(1, limit))),
             lastUpdated: Self.lastUpdated(from: http),
             isNotModified: false
         )
@@ -480,14 +480,7 @@ struct APIClient {
         let request = try buildRequest(path: "matches", queryItems: queryItems)
         let (data, http) = try await performRequest(request, operation: "fixture_browse_matches")
         try validateSuccess(http, data: data, operation: "fixture_browse_matches")
-        let decodingTask = Task.detached(priority: .userInitiated) {
-            try Self.decodeMatchesPayload(from: data, operation: "fixture_browse_matches")
-        }
-        let decoded = try await withTaskCancellationHandler {
-            try await decodingTask.value
-        } onCancel: {
-            decodingTask.cancel()
-        }
+        let decoded = try await decodeMatches(from: data, operation: "fixture_browse_matches")
         return MatchResponse(
             matches: hydrateStates ? try await hydrateMatchStates(decoded) : decoded,
             lastUpdated: Self.lastUpdated(from: http),
@@ -790,7 +783,7 @@ struct APIClient {
         )
         let (data, http) = try await performRequest(request, operation: "match_details")
         try validateSuccess(http, data: data, operation: "match_details")
-        return try JSONDecoder().decode(MatchDetailsPayload.self, from: data)
+        return try await Self.decodeResponse(MatchDetailsPayload.self, from: data, operation: "match_details")
     }
 
     func fetchMatchSocial(matchId: String) async throws -> [MatchSocialItem] {
@@ -800,7 +793,7 @@ struct APIClient {
         let request = try buildRequest(path: "matches/\(normalizedID)/social", queryItems: [])
         let (data, http) = try await performRequest(request, operation: "match_social")
         try validateSuccess(http, data: data, operation: "match_social")
-        return try JSONDecoder().decode([MatchSocialItem].self, from: data)
+        return try await Self.decodeResponse([MatchSocialItem].self, from: data, operation: "match_social")
     }
 
     func fetchPlayerDetails(playerId: String) async throws -> PlayerDetails {
@@ -880,7 +873,7 @@ struct APIClient {
 
             let (data, http) = try await performRequest(request, operation: "match_states")
             try validateSuccess(http, data: data, operation: "match_states")
-            let payloads = try JSONDecoder().decode([MatchDetailsPayload].self, from: data)
+            let payloads = try await Self.decodeResponse([MatchDetailsPayload].self, from: data, operation: "match_states")
             payloads.forEach { payload in
                 byID[payload.id] = payload
             }
@@ -1023,7 +1016,7 @@ struct APIClient {
         let request = try buildRequest(path: "matches", queryItems: queryItems)
         let (data, http) = try await performRequest(request, operation: "channels_fallback_matches")
         try validateSuccess(http, data: data, operation: "channels_fallback_matches")
-        let matches = try decodeMatches(from: data, operation: "channels_fallback_matches")
+        let matches = try await decodeMatches(from: data, operation: "channels_fallback_matches")
         return ChannelSelection.selectableChannels(from: matches)
     }
 
@@ -1136,13 +1129,19 @@ struct APIClient {
         let statesByID = try await fetchMatchStates(matchIDs: ids)
         guard !statesByID.isEmpty else { return matches }
 
-        return matches.map { match in
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        let hydrated = matches.map { match in
             guard let matchDetailsID = match.matchDetailsID,
                   let details = statesByID[matchDetailsID] else {
                 return match
             }
             return match.withDetails(details)
         }
+        let durationMs = Int((ProcessInfo.processInfo.systemUptime - startedAt) * 1000)
+        if durationMs >= 16 {
+            diagnosticLogAsync("[APIClient][WARN] state_merge_slow matches=\(matches.count) duration_ms=\(durationMs) main_thread=\(Self.isMainThread)")
+        }
+        return hydrated
     }
 
     private func hydrateInProgressMatchStatesBestEffort(_ matches: [Match]) async -> [Match] {
@@ -1301,9 +1300,45 @@ struct APIClient {
         }
     }
 
-    private func decodeMatches(from data: Data, operation: String) throws -> [Match] {
-        try Self.decodeMatchesPayload(from: data, operation: operation)
+    private func decodeMatches(from data: Data, operation: String) async throws -> [Match] {
+        try await Self.decodeResponse([Match].self, from: data, operation: operation) {
+            try Self.decodeMatchesPayload(from: $0, operation: operation)
+        }
     }
+
+    // Async URLSession requests suspend while waiting for the network, but their
+    // callers resume on the main actor. Decode large match/state responses on a
+    // detached task so foreground refreshes cannot stop a navigation animation.
+    nonisolated static func decodeResponse<Value: Decodable & Sendable>(
+        _ type: Value.Type,
+        from data: Data,
+        operation: String,
+        decode: @escaping @Sendable (Data) throws -> Value = { try JSONDecoder().decode(Value.self, from: $0) }
+    ) async throws -> Value {
+        try Task.checkCancellation()
+        let queuedAt = ProcessInfo.processInfo.systemUptime
+        let decodingTask = Task.detached(priority: Task.currentPriority) {
+            try Task.checkCancellation()
+            let startedAt = ProcessInfo.processInfo.systemUptime
+            defer {
+                let durationMs = Int((ProcessInfo.processInfo.systemUptime - startedAt) * 1000)
+                let queueMs = Int((startedAt - queuedAt) * 1000)
+                diagnosticLogAsync("[APIClient][INFO] decode_complete op=\(operation) bytes=\(data.count) duration_ms=\(durationMs) queue_ms=\(queueMs) main_thread=\(Self.isMainThread)")
+            }
+            let value = try decode(data)
+            try Task.checkCancellation()
+            return value
+        }
+        return try await withTaskCancellationHandler {
+            let value = try await decodingTask.value
+            try Task.checkCancellation()
+            return value
+        } onCancel: {
+            decodingTask.cancel()
+        }
+    }
+
+    private nonisolated static var isMainThread: Bool { Thread.isMainThread }
 
     private nonisolated static func decodeMatchesPayload(
         from data: Data,
@@ -1362,7 +1397,7 @@ struct APIClient {
         return decoded
     }
 
-    private static func log(_ level: String, _ message: @autoclosure () -> String) {
+    private nonisolated static func log(_ level: String, _ message: @autoclosure () -> String) {
         diagnosticLog("[APIClient][\(level)] \(message())")
     }
 
@@ -1599,7 +1634,7 @@ private struct MatchStatesRequestBody: Encodable {
     let ids: [String]
 }
 
-private struct MatchesEnvelope: Decodable {
+private nonisolated struct MatchesEnvelope: Decodable {
     let matches: [Match]
 }
 

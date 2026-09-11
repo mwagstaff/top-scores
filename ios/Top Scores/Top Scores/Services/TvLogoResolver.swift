@@ -6,6 +6,8 @@ final class TvLogoResolver {
 
     private let fallbackName = "_noLogo"
     private var normalizedLookup: [String: URL] = [:]
+    private var expandedLookup: [String: URL] = [:]
+    private var expandedDarkLookup: [String: URL] = [:]
     private var resolvedURLCache: [String: URL] = [:]
     private var unresolvedChannelKeys: Set<String> = []
     private let imageCache: NSCache<NSString, UIImage> = {
@@ -59,6 +61,29 @@ final class TvLogoResolver {
         return image
     }
 
+    func expandedImage(for channelName: String, isDarkAppearance: Bool = false) -> UIImage? {
+        let normalized = Self.normalizedKey(channelName)
+        guard !normalized.isEmpty, normalized != Self.normalizedKey(fallbackName) else { return nil }
+
+        // Unsupported broadcasters keep their text label instead of a guessed or placeholder logo.
+        let logoKey = normalizedLookup[normalized] != nil
+            ? normalized
+            : aliasKeywords.first(where: { normalized.hasPrefix($0.0) })?.1
+        guard let logoKey else { return nil }
+        let appearanceURL = isDarkAppearance ? expandedDarkLookup[logoKey] : nil
+        guard let url = appearanceURL ?? expandedLookup[logoKey] ?? normalizedLookup[logoKey] else { return nil }
+
+        let cacheKey = url.path as NSString
+        if let cached = imageCache.object(forKey: cacheKey) {
+            return cached
+        }
+        let image = UIImage(contentsOfFile: url.path)
+        if let image {
+            imageCache.setObject(image, forKey: cacheKey)
+        }
+        return image
+    }
+
     private func loadLogos() {
         var urls = Bundle.main.urls(forResourcesWithExtension: "png", subdirectory: "tv-logos") ?? []
         if urls.isEmpty {
@@ -66,6 +91,20 @@ final class TvLogoResolver {
         }
         for url in urls {
             let fileName = url.deletingPathExtension().lastPathComponent
+            if fileName.hasSuffix("-expanded-dark") {
+                // Sky: https://images.contentstack.io/v3/assets/blt4b099fa9cc3801a6/blt02516ad9c7874bcd/Sky-sports-secondary-rgb.png
+                // TNT: https://static.skyassets.com/contentstack/assets/blt143e20b03d72047e/bltead549f1f9759dfb/64ad3670ce1ee5c9828fcfb5/TNT_logo_400x120.png
+                let baseName = String(fileName.dropLast("-expanded-dark".count))
+                expandedDarkLookup[Self.normalizedKey(baseName)] = url
+                continue
+            }
+            if fileName.hasSuffix("-expanded") {
+                // Official horizontal marks: e0.365dm.com/tvlogos/channels/Sky-Sports-Logo.png
+                // TNT: https://www.bt.com/sport/assets/images/partners/TNT-Sports.webp (converted to PNG).
+                let baseName = String(fileName.dropLast("-expanded".count))
+                expandedLookup[Self.normalizedKey(baseName)] = url
+                continue
+            }
             let normalized = Self.normalizedKey(fileName)
             normalizedLookup[normalized] = url
         }

@@ -144,6 +144,7 @@ const {
 } = require("./team_catalog");
 const fantasyScore = require("./fantasy_score");
 const { registerGoalGuesserRoutes } = require("./goal_guesser");
+const { registerPredictionGameRoutes } = require("./prediction_game");
 const { registerGoalGuesserTestHarnessRoutes } = require("./goal_guesser_test_harness");
 const { registerStadiumArtworkRoutes } = require("./stadium_artwork");
 const { calculateWatchability } = require("./watchability");
@@ -739,6 +740,10 @@ registerGoalGuesserTestHarnessRoutes(app, {
   enabled: goalGuesserTestHarnessEnabled,
   key: process.env.GOAL_GUESSER_TEST_HARNESS_KEY,
   databaseName: process.env.GOAL_GUESSER_TEST_DATABASE,
+});
+registerPredictionGameRoutes(app, {
+  enabled: parseEnvBoolean(process.env.PREDICTION_GAME_ENABLED, true),
+  disableWorker: process.env.NODE_ENV === "test",
 });
 registerStadiumArtworkRoutes(app, { apiPrefix: API_PREFIX });
 require("./reference_api").registerReferenceRoutes(app);

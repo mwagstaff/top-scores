@@ -255,10 +255,21 @@ actor StadiumPhotoCache {
     }
 
     private nonisolated static func renderableImage(from data: Data) -> UIImage? {
+        let started = ProcessInfo.processInfo.systemUptime
+        defer {
+            let elapsed = (ProcessInfo.processInfo.systemUptime - started) * 1_000
+            if elapsed >= 100 {
+                diagnosticLog(
+                    "[StadiumPhoto] image_decode elapsed_ms=%.1f bytes=%d main_thread=%@",
+                    elapsed, data.count, String(Thread.isMainThread)
+                )
+            }
+        }
         guard let image = UIImage(data: data) else { return nil }
         let width = image.cgImage?.width ?? Int(image.size.width * image.scale)
         let height = image.cgImage?.height ?? Int(image.size.height * image.scale)
-        return width > 1 && height > 1 ? image : nil
+        // UIImage(data:) defers decompression until drawing unless prepared here.
+        return width > 1 && height > 1 ? image.preparingForDisplay() : nil
     }
 
     private nonisolated static func pruneDiskCache(at cacheDirectory: URL) {

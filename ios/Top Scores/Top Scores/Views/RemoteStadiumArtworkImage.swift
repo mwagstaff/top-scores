@@ -233,8 +233,7 @@ struct RemoteStadiumArtworkImage: View {
                 Image(uiImage: remoteImage)
                     .resizable()
             } else {
-                Image(fallbackAssetName)
-                    .resizable()
+                PreparedBundledImage(assetName: fallbackAssetName)
             }
         }
         .task(id: loadID) {
@@ -370,7 +369,7 @@ struct RotatingStadiumArtworkImage: View {
     private var rotatingImage: some View {
         GeometryReader { proxy in
             ZStack {
-                Image(fallbackAssetName).resizable().scaledToFill()
+                PreparedBundledImage(assetName: fallbackAssetName).scaledToFill()
                     .frame(width: proxy.size.width, height: proxy.size.height).clipped()
                 if let previous = player.previous {
                     StadiumArtworkCroppedImage(image: previous.image, focalPoint: focalPoint(for: previous.hash))

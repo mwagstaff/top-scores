@@ -5,6 +5,7 @@ import MapKit
 
 struct MatchDetailView: View {
     @EnvironmentObject private var preferences: PreferencesStore
+    @Environment(\.scenePhase) private var scenePhase
     @EnvironmentObject private var fantasyViewModel: FantasyViewModel
     @AppStorage(AppGroupConfig.fantasyManagerEntryIDKey) private var fantasyManagerEntryID = ""
 
@@ -24,6 +25,7 @@ struct MatchDetailView: View {
     @State private var socialItems: [MatchSocialItem] = []
     @State private var pendingEventsQuickRetry = false
     @State private var screenOpenedAt: Date?
+    @State private var loadDiagnostics = MatchDetailLoadDiagnostics()
     @State private var screenViewSent = false
     @State private var showOtherCountries = false
     @State private var teamCompetitionEntries: [MatchTeamCompetitionEntry] = []
@@ -31,7 +33,6 @@ struct MatchDetailView: View {
     private static let detailsRefreshIntervalNanos: UInt64 = 10_000_000_000
     private static let idleDetailsRefreshIntervalNanos: UInt64 = 30_000_000_000
     private static let pendingEventsBackfillRefreshIntervalNanos: UInt64 = 1_500_000_000
-    private static let detailsCacheKeyPrefix = "match.details.cache."
 
     private var baseMatch: Match {
         refreshedMatch ?? match
@@ -42,7 +43,7 @@ struct MatchDetailView: View {
     }
 
     private var teamCompetitionTaskKey: String {
-        "\(preferences.apiBaseURL)|\(activeMatch.league)|\(activeMatch.homeTeam)|\(activeMatch.awayTeam)"
+        "\(preferences.apiBaseURL)|\(activeMatch.league)|\(activeMatch.homeTeam)|\(activeMatch.awayTeam)|\(MatchTeamCompetitionResolver.prefersChampionsLeagueTable(for: activeMatch))"
     }
 
     private var kickoffText: String {
@@ -226,7 +227,8 @@ struct MatchDetailView: View {
     var body: some View {
         GeometryReader { proxy in
             ScrollView(.vertical) {
-                VStack(alignment: .leading, spacing: 12) {
+                // Build offscreen sections only as they approach the viewport.
+                LazyVStack(alignment: .leading, spacing: 12) {
                     MatchDetailScoreboardHero(
                         match: activeMatch,
                         kickoffText: kickoffText,
@@ -333,11 +335,15 @@ struct MatchDetailView: View {
         .toolbar(.visible, for: .navigationBar)
         .onAppear {
             screenOpenedAt = Date()
+            if scenePhase == .active {
+                loadDiagnostics.start(matchID: match.matchDetailsID ?? match.id)
+            }
             screenViewSent = false
             startDetailsRefresh()
             ensureFantasySquadLoadedIfNeeded()
             reportMissingTeamLogosIfNeeded(for: activeMatch)
             AppMetricsService.shared.fireScreenView(screen: "match_detail", apiBaseURL: preferences.apiBaseURL)
+            loadDiagnostics.mark(stage: "appearance_work_finished")
         }
         .onChange(of: detailedMatch) { _, newValue in
             guard !screenViewSent, newValue != nil, let openedAt = screenOpenedAt else { return }
@@ -346,10 +352,19 @@ struct MatchDetailView: View {
             AppMetricsService.shared.fireActivity("match_details_loaded", screen: "match_detail", durationMs: durationMs, apiBaseURL: preferences.apiBaseURL)
         }
         .onDisappear {
+            loadDiagnostics.stop()
+            screenOpenedAt = nil
             detailsRefreshTask?.cancel()
             detailsRefreshTask = nil
             fantasyHistoryTask?.cancel()
             fantasyHistoryTask = nil
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active, screenOpenedAt != nil {
+                loadDiagnostics.start(matchID: match.matchDetailsID ?? match.id)
+            } else {
+                loadDiagnostics.stop()
+            }
         }
         .onChange(of: preferences.apiBaseURL) { _, _ in
             startDetailsRefresh()
@@ -488,27 +503,12 @@ struct MatchDetailView: View {
         refreshedMatch = nil
         detailedMatch = nil
 
-        let detailsID = match.matchDetailsID
-        let cached = detailsID.flatMap { Self.loadCachedDetails(for: $0) }
-        if let detailsID, let cached {
-            detailedMatch = baseMatch.withDetails(cached)
-            diagnosticLog(
-                "[MatchDetail][INFO] details_load_start id=%@ cached=true goals=%ld assists=%ld red_cards=%ld",
-                detailsID,
-                cached.homeGoalScorers.count + cached.awayGoalScorers.count,
-                cached.homeAssists.count + cached.awayAssists.count,
-                cached.homeRedCards.count + cached.awayRedCards.count
-            )
-        } else if let detailsID {
-            diagnosticLog("[MatchDetail][INFO] details_load_start id=%@ cached=false", detailsID)
-        }
-
         guard let baseURL = URL(string: preferences.apiBaseURL) else {
             detailsErrorMessage = "Invalid API base URL."
             return
         }
 
-        launchDetailsRefreshLoop(baseURL: baseURL)
+        launchDetailsRefreshLoop(baseURL: baseURL, loadCache: true)
     }
 
     private func refreshDetailsManually() async {
@@ -522,12 +522,23 @@ struct MatchDetailView: View {
         }
 
         await refreshFromServer(baseURL: baseURL)
+        guard !Task.isCancelled else { return }
         launchDetailsRefreshLoop(baseURL: baseURL)
     }
 
-    private func launchDetailsRefreshLoop(baseURL: URL) {
+    private func launchDetailsRefreshLoop(baseURL: URL, loadCache: Bool = false) {
         detailsRefreshTask?.cancel()
         detailsRefreshTask = Task {
+            if loadCache, let detailsID = match.matchDetailsID {
+                loadDiagnostics.mark(stage: "cache_load_started")
+                let cached = await MatchDetailsCache.shared.load(for: detailsID)
+                guard !Task.isCancelled else { return }
+                if let cached {
+                    detailedMatch = baseMatch.withDetails(cached)
+                }
+                diagnosticLogAsync("[MatchDetail][INFO] details_load_start id=\(detailsID) cached=\(cached != nil)")
+                loadDiagnostics.mark(stage: cached == nil ? "cache_miss" : "cache_applied")
+            }
             while !Task.isCancelled {
                 await refreshFromServer(baseURL: baseURL)
                 let interval = await MainActor.run { refreshIntervalNanos(for: activeMatch) }
@@ -540,6 +551,7 @@ struct MatchDetailView: View {
         // Finished match scores/state never change — skip the slow snapshot fetch
         let isFinished = await MainActor.run { activeMatch.isFinished }
         let serverMatch = isFinished ? nil : await refreshMatchSnapshotOnce(baseURL: baseURL)
+        guard !Task.isCancelled else { return }
         let referenceMatch = await MainActor.run {
             serverMatch ?? refreshedMatch ?? match
         }
@@ -562,6 +574,7 @@ struct MatchDetailView: View {
             fallbackMatch: serverMatch ?? referenceMatch
         )
 
+        guard !Task.isCancelled else { return }
         if fetched {
             return
         }
@@ -578,8 +591,10 @@ struct MatchDetailView: View {
         let client = APIClient(baseURL: baseURL)
 
         do {
+            loadDiagnostics.mark(stage: "snapshot_request_started")
             let matches = try await client.fetchMatches(on: referenceMatch.date)
             if Task.isCancelled { return nil }
+            loadDiagnostics.mark(stage: "snapshot_received")
             let resolved = Self.bestMatchCandidate(for: referenceMatch, in: matches)
             if let resolved {
                 await MainActor.run {
@@ -606,8 +621,10 @@ struct MatchDetailView: View {
         let fetchStartedAt = Date()
         let client = APIClient(baseURL: baseURL)
         do {
+            loadDiagnostics.mark(stage: "details_request_started")
             let details = try await client.fetchMatchDetails(matchId: detailsID)
             if Task.isCancelled { return false }
+            loadDiagnostics.mark(stage: "details_received")
             let hasGoals = !details.homeGoalScorers.isEmpty || !details.awayGoalScorers.isEmpty
             let hasCards = !details.homeRedCards.isEmpty || !details.awayRedCards.isEmpty
             let hasLineups = details.teamLineups?.home != nil
@@ -634,6 +651,7 @@ struct MatchDetailView: View {
                     detailsRefreshTask = nil
                 }
             }
+            loadDiagnostics.mark(stage: "details_applied")
             let durationMs = Int(Date().timeIntervalSince(fetchStartedAt) * 1000)
             diagnosticLog(
                 "[MatchDetail][INFO] key_events_loaded id=%@ duration_ms=%ld goals=%ld assists=%ld red_cards=%ld status=%@",
@@ -644,14 +662,7 @@ struct MatchDetailView: View {
                 details.homeRedCards.count + details.awayRedCards.count,
                 details.scoreStatus ?? "-"
             )
-            // Don't overwrite a good cache entry with regressive server data (backfill race on finished matches)
-            let cachedHasEvents = Self.loadCachedDetails(for: detailsID).map {
-                !$0.homeGoalScorers.isEmpty || !$0.awayGoalScorers.isEmpty
-                || !$0.homeRedCards.isEmpty || !$0.awayRedCards.isEmpty
-            } ?? false
-            if hasEvents || !cachedHasEvents {
-                Self.saveCachedDetails(details, for: detailsID)
-            }
+            await MatchDetailsCache.shared.save(details, for: detailsID)
             return true
         } catch {
             if Self.isCancellationError(error) { return false }
@@ -766,45 +777,6 @@ struct MatchDetailView: View {
             } catch {
                 diagnosticLog("Missing logo audit post failed error=%@", String(describing: error))
             }
-        }
-    }
-
-    private static func detailsCacheKey(for detailsID: String) -> String {
-        "\(detailsCacheKeyPrefix)\(detailsID)"
-    }
-
-    private static func saveCachedDetails(_ details: MatchDetailsPayload, for detailsID: String) {
-        do {
-            let encoded = try JSONEncoder().encode(details)
-            UserDefaults.standard.set(encoded, forKey: detailsCacheKey(for: detailsID))
-        } catch {
-            diagnosticLog("Failed to cache match details id=%@ error=%@", detailsID, String(describing: error))
-        }
-    }
-
-    private static func loadCachedDetails(for detailsID: String) -> MatchDetailsPayload? {
-        guard let data = UserDefaults.standard.data(forKey: detailsCacheKey(for: detailsID)) else {
-            return nil
-        }
-        do {
-            let cached = try JSONDecoder().decode(MatchDetailsPayload.self, from: data)
-
-            // Always return cached data — the refresh loop overwrites it with fresh data in the background.
-            // Log age so we can observe how stale the cache is on open.
-            if let updatedAt = cached.updatedAt {
-                let isoFormatter = ISO8601DateFormatter()
-                isoFormatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-                if let timestamp = isoFormatter.date(from: updatedAt) {
-                    let age = Date().timeIntervalSince(timestamp)
-                    diagnosticLog("Cached match details id=%@ age=%.1fs goals=%ld", detailsID, age,
-                          cached.homeGoalScorers.count + cached.awayGoalScorers.count)
-                }
-            }
-
-            return cached
-        } catch {
-            diagnosticLog("Failed to decode cached match details id=%@ error=%@", detailsID, String(describing: error))
-            return nil
         }
     }
 
@@ -1024,6 +996,7 @@ private struct MatchHeroStadiumImage: View {
 
 struct MatchDetailScoreboardHero: View {
     @EnvironmentObject private var preferences: PreferencesStore
+    @Environment(\.predictionGameStore) private var predictionGame
     let match: Match
     let kickoffText: String
     let predictionDisplay: FixturePredictionDisplayState
@@ -1161,8 +1134,17 @@ struct MatchDetailScoreboardHero: View {
                 .background(Color.black.opacity(0.32), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
             }
 
-            if predictionDisplay != .hidden {
-                MatchDetailPredictionPanel(match: match, predictionDisplay: predictionDisplay)
+            PredictionGameMatchAvailability(match: match) { hasGamePrediction in
+                if preferences.showPredictedScores && (predictionDisplay != .hidden || hasGamePrediction) {
+                    MatchDetailPredictionPanel(match: match, predictionDisplay: predictionDisplay)
+                }
+            }
+            .background {
+                if let predictionGame, let fixtureID = match.predictionGameFixtureID {
+                    PredictionGameFixtureHydration(
+                        store: predictionGame, fixtureIDs: [fixtureID], apiBaseURL: preferences.apiBaseURL
+                    )
+                }
             }
 
             if let extendedMatchStatusText = match.extendedMatchStatusText {
@@ -1462,55 +1444,74 @@ private enum MatchPredictionHelpTopic: String, Identifiable {
 }
 
 private struct MatchDetailPredictionPanel: View {
+    @EnvironmentObject private var preferences: PreferencesStore
+    @AppStorage(PredictionGameStore.enabledPreferenceKey) private var isPredictionGameEnabled = false
     let match: Match
     let predictionDisplay: FixturePredictionDisplayState
 
     @State private var helpTopic: MatchPredictionHelpTopic?
 
+    private var previewScore: PredictionGameScore? {
+        guard case let .available(homeGoals, awayGoals, _, _, _) = predictionDisplay else { return nil }
+        return PredictionGameScore(homeScore: homeGoals, awayScore: awayGoals)
+    }
+
     var body: some View {
         Group {
-            switch predictionDisplay {
-            case .hidden:
-                EmptyView()
-            case .pending:
-                HStack(spacing: 8) {
-                    ProgressView().tint(.white)
-                    Text("Calculating prediction…")
-                        .font(.subheadline.weight(.medium))
-                        .foregroundStyle(.white.opacity(0.82))
-                }
-                .frame(maxWidth: .infinity, minHeight: 66)
-            case let .available(homeGoals, awayGoals, homeWin, draw, awayWin):
-                HStack(alignment: .top, spacing: 14) {
-                    VStack(alignment: .leading, spacing: 8) {
-                        helpLabel("Predicted", topic: .score)
-                        HStack(spacing: 6) {
-                            if match.isFinished, predictionWasCorrect(homeGoals: homeGoals, awayGoals: awayGoals) {
-                                Image(systemName: "checkmark.seal.fill")
-                                    .font(.caption.weight(.bold))
-                            }
-                            Text("\(homeGoals) – \(awayGoals)")
-                                .font(.title2.monospacedDigit().weight(.bold))
-                        }
-                        .foregroundStyle(predictionAccent(homeGoals: homeGoals, awayGoals: awayGoals))
-                        .accessibilityLabel(predictionAccessibilityLabel(homeGoals: homeGoals, awayGoals: awayGoals))
-                    }
-                    .frame(width: 112, alignment: .leading)
-
-                    Rectangle()
-                        .fill(Color.white.opacity(0.18))
-                        .frame(width: 1, height: 70)
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        helpLabel("Predicted chances", topic: .chances)
-
-                        HStack(spacing: 10) {
-                            chance(title: "Home", value: homeWin, color: .predictedScore)
-                            chance(title: "Draw", value: draw, color: Color.white.opacity(0.72))
-                            chance(title: "Away", value: awayWin, color: .predictedAwayWin)
-                        }
-                    }
+            if isPredictionGameEnabled && match.predictionGameFixtureID != nil {
+                PredictionGameMatchControl(match: match, isLargePresentation: true, previewScore: previewScore) { EmptyView() }
                     .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                switch predictionDisplay {
+                case .hidden:
+                    PredictionGameMatchControl(match: match, isLargePresentation: true) { EmptyView() }
+                case .pending:
+                    PredictionGameMatchControl(match: match, isLargePresentation: true) {
+                        HStack(spacing: 8) {
+                            ProgressView().tint(.white)
+                            Text("Calculating prediction…")
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(.white.opacity(0.82))
+                        }
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 66)
+                case let .available(homeGoals, awayGoals, homeWin, draw, awayWin):
+                    HStack(alignment: .top, spacing: 14) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            helpLabel("Predicted", topic: .score)
+                            PredictionGameMatchControl(
+                                match: match, isLargePresentation: true,
+                                previewScore: PredictionGameScore(homeScore: homeGoals, awayScore: awayGoals)
+                            ) {
+                                HStack(spacing: 6) {
+                                    if match.isFinished, predictionWasCorrect(homeGoals: homeGoals, awayGoals: awayGoals) {
+                                        Image(systemName: "checkmark.seal.fill")
+                                            .font(.caption.weight(.bold))
+                                    }
+                                    Text("\(homeGoals) – \(awayGoals)")
+                                        .font(.title2.monospacedDigit().weight(.bold))
+                                }
+                                .foregroundStyle(predictionAccent(homeGoals: homeGoals, awayGoals: awayGoals))
+                                .accessibilityLabel(predictionAccessibilityLabel(homeGoals: homeGoals, awayGoals: awayGoals))
+                            }
+                        }
+                        .frame(width: 112, alignment: .leading)
+
+                        Rectangle()
+                            .fill(Color.white.opacity(0.18))
+                            .frame(width: 1, height: 70)
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            helpLabel("Predicted chances", topic: .chances)
+
+                            HStack(spacing: 10) {
+                                chance(title: "Home", value: homeWin, color: .predictedScore)
+                                chance(title: "Draw", value: draw, color: Color.white.opacity(0.72))
+                                chance(title: "Away", value: awayWin, color: .predictedAwayWin)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 }
             }
         }
@@ -3235,8 +3236,7 @@ private struct MatchLineupTeamPanelsView: View {
 
                 GeometryReader { proxy in
                     ZStack {
-                        Image("MatchLineupPitchTexture")
-                            .resizable()
+                        PreparedBundledImage(assetName: "MatchLineupPitchTexture")
                             .frame(width: proxy.size.width, height: proxy.size.height)
 
                         LinearGradient(

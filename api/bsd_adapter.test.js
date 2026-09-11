@@ -4,6 +4,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("fs");
 const path = require("path");
+const vm = require("node:vm");
 
 const { bsdEventToCanonicalMatch, __private } = require("./bsd_adapter");
 const venueImageCatalog = require("./bsd_venue_image_overrides.json");
@@ -112,6 +113,73 @@ test("mapBsdStatus: postponed/abandoned/interrupted → POSTPONED", () => {
   assert.equal(mapBsdStatus({ status: "postponed" }), "POSTPONED");
   assert.equal(mapBsdStatus({ status: "abandoned" }), "POSTPONED");
   assert.equal(mapBsdStatus({ status: "interrupted" }), "POSTPONED");
+});
+
+test("mapBsdStatus: future postponed and suspended events retain their status", () => {
+  for (const status of ["postponed", "suspended", "abandoned", "interrupted"]) {
+    assert.equal(mapBsdStatus({
+      status,
+      event_date: "2999-09-16T18:45:00Z",
+      home_score: null,
+      away_score: null,
+      period: null,
+      current_minute: null,
+    }), "POSTPONED", status);
+  }
+});
+
+test("projectBsdMatches excludes cancelled and replaced fixtures while preserving replacements and history", async () => {
+  const wolvesPortsmouth = {
+    id: 214044,
+    league_id: 12,
+    home_team: "Wolverhampton",
+    away_team: "Portsmouth",
+    event_date: "2026-09-09T18:45:00Z",
+    home_score: null,
+    away_score: null,
+    status: "cancelled",
+    replaced_by: null,
+  };
+  const evertonWolves = {
+    ...wolvesPortsmouth,
+    id: 601544,
+    league_id: 40,
+    home_team: "Everton",
+    away_team: "Wolverhampton",
+  };
+  const events = [
+    wolvesPortsmouth,
+    evertonWolves,
+    { ...wolvesPortsmouth, id: 601933, status: "notstarted", event_date: "2026-10-20T18:45:00Z" },
+    { ...evertonWolves, id: 602298, status: "notstarted", event_date: "2026-09-16T18:45:00Z" },
+    { ...wolvesPortsmouth, id: 601853, status: "postponed", event_date: "2999-09-16T18:45:00Z" },
+    { ...wolvesPortsmouth, id: 700001, status: "canceled" },
+    { ...wolvesPortsmouth, id: 700002, status: "void" },
+    { ...wolvesPortsmouth, id: 700003, status: "notstarted", replaced_by: 601933 },
+    { ...evertonWolves, id: 700004, status: "notstarted", replaced_by: "602298" },
+    { ...wolvesPortsmouth, id: 700005, status: "finished", home_score: 2, away_score: 1 },
+  ];
+  const eventDocs = events.map((payload) => ({ _id: String(payload.id), payload }));
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(require.resolve("./bsd_adapter"), "utf8"), {
+    module,
+    require: (name) => name === "./mongo_client" ? {
+      getBsdRecords: async (collection, filter) => collection === "bsd_events"
+        ? (filter && filter._id ? eventDocs.filter((doc) => doc._id === filter._id) : eventDocs)
+        : [],
+      getActiveLiveFootballTvListings: async () => ({ records: [] }),
+    } : require(name),
+  });
+
+  const matches = await module.exports.projectBsdMatches();
+  assert.deepEqual(Array.from(matches, (match) => match.id), ["601933", "602298", "601853", "700005"]);
+  assert.equal(matches.find((match) => match.id === "601933").date, "2026-10-20");
+  assert.equal(matches.find((match) => match.id === "602298").date, "2026-09-16");
+  assert.equal(matches.find((match) => match.id === "601853").score_status, "POSTPONED");
+  assert.equal(matches.find((match) => match.id === "700005").score_status, "FT");
+  const cancelledDetails = await module.exports.projectBsdMatchDetails(214044);
+  assert.equal(cancelledDetails.id, "214044");
+  assert.equal(cancelledDetails.score_status, "POSTPONED");
 });
 
 // ---------------------------------------------------------------------------

@@ -23,6 +23,7 @@ nonisolated enum MatchTeamCompetitionResolver {
         leagues: [LeagueTable],
         competitions: [CompetitionCatalogEntry]
     ) -> [MatchTeamCompetitionEntry] {
+        let prefersChampionsLeague = prefersChampionsLeagueTable(for: match)
         let teams: [(MatchCompetitionTeamSide, String, String)] = [
             (.home, match.homeTeam, match.displayHomeTeam),
             (.away, match.awayTeam, match.displayAwayTeam),
@@ -47,7 +48,10 @@ nonisolated enum MatchTeamCompetitionResolver {
                 )
             }
 
-            guard let candidate = candidates.sorted(by: isPreferred).first else {
+            let championsLeagueCandidate = prefersChampionsLeague ? candidates.first {
+                isChampionsLeague(id: $0.league.leagueID, name: $0.league.leagueName)
+            } : nil
+            guard let candidate = championsLeagueCandidate ?? candidates.sorted(by: isPreferred).first else {
                 return nil
             }
 
@@ -61,6 +65,40 @@ nonisolated enum MatchTeamCompetitionResolver {
                 position: candidate.row.position
             )
         }
+    }
+
+    static func prefersChampionsLeagueTable(for match: Match) -> Bool {
+        guard isChampionsLeague(id: match.leagueId, name: match.league) else { return false }
+
+        let round = (match.leagueSubcategory ?? "")
+            .lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .joined(separator: " ")
+        // Named qualifying/knockout stages take precedence over numeric rounds.
+        let stageContext = "\(match.league.lowercased()) \(round)"
+        if ["qualif", "preliminary", "playoff", "play-off", "play off", "knockout",
+            "round of", "last ", "final", "1/"].contains(where: stageContext.contains) {
+            return false
+        }
+        if round.contains("league phase") || round.contains("league stage") {
+            return true
+        }
+        if round.isEmpty {
+            // Legacy and synthetic matches may omit stage metadata entirely.
+            return match.roundNumber.map { (1...8).contains($0) } ?? true
+        }
+        for matchday in 1...8 {
+            if ["\(matchday)", "round \(matchday)", "matchday \(matchday)", "matchday\(matchday)"]
+                .contains(round) {
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func isChampionsLeague(id: String?, name: String) -> Bool {
+        ["7", "uefa-champions-league", "champions-league"].contains(id?.lowercased() ?? "") ||
+            ["uefachampionsleague", "championsleague"].contains(normalized(name))
     }
 
     private struct Candidate {

@@ -138,6 +138,7 @@ final class FixturesViewCoordinator: ObservableObject {
     @Published private(set) var isCompetitionDockExpanded = false
     @Published private(set) var toastMessage: String?
     @Published private(set) var predictionWarmRequestToken = 0
+    @Published private(set) var returnToFixturesRequestToken = 0
 
     private var toastTask: Task<Void, Never>?
     private var dateSwipeNavigationReleaseTask: Task<Void, Never>?
@@ -260,6 +261,10 @@ final class FixturesViewCoordinator: ObservableObject {
         predictionWarmRequestToken &+= 1
     }
 
+    func requestReturnToFixtures() {
+        returnToFixturesRequestToken &+= 1
+    }
+
     func showToast(_ message: String) {
         toastTask?.cancel()
         withAnimation {
@@ -288,6 +293,7 @@ struct MatchesView: View {
 
     @EnvironmentObject private var preferences: PreferencesStore
     @EnvironmentObject private var fantasyViewModel: FantasyViewModel
+    @Environment(\.predictionGameStore) private var predictionGame
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.scenePhase) private var scenePhase
@@ -321,6 +327,8 @@ struct MatchesView: View {
     @State private var showsCalendarSubscriptionError = false
     @State private var isTVListingsPresented = false
     @State private var isTeamSearchPresented = false
+    @State private var isPredictionMenuPresented = false
+    @ObservedObject private var leagueInvitations = PredictionLeagueInvitationRouter.shared
     @State private var pendingTeamSearchDestination: TeamDetailsContext?
     @State private var navigationTeam: TeamDetailsContext?
     init(
@@ -534,6 +542,14 @@ struct MatchesView: View {
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
+        .sheet(isPresented: $isPredictionMenuPresented) {
+            if let predictionGame {
+                PredictionGameMenuFlow(onPredictionsVisibilityChanged: predictionsVisibilityDidChange)
+                    .environmentObject(predictionGame)
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+            }
+        }
     }
 
     private var activationObservedContent: some View {
@@ -600,9 +616,19 @@ struct MatchesView: View {
 
     private var preferencesObservedContent: some View {
         activationObservedContent
+        .onChange(of: leagueInvitations.pendingInvitation, initial: true) { _, invitation in
+            guard mode == .fixtures, invitation != nil else { return }
+            isPredictionMenuPresented = true
+        }
         .onChange(of: fixturesCoordinator.predictionWarmRequestToken) { _, _ in
             guard mode == .fixtures else { return }
             warmPredictionsForVisibleDays(days: sourceGroupedDays)
+        }
+        .onChange(of: fixturesCoordinator.returnToFixturesRequestToken) { _, _ in
+            navigationMatch = nil
+            navigationTeam = nil
+            isPredictionMenuPresented = false
+            isTVListingsPresented = false
         }
         .onChange(of: viewState.isLoading) { _, isLoading in
             guard !isLoading else { return }
@@ -649,6 +675,16 @@ struct MatchesView: View {
 
     var body: some View {
         preferencesObservedContent
+        .background {
+            if let predictionGame {
+                PredictionGameFixtureHydration(
+                    store: predictionGame,
+                    fixtureIDs: displayedMatchDays.flatMap(\.leagues).flatMap(\.matches).compactMap(\.predictionGameFixtureID),
+                    apiBaseURL: preferences.apiBaseURL,
+                    isActive: isSelected
+                )
+            }
+        }
         .onChange(of: viewState.groupedMatches) { _, days in
             if !usesFixtureBrowser {
                 refreshVisibleGroupedDays(from: days)
@@ -838,7 +874,7 @@ struct MatchesView: View {
                     .presentationDragIndicator(.visible)
             }
 
-            Button(action: togglePredictedScores) {
+            Button { isPredictionMenuPresented = true } label: {
                 Image(systemName: "sparkles")
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(
@@ -870,9 +906,10 @@ struct MatchesView: View {
                     )
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Predicted scores")
+            .accessibilityLabel("Predictions and Beat the AI")
             .accessibilityValue(preferences.showPredictedScores ? "On" : "Off")
-            .accessibilityHint("Toggles AI score predictions")
+            .accessibilityHint("Opens prediction settings, your next picks, achievements and Game Center")
+            .accessibilityIdentifier("prediction-game-menu")
         }
     }
 
@@ -1087,8 +1124,7 @@ struct MatchesView: View {
             : .scale(scale: 0.74).combined(with: .opacity)
     }
 
-    private func togglePredictedScores() {
-        preferences.showPredictedScores.toggle()
+    private func predictionsVisibilityDidChange() {
         if preferences.showPredictedScores {
             fixturesCoordinator.requestPredictionWarm()
         }
@@ -1634,7 +1670,8 @@ struct MatchesView: View {
             rowPreferences: matchRowPreferences,
             fantasyContext: fantasyViewModel.matchRowContext
         )
-        Button {
+        let openMatch = {
+            guard !match.isPostponed else { return }
             guard fixturesCoordinator.allowsMatchNavigation else {
                 diagnosticLog("[MatchesView] suppressed match navigation during date swipe")
                 return
@@ -1644,26 +1681,37 @@ struct MatchesView: View {
                 showFantasyBadge: mode == .fixtures,
                 predictionDisplay: predictionDisplayState(for: match, dateKey: day.dateKey)
             )
-        } label: {
-            HStack(spacing: 0) {
-                MatchesListRowLabel(
-                    match: match,
-                    isFixtureMode: mode == .fixtures,
-                    rowPreferences: matchRowPreferences,
-                    fantasyContext: fantasyViewModel.matchRowContext,
-                    predictionDisplay: predictionDisplayState(for: match, dateKey: day.dateKey)
-                )
-                .equatable()
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(showFPLChevron ? .semibold : .regular))
-                    .foregroundStyle(showFPLChevron
-                        ? FootballSectionAccent.fantasy
-                        : Color(.tertiaryLabel))
-                    .frame(width: 16)
+        }
+        let rowContent = HStack(spacing: 0) {
+            MatchesListRowLabel(
+                match: match,
+                isFixtureMode: mode == .fixtures,
+                rowPreferences: matchRowPreferences,
+                fantasyContext: fantasyViewModel.matchRowContext,
+                predictionDisplay: predictionDisplayState(for: match, dateKey: day.dateKey)
+            )
+            .equatable()
+            Image(systemName: "chevron.right")
+                .font(.caption.weight(showFPLChevron ? .semibold : .regular))
+                .foregroundStyle(showFPLChevron
+                    ? FootballSectionAccent.fantasy
+                    : Color(.tertiaryLabel))
+                .frame(width: 16)
+        }
+        Group {
+            if match.predictionGameFixtureID != nil {
+                // A separate chip button must not be nested inside the match button.
+                rowContent
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: openMatch)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityAction(named: "View match details", openMatch)
+            } else {
+                Button(action: openMatch) { rowContent }
+                    .disabled(match.isPostponed)
+                    .buttonStyle(.plain)
             }
         }
-        .disabled(match.isPostponed)
-        .buttonStyle(.plain)
         .onAppear {
             guard mode == .results else { return }
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot

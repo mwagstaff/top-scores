@@ -35,6 +35,7 @@ struct MatchRowPreferences: Equatable {
     let showFantasyFixtureLogos: Bool
     let showCompactFixtureFantasyLogo: Bool
     let showCompactFixtureTvLogo: Bool
+    let showPredictedScores: Bool
 
     init(preferences: PreferencesStore, hasFantasyManagerEntry: Bool) {
         self.hasFantasyManagerEntry = hasFantasyManagerEntry
@@ -43,6 +44,7 @@ struct MatchRowPreferences: Equatable {
         showFantasyFixtureLogos = preferences.showFantasyFixtureLogos
         showCompactFixtureFantasyLogo = preferences.showCompactFixtureFantasyLogo
         showCompactFixtureTvLogo = preferences.showCompactFixtureTvLogo
+        showPredictedScores = preferences.showPredictedScores
     }
 
     static let disabledFantasy = MatchRowPreferences(
@@ -51,7 +53,8 @@ struct MatchRowPreferences: Equatable {
         showFantasyRealTimePoints: false,
         showFantasyFixtureLogos: false,
         showCompactFixtureFantasyLogo: false,
-        showCompactFixtureTvLogo: false
+        showCompactFixtureTvLogo: false,
+        showPredictedScores: false
     )
 
     private init(
@@ -60,7 +63,8 @@ struct MatchRowPreferences: Equatable {
         showFantasyRealTimePoints: Bool,
         showFantasyFixtureLogos: Bool,
         showCompactFixtureFantasyLogo: Bool,
-        showCompactFixtureTvLogo: Bool
+        showCompactFixtureTvLogo: Bool,
+        showPredictedScores: Bool
     ) {
         self.hasFantasyManagerEntry = hasFantasyManagerEntry
         self.showFantasyExpectedPoints = showFantasyExpectedPoints
@@ -68,6 +72,7 @@ struct MatchRowPreferences: Equatable {
         self.showFantasyFixtureLogos = showFantasyFixtureLogos
         self.showCompactFixtureFantasyLogo = showCompactFixtureFantasyLogo
         self.showCompactFixtureTvLogo = showCompactFixtureTvLogo
+        self.showPredictedScores = showPredictedScores
     }
 }
 
@@ -78,6 +83,7 @@ struct MatchRowTeamSummary: Equatable, Sendable {
 
 struct MatchRow: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.colorScheme) private var colorScheme
 
     let match: Match
     var showTeamEvents: Bool = false
@@ -227,9 +233,7 @@ struct MatchRow: View {
                     accessibilityCompactTeamLine(isHome: true)
                     accessibilityCompactTeamLine(isHome: false)
 
-                    if shouldShowCompactFixtureSecondRow {
-                        compactFixtureSecondRow
-                    }
+                    compactFixtureSecondRow
                 }
             } else {
                 if showLeague {
@@ -256,9 +260,7 @@ struct MatchRow: View {
                             teamNameLabel(isHome: false)
                         }
 
-                        if shouldShowCompactFixtureSecondRow {
-                            compactFixtureSecondRow
-                        }
+                        compactFixtureSecondRow
                     }
                     .frame(maxWidth: .infinity)
 
@@ -709,88 +711,69 @@ struct MatchRow: View {
         isLargePresentation ? 18 : 14
     }
 
-    private var compactBroadcastLogoHeight: CGFloat {
-        isLargePresentation ? 16 : 13
-    }
-
-    private var compactBroadcastLogoWidth: CGFloat {
-        isLargePresentation ? 26 : 22
-    }
-
-    private var compactAccessorySlotHeight: CGFloat {
-        20
-    }
-
     private var compactFixtureCenterContent: some View {
-        VStack(spacing: 4) {
-            scoreAndStatusRow
+        scoreAndStatusRow
+            .fixedSize(horizontal: true, vertical: false)
+    }
 
-            if let compactPrimaryBroadcastLogo {
-                Image(uiImage: compactPrimaryBroadcastLogo)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(width: compactBroadcastLogoWidth, height: compactBroadcastLogoHeight)
-                    .fixedSize()
-                    .accessibilityHidden(true)
+    private var compactFixtureSecondRow: some View {
+        PredictionGameMatchAvailability(match: match) { hasGamePrediction in
+            let showsPrediction = rowPreferences.showPredictedScores && (predictionDisplay != .hidden || hasGamePrediction)
+            if showsPrediction || compactPrimaryBroadcastChannel != nil {
+                compactFixtureAccessories(showsPrediction: showsPrediction)
             }
         }
-        .fixedSize(horizontal: true, vertical: false)
     }
 
-    @ViewBuilder
-    private var compactFixtureSecondRow: some View {
-        if dynamicTypeSize.isAccessibilitySize {
-            VStack(spacing: 8) {
-                if predictionDisplay != .hidden {
-                    PredictionStripView(match: match, predictionDisplay: predictionDisplay)
-                }
-
-                if let compactPrimaryBroadcastChannel {
-                    compactBroadcastLabel(compactPrimaryBroadcastChannel)
-                }
+    private func compactFixtureAccessories(showsPrediction: Bool) -> some View {
+        MatchFixtureAccessoryLayout(
+            maximumWidth: dynamicTypeSize.isAccessibilitySize ? 420 : 300,
+            predictionWidthFraction: dynamicTypeSize.isAccessibilitySize ? 0.65 : 0.7,
+            centersPrediction: compactPrimaryBroadcastChannel == nil,
+            centersBroadcast: !showsPrediction
+        ) {
+            if showsPrediction {
+                PredictionStripView(match: match, predictionDisplay: predictionDisplay, fillsAvailableWidth: true)
+            } else {
+                Color.clear.frame(height: 28).accessibilityHidden(true)
             }
-            .frame(maxWidth: .infinity, alignment: .center)
-        } else {
-            HStack(spacing: 8) {
-                if predictionDisplay != .hidden {
-                    PredictionStripView(match: match, predictionDisplay: predictionDisplay)
-                        .fixedSize(horizontal: true, vertical: false)
-                }
 
-                if predictionDisplay != .hidden, compactPrimaryBroadcastChannel != nil {
-                    Text("•")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                        .accessibilityHidden(true)
+            if let channel = compactPrimaryBroadcastChannel {
+                if let logo = compactPrimaryBroadcastLogo {
+                    Image(uiImage: logo)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(height: dynamicTypeSize.isAccessibilitySize ? 32 : 24)
+                        .frame(maxWidth: .infinity)
+                        .scaleEffect(0.8)
+                        .accessibilityLabel("Watch on \(channel.name)")
+                } else {
+                    compactBroadcastLabel(channel)
+                        .frame(maxWidth: .infinity)
                 }
-
-                if let compactPrimaryBroadcastChannel {
-                    compactBroadcastLabel(compactPrimaryBroadcastChannel)
-                }
+            } else {
+                // Keep the broadcast column even when there is no broadcast.
+                Color.clear.frame(height: 28).accessibilityHidden(true)
             }
-            .frame(maxWidth: .infinity, alignment: .center)
-            .frame(minHeight: compactAccessorySlotHeight)
         }
     }
 
     private func compactBroadcastLabel(_ channel: TvChannel) -> some View {
-        HStack(spacing: 5) {
+        VStack(spacing: 3) {
             Image(systemName: "tv")
                 .accessibilityHidden(true)
 
             Text(channel.name)
-                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 3)
                 .truncationMode(.tail)
-                .minimumScaleFactor(0.75)
+                .multilineTextAlignment(.center)
+                .minimumScaleFactor(dynamicTypeSize.isAccessibilitySize ? 1 : 0.8)
+                .fixedSize(horizontal: false, vertical: true)
         }
-        .font(.caption)
+        .font(.caption2)
         .foregroundStyle(.secondary)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Watch on \(channel.name)")
-    }
-
-    private var shouldShowCompactFixtureSecondRow: Bool {
-        predictionDisplay != .hidden || compactPrimaryBroadcastChannel != nil
     }
 
     private var compactPrimaryBroadcastChannel: TvChannel? {
@@ -808,7 +791,9 @@ struct MatchRow: View {
 
     private var compactPrimaryBroadcastLogo: UIImage? {
         guard let compactPrimaryBroadcastChannel else { return nil }
-        return TvLogoResolver.shared.image(for: compactPrimaryBroadcastChannel.name)
+        return TvLogoResolver.shared.expandedImage(
+            for: compactPrimaryBroadcastChannel.name, isDarkAppearance: colorScheme == .dark
+        )
     }
 
     static func shouldShowCompactBroadcastLogo(for match: Match) -> Bool {
@@ -859,15 +844,57 @@ struct MatchRow: View {
     }
 }
 
+/// Two stable columns within the space between the team crests. When only one
+/// accessory is visible, it can be centered without changing its column width.
+struct MatchFixtureAccessoryLayout: Layout {
+    var maximumWidth: CGFloat = 300
+    var predictionWidthFraction: CGFloat = 0.7
+    var centersPrediction = false
+    var centersBroadcast = false
+    private let spacing: CGFloat = 8
+
+    private func columnWidths(in width: CGFloat) -> [CGFloat] {
+        let usable = max(0, min(width, maximumWidth) - spacing)
+        return [usable * predictionWidthFraction, usable * (1 - predictionWidthFraction)]
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? maximumWidth
+        let columns = columnWidths(in: width)
+        let height = zip(subviews, columns).map { view, columnWidth in
+            view.sizeThatFits(ProposedViewSize(width: columnWidth, height: nil)).height
+        }.max() ?? 28
+        return CGSize(width: width, height: max(28, height))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let columns = columnWidths(in: bounds.width)
+        let groupWidth = columns.reduce(0, +) + spacing
+        var x = bounds.midX - groupWidth / 2
+        for (index, pair) in zip(subviews, columns).enumerated() {
+            let (view, width) = pair
+            let centersSubview = (centersPrediction && index == 0) || (centersBroadcast && index == 1)
+            view.place(
+                at: CGPoint(x: centersSubview ? bounds.midX : x + width / 2, y: bounds.midY),
+                anchor: .center,
+                proposal: ProposedViewSize(width: width, height: nil)
+            )
+            x += width + spacing
+        }
+    }
+}
+
 /// A predicted-score chip shown beneath a fixture row (or with a home/draw/away
 /// probability breakdown on a match's scoreboard). Indigo while the match is still
 /// to be decided; green once finished and the prediction matched the final score;
 /// muted once finished and it missed.
 struct PredictionStripView: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let match: Match
     let predictionDisplay: FixturePredictionDisplayState
     var isLargePresentation: Bool = false
     var showsProbabilities: Bool = false
+    var fillsAvailableWidth = false
 
     @State private var isShowingProbabilityInfo = false
 
@@ -875,19 +902,23 @@ struct PredictionStripView: View {
         Group {
             switch predictionDisplay {
             case .hidden:
-                EmptyView()
+                PredictionGameMatchControl(match: match, isLargePresentation: isLargePresentation, fillsAvailableWidth: fillsAvailableWidth) {
+                    EmptyView()
+                }
             case .pending:
-                HStack(spacing: 6) {
-                    ProgressView()
-                        .controlSize(.mini)
-                    Text("Calculating prediction…")
-                        .font(labelFont)
-                        .foregroundStyle(.secondary)
+                PredictionGameMatchControl(match: match, isLargePresentation: isLargePresentation, fillsAvailableWidth: fillsAvailableWidth) {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .controlSize(.mini)
+                        Text("Calculating prediction…")
+                            .font(labelFont)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             case .available(let homeGoals, let awayGoals, let homeWinProbability, let drawProbability, let awayWinProbability):
                 if showsProbabilities {
                     HStack(spacing: isLargePresentation ? 10 : 8) {
-                        scoreChip(homeGoals: homeGoals, awayGoals: awayGoals)
+                        interactiveScoreChip(homeGoals: homeGoals, awayGoals: awayGoals)
                         PredictionProbabilityBar(
                             homeWinProbability: homeWinProbability,
                             drawProbability: drawProbability,
@@ -903,7 +934,7 @@ struct PredictionStripView: View {
                         probabilityInfoButton
                     }
                 } else {
-                    scoreChip(homeGoals: homeGoals, awayGoals: awayGoals)
+                    interactiveScoreChip(homeGoals: homeGoals, awayGoals: awayGoals)
                 }
             }
         }
@@ -932,17 +963,39 @@ struct PredictionStripView: View {
         .accessibilityHint("Explains the prediction probabilities")
     }
 
-    private func scoreChip(homeGoals: Int, awayGoals: Int) -> some View {
-        HStack(spacing: 3) {
-            Image(systemName: isResolved ? (wasCorrect ? "checkmark.seal.fill" : "sparkles") : "sparkles")
-                .font(.system(size: isLargePresentation ? 9 : 8, weight: .bold))
-            Text("Predicted: \(homeGoals)–\(awayGoals)")
-                .font(scoreFont)
-                .monospacedDigit()
+    private func interactiveScoreChip(homeGoals: Int, awayGoals: Int) -> some View {
+        PredictionGameMatchControl(
+            match: match, isLargePresentation: isLargePresentation,
+            previewScore: PredictionGameScore(homeScore: homeGoals, awayScore: awayGoals),
+            fillsAvailableWidth: fillsAvailableWidth
+        ) {
+            scoreChip(homeGoals: homeGoals, awayGoals: awayGoals)
         }
+    }
+
+    private func scoreChip(homeGoals: Int, awayGoals: Int) -> some View {
+        Group {
+            if fillsAvailableWidth && dynamicTypeSize.isAccessibilitySize {
+                VStack(spacing: 3) {
+                    Text("Predicted")
+                    HStack(spacing: 3) {
+                        scoreChipSymbol
+                        Text("\(homeGoals)–\(awayGoals)")
+                    }
+                }
+            } else {
+                HStack(spacing: 3) {
+                    scoreChipSymbol
+                    Text("Predicted: \(homeGoals)–\(awayGoals)")
+                }
+            }
+        }
+        .font(scoreFont)
+        .monospacedDigit()
         .foregroundStyle(accentColor)
         .padding(.horizontal, isLargePresentation ? 7 : 6)
         .padding(.vertical, isLargePresentation ? 3 : 2)
+        .frame(maxWidth: fillsAvailableWidth ? .infinity : nil, minHeight: fillsAvailableWidth ? 28 : nil)
         .background(
             Capsule(style: .continuous)
                 .fill(
@@ -958,9 +1011,14 @@ struct PredictionStripView: View {
                 .stroke(accentColor.opacity(0.42), lineWidth: 1)
         )
         .shadow(color: isResolved ? .clear : accentColor.opacity(0.18), radius: 5)
-        .fixedSize()
+        .fixedSize(horizontal: !fillsAvailableWidth, vertical: true)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityLabel(homeGoals: homeGoals, awayGoals: awayGoals))
+    }
+
+    private var scoreChipSymbol: some View {
+        Image(systemName: isResolved ? (wasCorrect ? "checkmark.seal.fill" : "sparkles") : "sparkles")
+            .font(.system(size: isLargePresentation ? 9 : 8, weight: .bold))
     }
 
     private var isResolved: Bool {

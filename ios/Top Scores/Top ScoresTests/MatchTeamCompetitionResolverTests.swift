@@ -34,9 +34,14 @@ struct MatchTeamCompetitionResolverTests {
         #expect(entries[1].position == 13)
     }
 
-    @Test func continentalTiePrefersEachClubsDomesticTable() {
+    @Test func continentalKnockoutTiePrefersEachClubsDomesticTable() {
         let entries = MatchTeamCompetitionResolver.resolve(
-            match: makeMatch(homeTeam: "Liverpool", awayTeam: "Real Madrid", league: "UEFA Champions League"),
+            match: makeMatch(
+                homeTeam: "Liverpool",
+                awayTeam: "Real Madrid",
+                league: "UEFA Champions League",
+                leagueSubcategory: "Last 16"
+            ),
             leagues: [
                 makeTable(
                     id: "7",
@@ -57,13 +62,141 @@ struct MatchTeamCompetitionResolverTests {
         #expect(entries.map(\.leagueID) == ["1", "2"])
     }
 
-    private func makeMatch(homeTeam: String, awayTeam: String, league: String) -> Match {
+    @Test(arguments: ["League Phase", "League Stage", "1", "Round 1", "Matchday 8"])
+    func championsLeagueOpeningStageUsesUCLPositionsAndTable(stage: String) {
+        let entries = resolveChampionsLeague(leagueSubcategory: stage)
+
+        #expect(entries.map(\.side) == [.home, .away])
+        #expect(entries.map(\.competitionID) == ["uefa-champions-league", "uefa-champions-league"])
+        #expect(entries.map(\.leagueID) == ["7", "7"])
+        #expect(entries.map(\.position) == [4, 5])
+    }
+
+    @Test(arguments: [1, 8])
+    func championsLeagueNumberedLeagueRoundUsesUCLPositionsAndTable(roundNumber: Int) {
+        let entries = resolveChampionsLeague(roundNumber: roundNumber)
+
+        #expect(entries.map(\.leagueID) == ["7", "7"])
+        #expect(entries.map(\.position) == [4, 5])
+    }
+
+    @Test func championsLeagueWithoutRoundMetadataUsesAvailableUCLTable() {
+        let entries = resolveChampionsLeague()
+
+        #expect(entries.map(\.leagueID) == ["7", "7"])
+        #expect(entries.map(\.position) == [4, 5])
+    }
+
+    @Test(arguments: [0, 9, 32])
+    func championsLeagueRoundsOutsideLeagueStageKeepDomesticTables(roundNumber: Int) {
+        let entries = resolveChampionsLeague(roundNumber: roundNumber)
+
+        #expect(entries.map(\.leagueID) == ["1", "2"])
+        #expect(entries.map(\.position) == [2, 1])
+    }
+
+    @Test(arguments: [
+        "First Qualifying Round", "Play-offs", "Knockout Phase Play-offs", "Round of 32",
+        "Last 16", "Quarter-finals", "Semi-finals", "Final", "Unrecognised stage",
+    ])
+    func championsLeagueNamedQualifyingAndKnockoutRoundsKeepDomesticTables(stage: String) {
+        let entries = resolveChampionsLeague(leagueSubcategory: stage, roundNumber: 1)
+
+        #expect(entries.map(\.leagueID) == ["1", "2"])
+        #expect(entries.map(\.position) == [2, 1])
+    }
+
+    @Test func championsLeagueAliasAndBSDLeagueIDResolveUCLTable() {
+        let entries = resolveChampionsLeague(
+            league: "Champions League",
+            leagueID: "7",
+            leagueSubcategory: "League Phase"
+        )
+
+        #expect(entries.map(\.competitionID) == ["uefa-champions-league", "uefa-champions-league"])
+        #expect(entries.map(\.leagueID) == ["7", "7"])
+        #expect(entries.map(\.position) == [4, 5])
+    }
+
+    @Test(arguments: ["UEFA Europa League", "EFL Cup"])
+    func otherCompetitionsKeepDomesticPositionsAndTables(league: String) {
+        let entries = resolveChampionsLeague(
+            league: league,
+            leagueSubcategory: "League Phase",
+            roundNumber: 1
+        )
+
+        #expect(entries.map(\.leagueID) == ["1", "2"])
+        #expect(entries.map(\.position) == [2, 1])
+    }
+
+    @Test func missingUCLStandingsFallBackToDomesticTables() {
+        let entries = resolveChampionsLeague(leagueSubcategory: "League Phase", uclRows: [])
+
+        #expect(entries.map(\.leagueID) == ["1", "2"])
+        #expect(entries.map(\.position) == [2, 1])
+    }
+
+    @Test func missingUCLTeamFallsBackIndependently() {
+        let entries = resolveChampionsLeague(
+            leagueSubcategory: "League Phase",
+            uclRows: [makeRow(team: "Liverpool", position: 4)]
+        )
+
+        #expect(entries.map(\.leagueID) == ["7", "2"])
+        #expect(entries.map(\.position) == [4, 1])
+    }
+
+    private func resolveChampionsLeague(
+        league: String = "UEFA Champions League",
+        leagueID: String? = nil,
+        leagueSubcategory: String? = nil,
+        roundNumber: Int? = nil,
+        uclRows: [LeagueTableRow]? = nil
+    ) -> [MatchTeamCompetitionEntry] {
+        MatchTeamCompetitionResolver.resolve(
+            match: makeMatch(
+                homeTeam: "Liverpool",
+                awayTeam: "Real Madrid",
+                league: league,
+                leagueID: leagueID,
+                leagueSubcategory: leagueSubcategory,
+                roundNumber: roundNumber
+            ),
+            leagues: [
+                makeTable(
+                    id: "7",
+                    name: "UEFA Champions League",
+                    rows: uclRows ?? [makeRow(team: "Liverpool", position: 4), makeRow(team: "Real Madrid", position: 5)]
+                ),
+                makeTable(id: "1", name: "Premier League", rows: [makeRow(team: "Liverpool", position: 2)]),
+                makeTable(id: "2", name: "La Liga", rows: [makeRow(team: "Real Madrid", position: 1)]),
+            ],
+            competitions: [
+                makeCompetition(id: "uefa-champions-league", name: "UEFA Champions League", aliases: ["Champions League"], weight: 90, region: "europe"),
+                makeCompetition(id: "premier-league", name: "Premier League", weight: 100, region: "england"),
+                makeCompetition(id: "la-liga", name: "La Liga", weight: 50, region: "spain"),
+            ]
+        )
+    }
+
+    private func makeMatch(
+        homeTeam: String,
+        awayTeam: String,
+        league: String,
+        leagueID: String? = nil,
+        leagueSubcategory: String? = nil,
+        roundNumber: Int? = nil
+    ) -> Match {
         Match(
             date: "2026-08-25",
             time: "19:45",
             homeTeam: homeTeam,
             awayTeam: awayTeam,
             league: league,
+            leagueId: leagueID,
+            leagueSubcategory: leagueSubcategory,
+            roundNumber: roundNumber,
             tvChannels: []
         )
     }

@@ -1,6 +1,7 @@
 import Foundation
 
-struct MatchGoalScorer: Codable, Hashable, Sendable {
+// Match payloads are immutable values decoded and cached away from the main actor.
+nonisolated struct MatchGoalScorer: Codable, Hashable, Sendable {
     let player: String
     let idPlayer: String?
     let goalTimes: [String]
@@ -56,7 +57,7 @@ struct MatchGoalScorer: Codable, Hashable, Sendable {
     }
 }
 
-struct MatchAssistProvider: Codable, Hashable, Sendable {
+nonisolated struct MatchAssistProvider: Codable, Hashable, Sendable {
     let player: String
     let assistTimes: [String]
 
@@ -117,7 +118,7 @@ enum MatchEventSortOrder: Equatable, Sendable {
     }
 }
 
-struct MatchRedCardEvent: Codable, Hashable, Sendable {
+nonisolated struct MatchRedCardEvent: Codable, Hashable, Sendable {
     let player: String
     let idPlayer: String?
     let redCardTimes: [String]
@@ -157,7 +158,7 @@ struct MatchRedCardEvent: Codable, Hashable, Sendable {
     }
 }
 
-struct MatchYellowCardEvent: Codable, Hashable, Sendable {
+nonisolated struct MatchYellowCardEvent: Codable, Hashable, Sendable {
     let player: String
     let idPlayer: String?
     let yellowCardTimes: [String]
@@ -197,7 +198,7 @@ struct MatchYellowCardEvent: Codable, Hashable, Sendable {
     }
 }
 
-struct MatchVarEvent: Codable, Hashable, Sendable {
+nonisolated struct MatchVarEvent: Codable, Hashable, Sendable {
     let player: String?
     let minute: String?
     let detail: String
@@ -213,7 +214,7 @@ struct MatchVarEvent: Codable, Hashable, Sendable {
     }
 }
 
-struct MatchLineupPlayer: Codable, Hashable, Identifiable, Sendable {
+nonisolated struct MatchLineupPlayer: Codable, Hashable, Identifiable, Sendable {
     let number: Int?
     let name: String
     let idPlayer: String?
@@ -301,7 +302,7 @@ struct MatchLineupPlayer: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
-struct MatchLineupSubstitution: Codable, Hashable, Identifiable, Sendable {
+nonisolated struct MatchLineupSubstitution: Codable, Hashable, Identifiable, Sendable {
     let minute: String
     let playerOff: MatchLineupPlayer
     let playerOn: MatchLineupPlayer
@@ -553,7 +554,7 @@ struct TeamSquadResponse: Codable, Hashable, Sendable {
     }
 }
 
-struct MatchSocialItem: Codable, Hashable, Identifiable, Sendable {
+nonisolated struct MatchSocialItem: Codable, Hashable, Identifiable, Sendable {
     let id: String
     let type: String?
     let url: String
@@ -563,7 +564,7 @@ struct MatchSocialItem: Codable, Hashable, Identifiable, Sendable {
     let publishedAt: String?
     let account: Account?
 
-    struct Account: Codable, Hashable, Sendable {
+    nonisolated struct Account: Codable, Hashable, Sendable {
         let handle: String?
         let name: String?
     }
@@ -580,7 +581,7 @@ struct MatchSocialItem: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
-struct MatchTeamLineup: Codable, Hashable, Sendable {
+nonisolated struct MatchTeamLineup: Codable, Hashable, Sendable {
     let team: String?
     let manager: String?
     let formation: String?
@@ -607,7 +608,7 @@ struct MatchTeamLineup: Codable, Hashable, Sendable {
     }
 }
 
-struct MatchTeamLineups: Codable, Hashable, Sendable {
+nonisolated struct MatchTeamLineups: Codable, Hashable, Sendable {
     let home: MatchTeamLineup?
     let away: MatchTeamLineup?
 
@@ -617,7 +618,7 @@ struct MatchTeamLineups: Codable, Hashable, Sendable {
     }
 }
 
-struct MatchVenueDetails: Codable, Hashable, Sendable {
+nonisolated struct MatchVenueDetails: Codable, Hashable, Sendable {
     let id: String
     let name: String
     let city: String?
@@ -641,7 +642,7 @@ struct MatchVenueDetails: Codable, Hashable, Sendable {
     }
 }
 
-struct MatchDetailsPayload: Codable, Hashable, Sendable {
+nonisolated struct MatchDetailsPayload: Codable, Hashable, Sendable {
     let id: String
     let detailsURL: String?
     let date: String?
@@ -753,7 +754,7 @@ struct MatchDetailsPayload: Codable, Hashable, Sendable {
     }
 }
 
-struct TvChannel: Codable, Equatable, Hashable, Sendable {
+nonisolated struct TvChannel: Codable, Equatable, Hashable, Sendable {
     let name: String
     let country: String?
     let countryCode: String?
@@ -1322,7 +1323,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         )
     }
 
-    init(from decoder: Decoder) throws {
+    nonisolated init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         date = try container.decode(String.self, forKey: .date)
         time = try container.decode(String.self, forKey: .time)
