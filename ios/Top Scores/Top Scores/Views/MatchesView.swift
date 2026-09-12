@@ -173,6 +173,14 @@ final class FixturesViewCoordinator: ObservableObject {
         !isDateSwipeSuppressingMatchNavigation
     }
 
+    func waitUntilDateSwipeFinishes() async -> Bool {
+        while isDateSwipeSuppressingMatchNavigation {
+            guard !Task.isCancelled else { return false }
+            try? await Task.sleep(for: .milliseconds(25))
+        }
+        return !Task.isCancelled
+    }
+
     func resetPresentation() {
         isCompetitionDockExpanded = false
         expandedFixtureRegionID = nil
@@ -321,6 +329,7 @@ struct MatchesView: View {
     @State private var fixtureCompetitionMatchLimits: [String: Int] = [:]
     @State private var isFixtureDatePickerPresented = false
     @State private var fixtureDatePickerSelection = Date()
+    @State private var fixtureDateCarouselPosition = ScrollPosition(idType: String.self)
     @State private var isSubscribingToCalendar = false
     @State private var calendarSubscriptionErrorMessage = ""
     @State private var showsCalendarSubscriptionError = false
@@ -1517,6 +1526,12 @@ struct MatchesView: View {
         return VStack(spacing: 0) {
             if canOpenTable {
                 Button {
+                    guard fixturesCoordinator.allowsMatchNavigation else {
+                        diagnosticLogAsync(
+                            "[FixtureSwipe] suppressed competition navigation during date swipe"
+                        )
+                        return
+                    }
                     guard let competitionID else { return }
                     TablesNavigationCoordinator.shared.navigate(
                         leagueID: competitionID,
@@ -1875,64 +1890,67 @@ struct MatchesView: View {
             } else {
                 let jumpDirection = fixtureBrowser.nextMatchDateJumpDirection
                 ZStack {
-                    // Keep selection-to-scroll one-way. A two-way scrollPosition binding can
-                    // write the previously visible tile back while a date tap is relaying out.
-                    ScrollViewReader { proxy in
-                        ScrollView(.horizontal) {
-                            LazyHStack(spacing: 10) {
-                                ForEach(fixtureBrowser.availableDays) { day in
-                                    let selected = fixtureBrowser.selectedDateKey == day.date
-                                    Button {
-                                        fixtureBrowser.selectDate(day.date)
-                                    } label: {
-                                        FixtureDateCarouselTile(
-                                            dateKey: day.date,
-                                            matchCount: fixtureMatchCount(for: day),
-                                            isSelected: selected,
-                                            isToday: day.date == fixtureBrowser.todayDateKey
-                                        )
-                                    }
-                                    .id(day.date)
-                                    .buttonStyle(.plain)
-                                    .accessibilityAddTraits(selected ? .isSelected : [])
+                    ScrollView(.horizontal) {
+                        LazyHStack(spacing: 10) {
+                            ForEach(fixtureBrowser.availableDays) { day in
+                                let selected = fixtureBrowser.selectedDateKey == day.date
+                                Button {
+                                    fixtureBrowser.selectDate(day.date)
+                                } label: {
+                                    FixtureDateCarouselTile(
+                                        dateKey: day.date,
+                                        matchCount: fixtureMatchCount(for: day),
+                                        isSelected: selected,
+                                        isToday: day.date == fixtureBrowser.todayDateKey
+                                    )
                                 }
-                            }
-                            .scrollTargetLayout()
-                            .padding(.leading, jumpDirection == .earlier ? 66 : 12)
-                            .padding(.trailing, jumpDirection == .later ? 66 : 12)
-                        }
-                        .scrollIndicators(.hidden)
-                        .scrollTargetBehavior(.viewAligned(limitBehavior: .always))
-                        .mask {
-                            HStack(spacing: 0) {
-                                LinearGradient(
-                                    colors: [.clear, .black],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                                .frame(width: 10)
-                                Rectangle().fill(.black)
-                                LinearGradient(
-                                    colors: [.black, .clear],
-                                    startPoint: .leading,
-                                    endPoint: .trailing
-                                )
-                                .frame(width: 10)
+                                .id(day.date)
+                                .buttonStyle(.plain)
+                                .accessibilityIdentifier("fixtureDate-\(day.date)")
+                                .accessibilityAddTraits(selected ? .isSelected : [])
                             }
                         }
-                        .frame(height: fixtureDateCarouselHeight)
-                        .onAppear {
-                            if let selectedDateKey = fixtureBrowser.selectedDateKey {
-                                proxy.scrollTo(selectedDateKey, anchor: .center)
-                            }
+                        .scrollTargetLayout()
+                    }
+                    // Reserve space for the jump button without shifting scroll-target
+                    // geometry; padding the LazyHStack offsets every requested anchor.
+                    .contentMargins(
+                        .leading,
+                        jumpDirection == .earlier ? 66 : 12,
+                        for: .scrollContent
+                    )
+                    .contentMargins(
+                        .trailing,
+                        jumpDirection == .later ? 66 : 12,
+                        for: .scrollContent
+                    )
+                    .scrollIndicators(.hidden)
+                    .scrollTargetBehavior(.viewAligned(limitBehavior: .always))
+                    .scrollPosition($fixtureDateCarouselPosition, anchor: .center)
+                    .mask {
+                        HStack(spacing: 0) {
+                            LinearGradient(
+                                colors: [.clear, .black],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                            .frame(width: 10)
+                            Rectangle().fill(.black)
+                            LinearGradient(
+                                colors: [.black, .clear],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                            .frame(width: 10)
                         }
-                        .onChange(of: fixtureBrowser.selectedDateKey) { _, dateKey in
-                            guard let dateKey else { return }
-                            var transaction = Transaction()
-                            transaction.disablesAnimations = true
-                            withTransaction(transaction) {
-                                proxy.scrollTo(dateKey, anchor: .center)
-                            }
+                    }
+                    .frame(height: fixtureDateCarouselHeight)
+                    .onChange(of: fixtureBrowser.selectedDateKey, initial: true) { _, dateKey in
+                        guard let dateKey else { return }
+                        var transaction = Transaction()
+                        transaction.disablesAnimations = true
+                        withTransaction(transaction) {
+                            fixtureDateCarouselPosition.scrollTo(id: dateKey, anchor: .center)
                         }
                     }
 
@@ -1965,33 +1983,41 @@ struct MatchesView: View {
         targetDateKey: String
     ) -> some View {
         Button {
-            fixtureBrowser.selectNextMatchDate()
+            // Use the target rendered under the user's finger. The store can discover a
+            // different next-match date while this tap is being resolved.
+            fixtureBrowser.selectDate(targetDateKey)
         } label: {
-            HStack(spacing: 3) {
-                if direction == .earlier {
-                    Image(systemName: "chevron.left")
+            ZStack {
+                HStack(spacing: 3) {
+                    if direction == .earlier {
+                        Image(systemName: "chevron.left")
+                    }
+                    Image(systemName: "soccerball")
+                        .symbolRenderingMode(.hierarchical)
+                    if direction == .later {
+                        Image(systemName: "chevron.right")
+                    }
                 }
-                Image(systemName: "soccerball")
-                    .symbolRenderingMode(.hierarchical)
-                if direction == .later {
-                    Image(systemName: "chevron.right")
+                .font(.system(size: 15, weight: .bold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 50, height: 42)
+                .background {
+                    FixtureGlassSurface(cornerRadius: 12)
                 }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Color.accentColor.opacity(0.66), lineWidth: 1)
+                }
+                .shadow(color: Color.accentColor.opacity(0.16), radius: 7)
             }
-            .font(.system(size: 15, weight: .bold))
-            .foregroundStyle(Color.accentColor)
-            .frame(width: 50, height: 42)
-            .background {
-                FixtureGlassSurface(cornerRadius: 12)
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(Color.accentColor.opacity(0.66), lineWidth: 1)
-            }
-            .shadow(color: Color.accentColor.opacity(0.16), radius: 7)
+            // Own the complete area reserved over the carousel, preventing a partially
+            // obscured date tile from receiving this tap.
+            .frame(width: 66, height: fixtureDateCarouselHeight)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(.leading, direction == .earlier ? 6 : 0)
-        .padding(.trailing, direction == .later ? 6 : 0)
+        .zIndex(1)
+        .accessibilityIdentifier("fixtureDateJump-\(targetDateKey)")
         .accessibilityLabel("Jump to next scheduled match")
         .accessibilityHint("Moves to \(fixtureJumpDateLabel(targetDateKey))")
     }
@@ -3221,6 +3247,7 @@ private extension MatchesView {
                       let result else {
                     return
                 }
+                guard await fixturesCoordinator.waitUntilDateSwipeFinishes() else { return }
                 applyFixtureBrowsePageGrouping(
                     result,
                     filteredDateKeys: workPlan.immediateFilteredDateKeys,
@@ -3265,6 +3292,7 @@ private extension MatchesView {
                       let result else {
                     return
                 }
+                guard await fixturesCoordinator.waitUntilDateSwipeFinishes() else { return }
                 applyFixtureBrowsePageGrouping(
                     result,
                     filteredDateKeys: workPlan.deferredFilteredDateKeys,
@@ -3880,6 +3908,7 @@ private struct FixtureDatePagingContainer<Content: View>: View {
     @State private var swipeStartedAt: Date?
     @State private var swipeTargetDateKey: String?
     @State private var swipeDirection: Int?
+    @State private var pageOpacity = 1.0
 
     private enum DragAxis {
         case horizontal
@@ -3920,6 +3949,7 @@ private struct FixtureDatePagingContainer<Content: View>: View {
         content
             .id(currentDateKey)
             .offset(x: dragOffset)
+            .opacity(pageOpacity)
             .allowsHitTesting(!isSuppressingMatchTaps)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
             .background(FootballVisualStyle.pageBackground)
@@ -3930,7 +3960,6 @@ private struct FixtureDatePagingContainer<Content: View>: View {
                 if isCommittingSwipe {
                     dragAxis = nil
                     clearSwipeDiagnostics()
-                    dragOffset = 0
                 } else {
                     resetTransition()
                 }
@@ -3978,8 +4007,10 @@ private struct FixtureDatePagingContainer<Content: View>: View {
                 let hasAdjacentDate = value.translation.width < 0
                     ? nextDateKey != nil
                     : previousDateKey != nil
-                let maximumOffset: CGFloat = reduceMotion ? 8 : 24
-                let resistance: CGFloat = hasAdjacentDate ? 0.12 : 0.04
+                let maximumOffset: CGFloat = reduceMotion
+                    ? 8
+                    : min(containerWidth * 0.18, 72)
+                let resistance: CGFloat = hasAdjacentDate ? 0.30 : 0.06
                 dragOffset = min(
                     maximumOffset,
                     max(-maximumOffset, value.translation.width * resistance)
@@ -4009,7 +4040,6 @@ private struct FixtureDatePagingContainer<Content: View>: View {
                 isCommittingSwipe = true
                 dragAxis = nil
                 completeSwipe(to: targetDateKey, direction: direction)
-                releaseMatchTapSuppression()
             }
     }
 
@@ -4046,24 +4076,62 @@ private struct FixtureDatePagingContainer<Content: View>: View {
         PerformanceSignposter.matches.emitEvent("FixtureSwipeCommit")
         clearSwipeDiagnostics()
 
-        let selectionStartedAt = Date()
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) {
-            dragOffset = 0
-            onSelect(targetDateKey)
+        // Keep a single expensive fixture hierarchy mounted throughout the handoff.
+        // Rendering both dates at once caused 60–100 ms frame gaps on cached pages.
+        let outgoingNudge = min(containerWidth * 0.055, 24)
+        if reduceMotion {
+            withAnimation(.easeOut(duration: 0.06)) {
+                pageOpacity = 0
+            }
+        } else {
+            withAnimation(.easeOut(duration: 0.07)) {
+                dragOffset -= CGFloat(direction) * outgoingNudge
+                pageOpacity = 0
+            }
         }
-        let selectionDurationMilliseconds = Int(Date().timeIntervalSince(selectionStartedAt) * 1000)
-        diagnosticLogAsync(
-            "[FixtureSwipe] complete target=\(targetDateKey) " +
-            "selection_ms=\(selectionDurationMilliseconds)"
-        )
-        PerformanceSignposter.matches.emitEvent("FixtureSwipeComplete")
+
         commitUnlockTask?.cancel()
         commitUnlockTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(250))
+            try? await Task.sleep(for: .milliseconds(reduceMotion ? 65 : 75))
+            guard !Task.isCancelled else { return }
+
+            let selectionStartedAt = Date()
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                dragOffset = reduceMotion ? 0 : CGFloat(direction) * 36
+                pageOpacity = 0
+                onSelect(targetDateKey)
+            }
+            let selectionDurationMilliseconds = Int(
+                Date().timeIntervalSince(selectionStartedAt) * 1_000
+            )
+            diagnosticLogAsync(
+                "[FixtureSwipe] selection target=\(targetDateKey) " +
+                "duration_ms=\(selectionDurationMilliseconds)"
+            )
+
+            // Give SwiftUI one update cycle to replace the off-screen hierarchy before
+            // bringing it into view. No adjacent fixture list is mounted or composited.
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            if reduceMotion {
+                withAnimation(.easeOut(duration: 0.08)) {
+                    pageOpacity = 1
+                }
+            } else {
+                withAnimation(.timingCurve(0.22, 1, 0.36, 1, duration: 0.14)) {
+                    dragOffset = 0
+                    pageOpacity = 1
+                }
+            }
+
+            try? await Task.sleep(for: .milliseconds(reduceMotion ? 90 : 150))
             guard !Task.isCancelled else { return }
             logFrameSummary(frameMonitor.stop(), targetDateKey: targetDateKey)
+            diagnosticLogAsync("[FixtureSwipe] complete target=\(targetDateKey)")
+            PerformanceSignposter.matches.emitEvent("FixtureSwipeComplete")
+            releaseMatchTapSuppression()
             isCommittingSwipe = false
             commitUnlockTask = nil
         }
@@ -4143,6 +4211,7 @@ private struct FixtureDatePagingContainer<Content: View>: View {
         transaction.disablesAnimations = true
         withTransaction(transaction) {
             dragOffset = 0
+            pageOpacity = 1
         }
     }
 }
