@@ -1,7 +1,14 @@
 import Foundation
 import UIKit
 
-final class LogoResolver {
+nonisolated enum ArtworkDisplayPreparationQueue {
+    static let shared = DispatchQueue(
+        label: "dev.skynolimit.topscores.artwork-display-preparation",
+        qos: .utility
+    )
+}
+
+nonisolated final class LogoResolver: @unchecked Sendable {
     static let shared = LogoResolver()
 
     private struct FuzzyCandidate {
@@ -43,9 +50,15 @@ final class LogoResolver {
     private var fuzzyCandidatesByInitial: [Character: [FuzzyCandidate]] = [:]
     private var resolvedSourceCache: [String: ImageSource] = [:]
     private var unresolvedSourceKeys: Set<String> = []
+    private let resolutionLock = NSLock()
     private let imageCache: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
         cache.countLimit = 300
+        return cache
+    }()
+    private let displayImageCache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.countLimit = 500
         return cache
     }()
     private var fallbackSource: ImageSource?
@@ -64,24 +77,117 @@ final class LogoResolver {
         alternateNames: [String],
         useFallback: Bool
     ) -> UIImage? {
-        let resolvedSource = resolvePreferredSource(for: teamName, alternateNames: alternateNames)
+        let displayKey = Self.displayCacheKey(
+            teamName: teamName,
+            alternateNames: alternateNames
+        ) as NSString
+        if let cached = displayImageCache.object(forKey: displayKey) {
+            return cached
+        }
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        let resolvedSource = resolvePreferredSource(
+            for: teamName,
+            alternateNames: alternateNames
+        )
         let source = resolvedSource ?? (useFallback ? fallbackSource : nil)
         guard let source else { return nil }
 
         let cacheKey = source.identifier as NSString
         if let cached = imageCache.object(forKey: cacheKey) {
+            displayImageCache.setObject(cached, forKey: displayKey)
             return cached
         }
 
         let image = image(from: source)
         if let image {
             imageCache.setObject(image, forKey: cacheKey)
+            displayImageCache.setObject(image, forKey: displayKey)
+        }
+        let durationMilliseconds = Int(
+            ((ProcessInfo.processInfo.systemUptime - startedAt) * 1_000).rounded()
+        )
+        if Thread.isMainThread && durationMilliseconds >= 4 {
+            diagnosticLogAsync(
+                "[FixtureArtwork] team_cache_miss duration_ms=\(durationMilliseconds) " +
+                "team=\(teamName) success=\(image == nil ? 0 : 1)"
+            )
         }
         return image
     }
 
     func image(for teamName: String, teamId: String?, alternateNames: [String] = []) -> UIImage? {
         return image(for: teamName, alternateNames: alternateNames)
+    }
+
+    func prepareImagesForDisplay(for matches: [Match]) {
+        struct TeamEntry: Hashable {
+            let name: String
+            let alternateNames: [String]
+        }
+
+        let entries = Set(matches.flatMap { match in
+            [
+                TeamEntry(
+                    name: match.homeTeam,
+                    alternateNames: [match.homeShortName].compactMap { $0 }
+                ),
+                TeamEntry(
+                    name: match.awayTeam,
+                    alternateNames: [match.awayShortName].compactMap { $0 }
+                ),
+            ]
+        })
+        guard !entries.isEmpty else { return }
+
+        ArtworkDisplayPreparationQueue.shared.async { [weak self, entries] in
+            guard let self else { return }
+            let startedAt = ProcessInfo.processInfo.systemUptime
+            var preparedCount = 0
+            for entry in entries {
+                autoreleasepool {
+                    InteractiveMotionGate.shared.waitUntilIdleBlocking(
+                        operation: "fixture_team_artwork"
+                    )
+                    let source = self.resolvePreferredSource(
+                        for: entry.name,
+                        alternateNames: entry.alternateNames
+                    ) ?? self.fallbackSource
+                    guard let source else { return }
+                    let cacheKey = source.identifier as NSString
+                    let sourceImage = self.imageCache.object(forKey: cacheKey) ??
+                        self.image(from: source)
+                    guard let sourceImage else { return }
+                    let preparedImage = sourceImage.preparingForDisplay() ?? sourceImage
+                    self.imageCache.setObject(preparedImage, forKey: cacheKey)
+                    self.displayImageCache.setObject(
+                        preparedImage,
+                        forKey: Self.displayCacheKey(
+                            teamName: entry.name,
+                            alternateNames: entry.alternateNames
+                        ) as NSString
+                    )
+                    preparedCount += 1
+                }
+            }
+            let durationMilliseconds = Int(
+                ((ProcessInfo.processInfo.systemUptime - startedAt) * 1_000).rounded()
+            )
+            if durationMilliseconds >= 25 {
+                diagnosticLogAsync(
+                    "[FixtureArtwork] team_batch entries=\(entries.count) " +
+                    "prepared=\(preparedCount) duration_ms=\(durationMilliseconds)"
+                )
+            }
+        }
+    }
+
+    private static func displayCacheKey(
+        teamName: String,
+        alternateNames: [String]
+    ) -> String {
+        ([teamName] + alternateNames)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .joined(separator: "|")
     }
 
     private func prefersBundledLogo(for teamName: String, alternateNames: [String]) -> Bool {
@@ -91,7 +197,10 @@ final class LogoResolver {
     }
 
     func hasDedicatedLogo(for teamName: String, alternateNames: [String] = []) -> Bool {
-        guard let resolved = resolvePreferredSource(for: teamName, alternateNames: alternateNames) else {
+        guard let resolved = resolvePreferredSource(
+            for: teamName,
+            alternateNames: alternateNames
+        ) else {
             return false
         }
         return !isFallbackSource(resolved)
@@ -199,57 +308,64 @@ final class LogoResolver {
         guard !trimmed.isEmpty else { return nil }
         let cacheKey = trimmed.lowercased()
 
-        if let cached = resolvedSourceCache[cacheKey] {
-            return cached
+        let cached = resolutionLock.withLock { () -> (found: Bool, source: ImageSource?) in
+            if let source = resolvedSourceCache[cacheKey] {
+                return (true, source)
+            }
+            if unresolvedSourceKeys.contains(cacheKey) {
+                return (true, nil)
+            }
+            return (false, nil)
         }
-        if unresolvedSourceKeys.contains(cacheKey) {
-            return nil
-        }
+        if cached.found { return cached.source }
 
+        let resolved = resolveUncachedSource(for: trimmed)
+        resolutionLock.withLock {
+            if let resolved {
+                resolvedSourceCache[cacheKey] = resolved
+            } else {
+                unresolvedSourceKeys.insert(cacheKey)
+            }
+        }
+        return resolved
+    }
+
+    private func resolveUncachedSource(for trimmed: String) -> ImageSource? {
         let lower = trimmed.lowercased()
         if let direct = originalLookup[lower] {
-            resolvedSourceCache[cacheKey] = direct
             return direct
         }
 
         if let directAsset = directAssetSource(for: trimmed) {
-            resolvedSourceCache[cacheKey] = directAsset
             return directAsset
         }
 
         for alias in Self.aliases(for: trimmed) {
             if let directAlias = originalLookup[alias] {
-                resolvedSourceCache[cacheKey] = directAlias
                 return directAlias
             }
             let aliasKey = Self.normalizedKey(alias)
             if let match = normalizedLookup[aliasKey] {
-                resolvedSourceCache[cacheKey] = match
                 return match
             }
             if let directAsset = directAssetSource(for: alias) {
-                resolvedSourceCache[cacheKey] = directAsset
                 return directAsset
             }
         }
 
         let normalized = Self.normalizedKey(trimmed)
         if let match = normalizedLookup[normalized] {
-            resolvedSourceCache[cacheKey] = match
             return match
         }
 
         let core = Self.normalizedCoreKey(trimmed)
         if let uniqueCoreMatch = uniqueCoreMatch(for: core) {
-            resolvedSourceCache[cacheKey] = uniqueCoreMatch
             return uniqueCoreMatch
         }
         if let fuzzyMatch = fuzzyMatch(normalizedTeam: normalized) {
-            resolvedSourceCache[cacheKey] = fuzzyMatch
             return fuzzyMatch
         }
 
-        unresolvedSourceKeys.insert(cacheKey)
         return nil
     }
 
@@ -476,18 +592,18 @@ final class LogoResolver {
 
 }
 
-final class BundledTeamIdentityCatalog {
-    static let shared = BundledTeamIdentityCatalog()
+nonisolated final class BundledTeamIdentityCatalog: @unchecked Sendable {
+    nonisolated static let shared = BundledTeamIdentityCatalog()
 
-    private var canonicalNameByKey: [String: String] = [:]
-    private var namesByCanonicalKey: [String: [String]] = [:]
-    private var exactToCanonicalKey: [String: String] = [:]
+    private nonisolated(unsafe) var canonicalNameByKey: [String: String] = [:]
+    private nonisolated(unsafe) var namesByCanonicalKey: [String: [String]] = [:]
+    private nonisolated(unsafe) var exactToCanonicalKey: [String: String] = [:]
 
     private init() {
         load()
     }
 
-    func names(for rawValue: String) -> [String] {
+    nonisolated func names(for rawValue: String) -> [String] {
         let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return [] }
 

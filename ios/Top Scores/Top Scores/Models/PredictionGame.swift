@@ -176,6 +176,30 @@ nonisolated enum PredictionGameRoundOutcome: Equatable, Sendable {
     case userWin, draw, aiWin
 }
 
+nonisolated struct PredictionGameInPlayRound: Codable, Equatable, Identifiable, Sendable {
+    var competitionId: String? = nil
+    var competitionName: String? = nil
+
+    var resolvedCompetitionID: String { competitionId ?? "1" }
+    var resolvedCompetitionName: String {
+        competitionName ?? (resolvedCompetitionID == "1" ? "Premier League" : "Competition \(resolvedCompetitionID)")
+    }
+
+    let id: String
+    let label: String
+    let youPoints: Int
+    let aiPoints: Int
+    let scoredMatches: Int
+    let liveMatches: Int
+    let totalMatches: Int
+
+    var headToHeadOutcome: PredictionGameRoundOutcome {
+        if youPoints > aiPoints { return .userWin }
+        if youPoints < aiPoints { return .aiWin }
+        return .draw
+    }
+}
+
 nonisolated struct PredictionGameAchievement: Codable, Equatable, Identifiable, Sendable {
     let id: String
     let title: String
@@ -264,6 +288,12 @@ nonisolated struct PredictionGameStatsResponse: Decodable, Sendable {
 
 nonisolated struct PredictionGameFixturesResponse: Decodable, Sendable {
     let fixtures: [PredictionGameFixture]
+    let serverTime: Date
+}
+
+nonisolated struct PredictionGameInPlayResponse: Decodable, Sendable {
+    let competitionId: String
+    let round: PredictionGameInPlayRound?
     let serverTime: Date
 }
 

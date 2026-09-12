@@ -104,6 +104,7 @@ struct PredictionGameClientTests {
             case "leaderboards": return (200, Data(#"{"rows":[],"category":"season","competitionId":"2","gameCenterLeaderboardId":"ucl.season"}"#.utf8))
             case "next-predictions": return (200, Data(#"{"serverTime":"2026-09-10T12:00:00Z","fixtures":[],"competitionId":"2"}"#.utf8))
             case "fixtures": return (200, Data(#"{"serverTime":"2026-09-10T12:00:00Z","fixtures":[]}"#.utf8))
+            case "in-play": return (200, Data(#"{"serverTime":"2026-09-10T12:00:00Z","competitionId":"2","round":null}"#.utf8))
             default: throw URLError(.badURL)
             }
         }
@@ -116,6 +117,7 @@ struct PredictionGameClientTests {
         _ = try await client.nextPredictions(credential: "guest", competitionId: "2")
         _ = try await client.nextPredictions(fixtureID: "123", credential: "guest")
         _ = try await client.fixtures(ids: ["123", "456"], credential: "guest")
+        _ = try await client.inPlay(credential: "guest", competitionId: "2")
     }
 
     @MainActor

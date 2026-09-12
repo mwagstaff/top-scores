@@ -139,6 +139,16 @@ nonisolated final class CompetitionBadgeCache: @unchecked Sendable {
 
     private init() {}
 
+    func bundledImage(assetName: String) -> UIImage? {
+        let key = "bundle:\(assetName)" as NSString
+        if let cached = imageCache.object(forKey: key) {
+            return cached
+        }
+        guard let image = UIImage(named: assetName) else { return nil }
+        imageCache.setObject(image, forKey: key)
+        return image
+    }
+
     func image(for competitionID: String) -> UIImage? {
         let url = lock.withLock { localURLsByID[competitionID] }
         guard let url else { return nil }
@@ -161,6 +171,74 @@ nonisolated final class CompetitionBadgeCache: @unchecked Sendable {
         }
         guard let resolvedID else { return nil }
         return image(for: resolvedID)
+    }
+
+    func prepareImagesForDisplay(for matches: [Match]) {
+        struct CompetitionEntry: Hashable {
+            let id: String?
+            let name: String
+        }
+
+        let entries = Set(matches.map {
+            CompetitionEntry(id: $0.leagueId, name: $0.league)
+        })
+        guard !entries.isEmpty else { return }
+
+        ArtworkDisplayPreparationQueue.shared.async { [weak self, entries] in
+            guard let self else { return }
+            let startedAt = ProcessInfo.processInfo.systemUptime
+            var preparedCount = 0
+            for entry in entries {
+                autoreleasepool {
+                    InteractiveMotionGate.shared.waitUntilIdleBlocking(
+                        operation: "fixture_competition_artwork"
+                    )
+                    if let assetName = BundledCompetitionLogo.assetName(
+                        competitionID: entry.id,
+                        competitionName: entry.name
+                    ) {
+                        let key = "bundle:\(assetName)" as NSString
+                        let sourceImage = self.imageCache.object(forKey: key) ??
+                            UIImage(named: assetName)
+                        guard let sourceImage else { return }
+                        self.imageCache.setObject(
+                            sourceImage.preparingForDisplay() ?? sourceImage,
+                            forKey: key
+                        )
+                        preparedCount += 1
+                    } else {
+                        let url = self.lock.withLock { () -> URL? in
+                            if let id = entry.id, let url = self.localURLsByID[id] {
+                                return url
+                            }
+                            guard let id = self.competitionIDsByNormalizedName[
+                                Self.normalizedName(entry.name)
+                            ] else { return nil }
+                            return self.localURLsByID[id]
+                        }
+                        guard let url else { return }
+                        let key = url.path as NSString
+                        let sourceImage = self.imageCache.object(forKey: key) ??
+                            UIImage(contentsOfFile: url.path)
+                        guard let sourceImage else { return }
+                        self.imageCache.setObject(
+                            sourceImage.preparingForDisplay() ?? sourceImage,
+                            forKey: key
+                        )
+                        preparedCount += 1
+                    }
+                }
+            }
+            let durationMilliseconds = Int(
+                ((ProcessInfo.processInfo.systemUptime - startedAt) * 1_000).rounded()
+            )
+            if durationMilliseconds >= 25 {
+                diagnosticLogAsync(
+                    "[FixtureArtwork] competition_batch entries=\(entries.count) " +
+                    "prepared=\(preparedCount) duration_ms=\(durationMilliseconds)"
+                )
+            }
+        }
     }
 
     func warmIfNeeded(entries: [CompetitionCatalogEntry]) {

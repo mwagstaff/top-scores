@@ -102,6 +102,20 @@ struct PredictionGameMatchIntegrationTests {
         }
     }
 
+    @Test func inPlayRoundComparesProvisionalScoresAndHasConfigurableCopy() {
+        let round = PredictionGameInPlayRound(
+            id: "round-4", label: "Gameweek 4", youPoints: 6, aiPoints: 4,
+            scoredMatches: 3, liveMatches: 2, totalMatches: 10
+        )
+        #expect(round.headToHeadOutcome == .userWin)
+        for outcome in [PredictionGameRoundOutcome.userWin, .draw, .aiWin] {
+            let messages = BeatAIInPlayCopy.messages(for: outcome)
+            #expect(messages.count >= 3)
+            #expect(Set(messages).count == messages.count)
+            #expect(messages.contains(BeatAIInPlayCopy.random(for: outcome)))
+        }
+    }
+
     private func completedFixture(youPoints: Int?, aiPoints: Int?, settled: Bool = true) -> PredictionGameFixture {
         PredictionGameFixture(
             id: "8324", homeTeam: "Fenerbahçe", awayTeam: "Roma",

@@ -19,6 +19,7 @@ const {
   upsertBsdRecord,
   getBsdRecordIds,
   getBsdRecords,
+  deleteBsdRecord,
   closeMongoConnection,
 } = require("./mongo_client");
 
@@ -180,6 +181,15 @@ async function reconcileMissingScheduledEvents(leagueId, fetchedEvents, nowMs = 
       await upsertBsdRecords("bsd_events", [eventToRecord(event)]);
       refreshed.push(event);
     } catch (error) {
+      if (Number(error && error.statusCode) === 404 || (error && error.code) === "HTTP_404") {
+        // A detail 404 is stronger evidence than absence from a capped list:
+        // BSD has withdrawn the canonical event. Remove the stale local copy;
+        // a later list response will recreate it if BSD republishes the ID.
+        // eslint-disable-next-line no-await-in-loop
+        await deleteBsdRecord("bsd_events", doc._id);
+        console.log(`[bsd] scheduled event ${doc._id} removed after BSD returned 404`);
+        continue;
+      }
       failedScheduleRechecks.set(String(doc._id), nowMs + FAILED_SCHEDULE_RECHECK_MS);
       console.error(`[bsd] scheduled event ${doc._id} reconciliation failed: ${error.message || error}`);
     }

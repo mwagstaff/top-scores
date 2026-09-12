@@ -28,11 +28,36 @@ struct FantasyPreviousTeamTests {
 
     @Test func entryHistoryDecodesHistoricalTeamValue() throws {
         let data = Data(
-            #"{"event":4,"points":51,"rank":123,"overall_rank":456,"event_transfers_cost":0,"points_on_bench":8,"value":1013}"#.utf8
+            #"{"event":4,"points":51,"total_points":189,"rank":123,"overall_rank":456,"event_transfers_cost":0,"points_on_bench":8,"value":1013}"#.utf8
         )
 
         let history = try JSONDecoder().decode(FantasyEntryHistory.self, from: data)
 
         #expect(history.teamValue == 1013)
+        #expect(history.totalPoints == 189)
+    }
+
+    @Test func seasonTotalAddsLivePointsWhenFPLHasNotUpdatedCurrentGameweek() {
+        #expect(fantasySeasonTotalPoints(
+            reportedSeasonPoints: 189,
+            reportedCurrentGameweekPoints: 0,
+            resolvedCurrentGameweekPoints: 53
+        ) == 242)
+    }
+
+    @Test func seasonTotalDoesNotDoubleCountWhenFPLHasUpdatedCurrentGameweek() {
+        #expect(fantasySeasonTotalPoints(
+            reportedSeasonPoints: 242,
+            reportedCurrentGameweekPoints: 53,
+            resolvedCurrentGameweekPoints: 53
+        ) == 242)
+    }
+
+    @Test func seasonTotalReplacesReportedGameweekPointsWithResolvedScore() {
+        #expect(fantasySeasonTotalPoints(
+            reportedSeasonPoints: 240,
+            reportedCurrentGameweekPoints: 51,
+            resolvedCurrentGameweekPoints: 53
+        ) == 242)
     }
 }

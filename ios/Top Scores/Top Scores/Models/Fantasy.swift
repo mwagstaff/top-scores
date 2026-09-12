@@ -368,6 +368,7 @@ nonisolated struct FantasyPick: Codable, Hashable {
 nonisolated struct FantasyEntryHistory: Codable, Hashable {
     let event: Int
     let points: Int
+    let totalPoints: Int?
     let rank: Int?
     let overallRank: Int?
     let eventTransfersCost: Int?
@@ -377,6 +378,7 @@ nonisolated struct FantasyEntryHistory: Codable, Hashable {
     enum CodingKeys: String, CodingKey {
         case event
         case points
+        case totalPoints = "total_points"
         case rank
         case overallRank = "overall_rank"
         case eventTransfersCost = "event_transfers_cost"
@@ -391,10 +393,12 @@ nonisolated struct FantasyEntryHistory: Codable, Hashable {
         overallRank: Int?,
         eventTransfersCost: Int?,
         pointsOnBench: Int?,
-        teamValue: Int? = nil
+        teamValue: Int? = nil,
+        totalPoints: Int? = nil
     ) {
         self.event = event
         self.points = points
+        self.totalPoints = totalPoints
         self.rank = rank
         self.overallRank = overallRank
         self.eventTransfersCost = eventTransfersCost
@@ -470,6 +474,19 @@ enum FantasyTeamGameweekResolver {
         standard.formatOptions = [.withInternetDateTime]
         return standard.date(from: value)
     }
+}
+
+/// FPL can update `total_points` and the current gameweek's `points` at different
+/// times. Replace the reported gameweek component with the locally resolved score.
+nonisolated func fantasySeasonTotalPoints(
+    reportedSeasonPoints: Int?,
+    reportedCurrentGameweekPoints: Int,
+    resolvedCurrentGameweekPoints: Int
+) -> Int? {
+    guard let reportedSeasonPoints else { return nil }
+    return reportedSeasonPoints
+        - reportedCurrentGameweekPoints
+        + resolvedCurrentGameweekPoints
 }
 
 nonisolated struct FantasyEventLiveResponse: Codable, Hashable {
@@ -2337,6 +2354,7 @@ struct FantasySquadDisplayData: Hashable, Sendable {
     let deadlineGameweekID: Int?
     let deadlineTime: String?
     let totalPoints: Int
+    var seasonTotalPoints: Int? = nil
     let gameweekAverageScore: Int?
     let hasActiveFixtures: Bool
     let hasStartedFixturesInGameweek: Bool
@@ -4199,6 +4217,11 @@ enum FantasySquadBuilder {
             deadlineGameweekID: resolvedDeadline?.id,
             deadlineTime: resolvedDeadline?.deadlineTime,
             totalPoints: picksResponse.entryHistory.points,
+            seasonTotalPoints: fantasySeasonTotalPoints(
+                reportedSeasonPoints: picksResponse.entryHistory.totalPoints,
+                reportedCurrentGameweekPoints: picksResponse.entryHistory.points,
+                resolvedCurrentGameweekPoints: estimatedCurrentScore
+            ),
             gameweekAverageScore: gameweek.averageEntryScore,
             hasActiveFixtures: hasActiveFixtures,
             hasStartedFixturesInGameweek: hasStartedFixturesInGameweek,

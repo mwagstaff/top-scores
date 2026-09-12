@@ -21,6 +21,7 @@ const {
 
 function ingestionFixture({ candidates = [], upcoming = [], lookup } = {}) {
   const writes = [];
+  const deleted = [];
   const lookups = [];
   const queries = [];
   const errors = [];
@@ -46,15 +47,29 @@ function ingestionFixture({ candidates = [], upcoming = [], lookup } = {}) {
         async getBsdRecords(collection, filter, options) {
           assert.equal(collection, "bsd_events");
           queries.push(JSON.parse(JSON.stringify({ filter, options })));
-          return candidates.map(String).filter((id) => !filter._id.$nin.includes(id))
+          return candidates.map(String).filter((id) => (
+            !filter._id.$nin.includes(id) && !deleted.includes(id)
+          ))
             .slice(0, options.limit).map((id) => ({ _id: id }));
+        },
+        async deleteBsdRecord(collection, id) {
+          assert.equal(collection, "bsd_events");
+          deleted.push(String(id));
+          return true;
         },
       };
       throw new Error(`Unexpected dependency: ${name}`);
     },
   };
   vm.runInNewContext(fs.readFileSync(require.resolve("./fetch_bsd_events"), "utf8"), sandbox);
-  return { ingest: sandbox.module.exports.ingestLeagueIncrementalEvents, writes, lookups, queries, errors };
+  return {
+    ingest: sandbox.module.exports.ingestLeagueIncrementalEvents,
+    writes,
+    deleted,
+    lookups,
+    queries,
+    errors,
+  };
 }
 
 test("incremental ingestion refreshes withdrawn Wolves fixtures while preserving the replacement", async () => {
@@ -111,13 +126,18 @@ test("absence from capped lists never cancels a valid fixture and same-ID resche
   ]);
 });
 
-test("failed or invalid lookups preserve cached fixtures and do not block other corrections", async () => {
+test("404 lookups remove stale fixtures while other failures preserve them", async () => {
   const valid = { id: 6, league_id: 12, status: "cancelled", event_date: "2026-09-09T18:45:00Z" };
   const fixture = ingestionFixture({
     candidates: [1, 2, 3, 4, 5, 6],
     lookup: (id) => {
       if (id === "1") throw new Error("HTTP 429 after retries");
-      if (id === "2") throw new Error("HTTP 404");
+      if (id === "2") {
+        const error = new Error("HTTP 404");
+        error.statusCode = 404;
+        error.code = "HTTP_404";
+        throw error;
+      }
       if (id === "3") return { ...valid, id: 99 };
       if (id === "4") return { ...valid, id: 4, event_date: null };
       if (id === "5") return { ...valid, id: 5, league_id: 40 };
@@ -125,8 +145,12 @@ test("failed or invalid lookups preserve cached fixtures and do not block other 
     },
   });
   await fixture.ingest("12", Date.parse("2026-09-09T22:00:00Z"));
-  assert.equal(fixture.errors.length, 5);
+  assert.equal(fixture.errors.length, 4);
+  assert.deepEqual(fixture.deleted, ["2"]);
   assert.deepEqual(fixture.writes.map((record) => record.id), [6]);
+
+  await fixture.ingest("12", Date.parse("2026-09-10T23:00:00Z"));
+  assert.equal(fixture.lookups.filter((id) => id === "2").length, 1);
 });
 
 test("cancelled and postponed fixtures do not trigger incidents or lineup hydration", () => {

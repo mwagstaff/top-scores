@@ -1165,17 +1165,28 @@ final class MatchesStore: ObservableObject {
             #endif
 
             let effectiveSnapshot = resolvedSnapshot(for: preferences)
-            var nextState = state(for: .fixtures)
-            nextState.unfilteredMatches = Self.replacingMatches(
-                in: nextState.unfilteredMatches,
-                with: incoming,
-                within: fixtureStart...initialEnd
-            )
-            nextState.matches = visibleMatches(
-                from: nextState.unfilteredMatches,
+            guard await InteractiveMotionGate.shared.waitUntilIdle(
+                operation: "fixtures_refresh_prepare"
+            ) else {
+                throw CancellationError()
+            }
+            let preparation = await Self.preparedFixturesState(
+                existing: state(for: .fixtures).unfilteredMatches,
+                incoming: incoming,
+                range: fixtureStart...initialEnd,
                 snapshot: effectiveSnapshot,
-                mode: .fixtures
+                premierLeagueTeamMatcher: premierLeagueTeamMatcher
             )
+            try Task.checkCancellation()
+            guard await InteractiveMotionGate.shared.waitUntilIdle(
+                operation: "fixtures_refresh_publish"
+            ) else {
+                throw CancellationError()
+            }
+            let applyStartedAt = ProcessInfo.processInfo.systemUptime
+            var nextState = state(for: .fixtures)
+            nextState.unfilteredMatches = preparation.unfilteredMatches
+            nextState.matches = preparation.visibleMatches
             nextState.groupedMatches = []
             nextState.groupedMatchesRevision = nil
             nextState.lastUpdated = Self.maxDate(
@@ -1191,10 +1202,16 @@ final class MatchesStore: ObservableObject {
             nextState.errorMessage = nil
             nextState.lastValidatedSnapshot = preferences
             modeStates[.fixtures] = nextState
+            Self.logInteractionPhase(
+                "fixtures_refresh_apply",
+                startedAt: applyStartedAt,
+                matchCount: nextState.matches.count
+            )
             let durationMs = Int(Date().timeIntervalSince(requestStartedAt) * 1000)
 
             Self.log(
                 "fixtures_refresh_complete visible=\(nextState.matches.count) stored=\(nextState.unfilteredMatches.count) " +
+                "prepare_ms=\(preparation.durationMilliseconds) " +
                 "last_updated=\(Self.formatDateForLog(nextState.lastUpdated)) " +
                 "coverage_end=\(Self.formatDateForLog(nextState.fixtureCoverageEnd)) " +
                 "sample=\(Self.matchSample(nextState.matches))"
@@ -1336,16 +1353,27 @@ final class MatchesStore: ObservableObject {
             #endif
 
             let effectiveSnapshot = resolvedSnapshot(for: preferences)
-            var nextState = state(for: .results)
-            nextState.unfilteredMatches = Self.sortedMatches(
-                Self.deduplicatedMatches(incoming),
-                descendingDates: true
-            )
-            nextState.matches = visibleMatches(
-                from: nextState.unfilteredMatches,
+            guard await InteractiveMotionGate.shared.waitUntilIdle(
+                operation: "results_refresh_prepare"
+            ) else {
+                throw CancellationError()
+            }
+            let preparation = await Self.preparedResultsState(
+                existing: [],
+                incoming: incoming,
                 snapshot: effectiveSnapshot,
-                mode: .results
+                premierLeagueTeamMatcher: premierLeagueTeamMatcher
             )
+            try Task.checkCancellation()
+            guard await InteractiveMotionGate.shared.waitUntilIdle(
+                operation: "results_refresh_publish"
+            ) else {
+                throw CancellationError()
+            }
+            let applyStartedAt = ProcessInfo.processInfo.systemUptime
+            var nextState = state(for: .results)
+            nextState.unfilteredMatches = preparation.unfilteredMatches
+            nextState.matches = preparation.visibleMatches
             nextState.groupedMatches = []
             nextState.groupedMatchesRevision = nil
             nextState.page = response.page
@@ -1361,10 +1389,16 @@ final class MatchesStore: ObservableObject {
             nextState.lastValidatedSnapshot = preferences
 
             modeStates[.results] = nextState
+            Self.logInteractionPhase(
+                "results_refresh_apply",
+                startedAt: applyStartedAt,
+                matchCount: nextState.matches.count
+            )
             Self.log(
                 "results_refresh_complete visible=\(nextState.matches.count) stored=\(nextState.unfilteredMatches.count) " +
                 "range=\(Self.formatDateForLog(loadRange.lowerBound))...\(Self.formatDateForLog(loadRange.upperBound)) " +
-                "duration_ms=\(Int(Date().timeIntervalSince(requestStartedAt) * 1000)) sample=\(Self.matchSample(nextState.matches))"
+                "duration_ms=\(Int(Date().timeIntervalSince(requestStartedAt) * 1000)) " +
+                "prepare_ms=\(preparation.durationMilliseconds) sample=\(Self.matchSample(nextState.matches))"
             )
             persistCombinedCacheAndSync(snapshot: effectiveSnapshot)
 
@@ -1427,6 +1461,13 @@ final class MatchesStore: ObservableObject {
                 snapshot: effectiveSnapshot,
                 premierLeagueTeamMatcher: premierLeagueTeamMatcher
             )
+            try Task.checkCancellation()
+            guard await InteractiveMotionGate.shared.waitUntilIdle(
+                operation: "results_load_more_publish"
+            ) else {
+                throw CancellationError()
+            }
+            let applyStartedAt = ProcessInfo.processInfo.systemUptime
             nextState.unfilteredMatches = prepared.unfilteredMatches
             nextState.matches = prepared.visibleMatches
             nextState.groupedMatches = []
@@ -1439,6 +1480,11 @@ final class MatchesStore: ObservableObject {
             nextState.isUsingCache = false
             nextState.errorMessage = nil
             modeStates[.results] = nextState
+            Self.logInteractionPhase(
+                "results_load_more_apply",
+                startedAt: applyStartedAt,
+                matchCount: nextState.matches.count
+            )
 
             publishState(for: .results)
             persistCombinedCacheAndSync(snapshot: effectiveSnapshot)
@@ -1474,6 +1520,13 @@ final class MatchesStore: ObservableObject {
     private struct PreparedResultsState: Sendable {
         let unfilteredMatches: [Match]
         let visibleMatches: [Match]
+        let durationMilliseconds: Int
+    }
+
+    private struct PreparedFixturesState: Sendable {
+        let unfilteredMatches: [Match]
+        let visibleMatches: [Match]
+        let durationMilliseconds: Int
     }
 
     private nonisolated static func fetchRemainingResultPages(
@@ -1532,6 +1585,7 @@ final class MatchesStore: ObservableObject {
         premierLeagueTeamMatcher: PremierLeagueTeamMatcher
     ) async -> PreparedResultsState {
         await Task.detached(priority: .utility) {
+            let startedAt = ProcessInfo.processInfo.systemUptime
             let unfiltered = Self.sortedMatches(
                 Self.deduplicatedMatches(
                     Self.mergePages(existing: existing, incoming: incoming)
@@ -1549,7 +1603,47 @@ final class MatchesStore: ObservableObject {
                 ),
                 descendingDates: true
             )
-            return PreparedResultsState(unfilteredMatches: unfiltered, visibleMatches: visible)
+            return PreparedResultsState(
+                unfilteredMatches: unfiltered,
+                visibleMatches: visible,
+                durationMilliseconds: Int(
+                    ((ProcessInfo.processInfo.systemUptime - startedAt) * 1_000).rounded()
+                )
+            )
+        }.value
+    }
+
+    private nonisolated static func preparedFixturesState(
+        existing: [Match],
+        incoming: [Match],
+        range: ClosedRange<Date>,
+        snapshot: PreferencesSnapshot,
+        premierLeagueTeamMatcher: PremierLeagueTeamMatcher
+    ) async -> PreparedFixturesState {
+        await Task.detached(priority: .utility) {
+            let startedAt = ProcessInfo.processInfo.systemUptime
+            let unfiltered = Self.replacingMatches(
+                in: existing,
+                with: incoming,
+                within: range
+            )
+            let visible = Self.sortedMatches(
+                Self.deduplicatedMatches(
+                    Self.applyPreferenceFilters(
+                        to: unfiltered,
+                        snapshot: snapshot,
+                        mode: .fixtures,
+                        premierLeagueTeamMatcher: premierLeagueTeamMatcher
+                    )
+                )
+            )
+            return PreparedFixturesState(
+                unfilteredMatches: unfiltered,
+                visibleMatches: visible,
+                durationMilliseconds: Int(
+                    ((ProcessInfo.processInfo.systemUptime - startedAt) * 1_000).rounded()
+                )
+            )
         }.value
     }
 
@@ -2147,6 +2241,14 @@ final class MatchesStore: ObservableObject {
     private func publishState(for mode: MatchesViewMode) {
         let signpost = PerformanceSignposter.matches.beginInterval("MatchesPublishState")
         defer { PerformanceSignposter.matches.endInterval("MatchesPublishState", signpost) }
+        let publishStartedAt = ProcessInfo.processInfo.systemUptime
+        defer {
+            Self.logInteractionPhase(
+                "publish_state_\(mode.rawValue)",
+                startedAt: publishStartedAt,
+                matchCount: state(for: mode).matches.count
+            )
+        }
 
         let current = state(for: mode)
         let modeViewState = viewState(for: mode)
@@ -2171,12 +2273,14 @@ final class MatchesStore: ObservableObject {
 
         let mirrorsActiveMode = activeMode == mode && visibleModes.contains(mode)
         if mirrorsActiveMode {
-            matches = current.matches
-            isLoading = current.isLoading
-            isLoadingMoreMatches = current.isLoadingMore
-            errorMessage = current.errorMessage
-            lastUpdated = current.lastUpdated
-            isUsingCache = current.isUsingCache
+            if matches != current.matches { matches = current.matches }
+            if isLoading != current.isLoading { isLoading = current.isLoading }
+            if isLoadingMoreMatches != current.isLoadingMore {
+                isLoadingMoreMatches = current.isLoadingMore
+            }
+            if errorMessage != current.errorMessage { errorMessage = current.errorMessage }
+            if lastUpdated != current.lastUpdated { lastUpdated = current.lastUpdated }
+            if isUsingCache != current.isUsingCache { isUsingCache = current.isUsingCache }
         }
 
         // Cancel any previous grouping task so stale results can't overwrite newer ones.
@@ -2232,6 +2336,9 @@ final class MatchesStore: ObservableObject {
             )
             let durationMs = Int(Date().timeIntervalSince(startedAt) * 1000)
             guard !Task.isCancelled else { return }
+            guard await InteractiveMotionGate.shared.waitUntilIdle(
+                operation: "grouping_\(mode.rawValue)_publish"
+            ) else { return }
             await MainActor.run { [weak self] in
                 guard let self,
                       self.groupingTaskIDs[mode] == taskID,
@@ -2245,14 +2352,22 @@ final class MatchesStore: ObservableObject {
                     grouped,
                     context: mode.rawValue
                 )
+                let publishStartedAt = ProcessInfo.processInfo.systemUptime
                 var cachedState = self.state(for: mode)
                 cachedState.groupedMatches = stabilizedGrouped
                 cachedState.groupedMatchesRevision = groupingRevisionAtStart
                 self.modeStates[mode] = cachedState
                 self.viewState(for: mode).groupedMatches = stabilizedGrouped
                 if self.activeMode == mode && self.visibleModes.contains(mode) {
-                    self.groupedMatches = stabilizedGrouped
+                    if self.groupedMatches != stabilizedGrouped {
+                        self.groupedMatches = stabilizedGrouped
+                    }
                 }
+                Self.logInteractionPhase(
+                    "grouping_\(mode.rawValue)_apply",
+                    startedAt: publishStartedAt,
+                    matchCount: matchesToGroup.count
+                )
             }
         }
 
@@ -2650,6 +2765,21 @@ final class MatchesStore: ObservableObject {
 
     nonisolated private static func log(_ message: @autoclosure () -> String) {
         diagnosticLog("[MatchesStore] \(message())")
+    }
+
+    nonisolated private static func logInteractionPhase(
+        _ phase: String,
+        startedAt: TimeInterval,
+        matchCount: Int
+    ) {
+        let durationMilliseconds = Int(
+            ((ProcessInfo.processInfo.systemUptime - startedAt) * 1_000).rounded()
+        )
+        guard durationMilliseconds >= 8 else { return }
+        performanceDiagnosticLogAsync(
+            "[MatchesPerformance] phase=\(phase) duration_ms=\(durationMilliseconds) " +
+            "matches=\(matchCount) interaction_active=\(InteractiveMotionGate.shared.isActive ? 1 : 0)"
+        )
     }
 
     private func scheduleCachePersistence(

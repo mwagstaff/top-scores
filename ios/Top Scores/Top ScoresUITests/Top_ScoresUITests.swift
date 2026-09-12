@@ -61,8 +61,8 @@ final class Top_ScoresUITests: XCTestCase {
         XCTAssertEqual(
             selectedDateButton?.frame.midX ?? 0,
             app.frame.midX,
-            // The jump button reserves asymmetric edge space, so the selected tile is
-            // centered in the unobscured carousel rather than the full screen.
+            // Allow a small layout tolerance while requiring the selected tile to stay
+            // centred in the full carousel, regardless of the jump-button side.
             accuracy: 35
         )
     }

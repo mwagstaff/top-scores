@@ -5,6 +5,7 @@ struct PredictionGameMenuFlow: View {
     @EnvironmentObject private var game: PredictionGameStore
     @EnvironmentObject private var preferences: PreferencesStore
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     let onPredictionsVisibilityChanged: () -> Void
     var invitationCode: String? = nil
 
@@ -16,6 +17,12 @@ struct PredictionGameMenuFlow: View {
     @State private var metadataTask: Task<Void, Never>?
 
     private enum Destination: Hashable { case predictions, progress; case leagues(String?) }
+
+    private struct InPlayRefreshContext: Equatable {
+        let apiBaseURL: String
+        let competitionID: String
+        let shouldRefresh: Bool
+    }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -64,6 +71,15 @@ struct PredictionGameMenuFlow: View {
             refreshMetadata()
             await game.loadDashboard(apiBaseURL: preferences.apiBaseURL)
         }
+        .task(id: inPlayRefreshContext) {
+            let context = inPlayRefreshContext
+            guard context.shouldRefresh else { return }
+            while !Task.isCancelled {
+                await game.refreshInPlayRound(apiBaseURL: context.apiBaseURL)
+                do { try await Task.sleep(for: .seconds(10)) }
+                catch { return }
+            }
+        }
         .onChange(of: invitationRouter.pendingInvitation) { _, _ in openPendingInvitation() }
         .onChange(of: invitationCode) { _, code in
             if let code { path = [.leagues(code)] }
@@ -104,6 +120,14 @@ struct PredictionGameMenuFlow: View {
                   competitionID == game.selectedCompetitionID else { return }
             predictionSet = loaded
         }
+    }
+
+    private var inPlayRefreshContext: InPlayRefreshContext {
+        InPlayRefreshContext(
+            apiBaseURL: preferences.apiBaseURL,
+            competitionID: game.selectedCompetitionID,
+            shouldRefresh: path.isEmpty && scenePhase == .active
+        )
     }
 
     private var rules: some View {

@@ -1200,6 +1200,15 @@ async function deleteBsdRecordsNotIn(collectionName, keepIds = []) {
   return result.deletedCount || 0;
 }
 
+async function deleteBsdRecord(collectionName, id) {
+  const mongoDb = await getDb();
+  if (!mongoDb) return false;
+  const normalizedId = normalizeRecordId(id);
+  if (!normalizedId) return false;
+  const result = await collection(collectionName).deleteOne({ _id: normalizedId });
+  return (result.deletedCount || 0) > 0;
+}
+
 async function getBsdRecord(collectionName, id) {
   const mongoDb = await getDb();
   if (!mongoDb) return null;
@@ -1249,6 +1258,7 @@ module.exports = {
   getBsdRecords,
   getBsdRecordIds,
   getBsdRecord,
+  deleteBsdRecord,
   deleteBsdRecordsNotIn,
   __private: {
     configuredMongoPoolSize,

@@ -29,6 +29,7 @@ final class PredictionGameStore: ObservableObject {
     @Published private(set) var seasons: [PredictionGameSeason] = []
     @Published private(set) var recentGameweeks: [PredictionGameRecentGameweek] = []
     @Published private(set) var latestResult: PredictionGameRecentGameweek?
+    @Published private(set) var inPlayRound: PredictionGameInPlayRound?
     @Published private(set) var leaderboards: [PredictionGameLeaderboardRow] = []
     @Published private(set) var hasMoreHistory = false
 
@@ -291,6 +292,31 @@ final class PredictionGameStore: ObservableObject {
         }
     }
 
+    /// Poll the server-owned current-round score only while the game menu is visible.
+    func refreshInPlayRound(apiBaseURL: String) async {
+        let competitionID = selectedCompetitionID
+        let competitionScope = competitionGeneration
+        let hadLiveRound = inPlayRound != nil
+        do {
+            let context = try await session(apiBaseURL: apiBaseURL)
+            let response = try await context.client.inPlay(
+                credential: context.credential,
+                competitionId: competitionID
+            )
+            try check(context)
+            guard competitionGeneration == competitionScope,
+                  selectedCompetitionID == competitionID,
+                  response.competitionId == competitionID else { return }
+            syncClock(response.serverTime)
+            inPlayRound = response.round
+            if hadLiveRound, response.round == nil {
+                await loadDashboard(apiBaseURL: apiBaseURL)
+            }
+        } catch {
+            // A transient score refresh should not replace the usable dashboard.
+        }
+    }
+
     func loadFixture(fixtureID: String, apiBaseURL: String) async -> PredictionGameFixture? {
         guard enabled else { return nil }
         errorMessage = nil
@@ -491,6 +517,7 @@ final class PredictionGameStore: ObservableObject {
         // disappearance belongs to this connection, rather than navigation away.
         guard gameCenter?.isPresentingAuthentication != true else { return }
         gameScreenVisible = false
+        inPlayRound = nil
         invalidatePrivateLeagueSession()
         automaticGameCenterAttempt = nil
         cancelGameCenterConnection()
@@ -930,6 +957,7 @@ final class PredictionGameStore: ObservableObject {
         achievements = []
         seasons = []
         recentGameweeks = []
+        inPlayRound = nil
         leaderboards = []
         gameCenterLeaderboardID = nil
         hasMoreHistory = false

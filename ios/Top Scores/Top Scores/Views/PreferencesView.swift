@@ -96,6 +96,7 @@ struct PreferencesView: View {
     @State private var predictionDebugStatusMessage: String?
     @State private var deviceIDDebugStatusMessage: String?
     @State private var isMajorTeamsExpanded = false
+    @State private var isEditingCustomFixtureView = false
 
     var body: some View {
         Group {
@@ -580,7 +581,7 @@ struct PreferencesView: View {
                             FixturePreferenceOptionRow(
                                 title: option.title,
                                 subtitle: option.subtitle,
-                                isSelected: fixtureViewOptionIsSelected(
+                                selectionState: fixtureViewOptionSelectionState(
                                     option.id,
                                     editingFavourites: editingFavourites
                                 ),
@@ -602,7 +603,7 @@ struct PreferencesView: View {
                             FixturePreferenceOptionRow(
                                 title: competition.name,
                                 subtitle: "Competition",
-                                isSelected: fixtureViewOptionIsSelected(
+                                selectionState: fixtureViewOptionSelectionState(
                                     optionID,
                                     editingFavourites: editingFavourites
                                 ),
@@ -815,6 +816,7 @@ struct PreferencesView: View {
     private var fixturePreferenceModeBinding: Binding<FixturePreferenceMode> {
         Binding(
             get: {
+                if isEditingCustomFixtureView { return .custom }
                 if preferences.showAllMatches { return .all }
                 if Set(preferences.selectedFixtureViewOptionIDs) == Set([FixtureViewOptionID.topTeamsPreset]),
                    !preferences.fixtureAllMajorMatchesEnabled {
@@ -830,6 +832,8 @@ struct PreferencesView: View {
                     : .custom
             },
             set: { mode in
+                let customOptionIDs = fixtureViewOptionIDsForCustomEditing
+                isEditingCustomFixtureView = mode == .custom
                 preferences.performBatchUpdate {
                     preferences.fixtureAllMajorMatchesEnabled = mode == .favourites
                     preferences.showAllMatches = mode == .all
@@ -845,19 +849,30 @@ struct PreferencesView: View {
                         preferences.selectedFixtureViewOptionIDs =
                             FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs.sorted()
                     }
-                    if mode == .custom,
-                       preferences.selectedFixtureViewOptionIDs.isEmpty ||
-                        Set(preferences.selectedFixtureViewOptionIDs) == Set([FixtureViewOptionID.topTeamsPreset]) ||
-                        Set(preferences.selectedFixtureViewOptionIDs) ==
-                            FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs {
-                        preferences.selectedFixtureViewOptionIDs = preferences.hasSavedFavouriteFixtureView
-                            ? preferences.favouriteFixtureViewOptionIDs.filter { $0 != FixtureViewOptionID.all }
-                            : []
+                    if mode == .custom {
+                        preferences.selectedFixtureViewOptionIDs = customOptionIDs.sorted()
                     }
                 }
                 AppMetricsService.shared.fireActivity("pref_fixtures_all_major_matches_toggle", screen: "preferences", apiBaseURL: preferences.apiBaseURL)
             }
         )
+    }
+
+    private var fixtureViewOptionIDsForCustomEditing: Set<String> {
+        if preferences.showAllMatches {
+            let catalogOptionIDs = Set(viewModel.competitionCatalog.map {
+                FixtureViewOptionID.competition($0.stableID)
+            })
+            return catalogOptionIDs.isEmpty
+                ? Set(preferences.selectedFixtureViewOptionIDs)
+                : catalogOptionIDs
+        }
+        if preferences.fixtureAllMajorMatchesEnabled {
+            return Set(preferences.favouriteFixtureViewOptionIDs).subtracting([
+                FixtureViewOptionID.all
+            ])
+        }
+        return Set(preferences.selectedFixtureViewOptionIDs)
     }
 
     private var availableFixturePreferenceModes: [FixturePreferenceMode] {
@@ -1041,14 +1056,20 @@ struct PreferencesView: View {
             }
     }
 
-    private func fixtureViewOptionIsSelected(
+    private func fixtureViewOptionSelectionState(
         _ optionID: String,
         editingFavourites: Bool
-    ) -> Bool {
-        let optionIDs = editingFavourites
+    ) -> FixturePreferenceOptionRow.SelectionState {
+        let optionIDs = Set(editingFavourites
             ? preferences.favouriteFixtureViewOptionIDs
-            : preferences.selectedFixtureViewOptionIDs
-        return optionIDs.contains(optionID)
+            : preferences.selectedFixtureViewOptionIDs)
+        if optionIDs.contains(optionID) { return .selected }
+        if !editingFavourites,
+           optionIDs.contains(FixtureViewOptionID.topTeamsPreset),
+           topTeamsPresetStore.preset.reflectedFixtureViewOptionIDs.contains(optionID) {
+            return .includedByPreset
+        }
+        return .notSelected
     }
 
     private func toggleFixtureViewOption(
@@ -1221,9 +1242,15 @@ struct PreferencesView: View {
 }
 
 private struct FixturePreferenceOptionRow: View {
+    enum SelectionState: Equatable {
+        case notSelected
+        case includedByPreset
+        case selected
+    }
+
     let title: String
     let subtitle: String
-    let isSelected: Bool
+    let selectionState: SelectionState
     let action: () -> Void
 
     var body: some View {
@@ -1238,14 +1265,17 @@ private struct FixturePreferenceOptionRow: View {
                 }
                 Spacer()
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(isSelected ? Color.accentColor : Color.clear)
+                    .fill(selectionState == .notSelected ? Color.clear : Color.accentColor)
                     .overlay {
                         RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .stroke(isSelected ? Color.accentColor : Color.secondary, lineWidth: 1.25)
+                            .stroke(
+                                selectionState == .notSelected ? Color.secondary : Color.accentColor,
+                                lineWidth: 1.25
+                            )
                     }
                     .overlay {
-                        if isSelected {
-                            Image(systemName: "checkmark")
+                        if selectionState != .notSelected {
+                            Image(systemName: selectionState == .selected ? "checkmark" : "minus")
                                 .font(.caption2.weight(.bold))
                                 .foregroundStyle(.white)
                         }
@@ -1255,7 +1285,15 @@ private struct FixturePreferenceOptionRow: View {
             }
         }
         .accessibilityLabel(title)
-        .accessibilityValue(isSelected ? "Selected" : "Not selected")
+        .accessibilityValue(accessibilityValue)
+    }
+
+    private var accessibilityValue: String {
+        switch selectionState {
+        case .notSelected: return "Not selected"
+        case .includedByPreset: return "Included by Top teams"
+        case .selected: return "Selected"
+        }
     }
 }
 

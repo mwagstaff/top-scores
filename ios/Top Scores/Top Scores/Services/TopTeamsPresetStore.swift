@@ -139,6 +139,22 @@ struct TopTeamsPresetDefinition: Codable, Equatable, Sendable {
             .joined(separator: "-")
     }
 
+    nonisolated var reflectedFixtureViewOptionIDs: Set<String> {
+        var optionIDs = Set(
+            ([championsLeagueCompetitionID] + otherUEFACompetitionIDs)
+                .map(FixtureViewOptionID.competition)
+        )
+        optionIDs.insert(FixtureViewOptionID.competition(
+            premierLeagueCompetitionID ?? "premier-league"
+        ))
+        optionIDs.formUnion(
+            (unconditionalTeams + conditionalUEFATeams)
+                .map(\.id)
+                .map(FixtureViewOptionID.team)
+        )
+        return optionIDs
+    }
+
     nonisolated func sanitized() -> TopTeamsPresetDefinition {
         let excludedConditionalTeamKeys: Set<String> = [
             Self.normalizedTeamKey("FK Arsenal Tivat"),

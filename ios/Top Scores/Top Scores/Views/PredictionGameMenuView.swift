@@ -8,6 +8,7 @@ struct PredictionGameMenuView: View {
     @Environment(\.accessibilityDimFlashingLights) private var dimFlashingLights
     @ScaledMetric(relativeTo: .largeTitle) private var heroTitleSize = 46
     @State private var latestResultMessage = ""
+    @State private var inPlayMessage = ""
     @State private var celebratedRoundID: String?
     @State private var fireworksID = UUID()
     @State private var showsFireworks = false
@@ -53,6 +54,7 @@ struct PredictionGameMenuView: View {
                     hero
                     VStack(spacing: 20) {
                         visibilityCard
+                        if let inPlayRound = game.inPlayRound { inPlayCard(inPlayRound) }
                         if let latestResult { latestResultCard(latestResult) }
                         predictionCallToAction
                         benefits
@@ -90,6 +92,9 @@ struct PredictionGameMenuView: View {
         .onChange(of: latestResult, initial: true) { _, result in
             present(result)
         }
+        .onChange(of: game.inPlayRound, initial: true) { _, round in
+            presentInPlay(round)
+        }
     }
 
     private var hero: some View {
@@ -103,7 +108,7 @@ struct PredictionGameMenuView: View {
                 .font(.system(size: min(heroTitleSize, 56), weight: .black, design: .rounded))
                 .shadow(color: .black.opacity(0.7), radius: 12, y: 3)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Don't let humanity down. We're counting on you.")
+            Text("Don't let humanity down. The robots are watching.")
                 .font(.headline)
                 .shadow(color: .black, radius: 8)
                 .fixedSize(horizontal: false, vertical: true)
@@ -176,6 +181,80 @@ struct PredictionGameMenuView: View {
 
     private var latestResult: PredictionGameRecentGameweek? {
         game.latestResult
+    }
+
+    private func inPlayCard(_ round: PredictionGameInPlayRound) -> some View {
+        let presentation = BeatAIInPlayPresentation(outcome: round.headToHeadOutcome)
+        return BeatAIPanel(accent: presentation.color) {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Circle()
+                        .fill(BeatAIStyle.red)
+                        .frame(width: 9, height: 9)
+                        .shadow(color: BeatAIStyle.red.opacity(0.75), radius: 5)
+                        .accessibilityHidden(true)
+                    Text("In play")
+                        .font(.subheadline.weight(.bold))
+                    Spacer(minLength: 8)
+                    Text("\(round.resolvedCompetitionName) · \(round.label)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(BeatAIStyle.muted)
+                        .multilineTextAlignment(.trailing)
+                }
+
+                inPlayScoreboard(round, presentation: presentation)
+
+                Text(inPlayMessage)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(presentation.color)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text("\(round.scoredMatches) \(round.scoredMatches == 1 ? "match" : "matches") scored so far · \(round.liveMatches) live")
+                    .font(.caption)
+                    .foregroundStyle(BeatAIStyle.muted)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                "In play, \(round.label). \(presentation.title). You \(round.youPoints) points. " +
+                    "AI \(round.aiPoints) points. \(inPlayMessage)"
+            )
+        }
+        .accessibilityIdentifier("beat-ai-in-play")
+    }
+
+    @ViewBuilder
+    private func inPlayScoreboard(
+        _ round: PredictionGameInPlayRound,
+        presentation: BeatAIInPlayPresentation
+    ) -> some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(spacing: 12) {
+                HStack(spacing: 12) {
+                    latestResultScore(title: "YOU", points: round.youPoints, color: presentation.color)
+                    latestResultScore(title: "AI", points: round.aiPoints, color: BeatAIStyle.purple)
+                }
+                inPlayOutcome(presentation)
+            }
+        } else {
+            HStack(spacing: 20) {
+                latestResultScore(title: "YOU", points: round.youPoints, color: presentation.color)
+                inPlayOutcome(presentation)
+                    .frame(maxWidth: .infinity)
+                latestResultScore(title: "AI", points: round.aiPoints, color: BeatAIStyle.purple)
+            }
+        }
+    }
+
+    private func inPlayOutcome(_ presentation: BeatAIInPlayPresentation) -> some View {
+        VStack(spacing: 5) {
+            Image(systemName: presentation.symbol)
+                .font(.title3.weight(.bold))
+                .foregroundStyle(presentation.color)
+                .accessibilityHidden(true)
+            Text(presentation.title)
+                .font(.caption.weight(.bold))
+                .multilineTextAlignment(.center)
+        }
     }
 
     private func latestResultCard(_ result: PredictionGameRecentGameweek) -> some View {
@@ -274,6 +353,14 @@ struct PredictionGameMenuView: View {
         celebratedRoundID = result.id
         fireworksID = UUID()
         withAnimation(.easeOut(duration: 0.2)) { showsFireworks = true }
+    }
+
+    private func presentInPlay(_ round: PredictionGameInPlayRound?) {
+        guard let round else {
+            inPlayMessage = ""
+            return
+        }
+        inPlayMessage = BeatAIInPlayCopy.random(for: round.headToHeadOutcome)
     }
 
     private var predictionCallToAction: some View {
@@ -453,6 +540,67 @@ struct BeatAILatestResultPresentation {
             symbol = "cpu.fill"
             color = BeatAIStyle.red
         }
+    }
+}
+
+struct BeatAIInPlayPresentation {
+    let title: String
+    let symbol: String
+    let color: Color
+
+    init(outcome: PredictionGameRoundOutcome) {
+        switch outcome {
+        case .userWin:
+            title = "You’re ahead"
+            symbol = "figure.soccer"
+            color = BeatAIStyle.green
+        case .draw:
+            title = "All square"
+            symbol = "equal.circle.fill"
+            color = BeatAIStyle.gold
+        case .aiWin:
+            title = "AI leads"
+            symbol = "cpu.fill"
+            color = BeatAIStyle.red
+        }
+    }
+}
+
+enum BeatAIInPlayCopy {
+    static let wins = [
+        "Humanity is ahead. Try to look as though you expected this.",
+        "The machines are wobbling. Somebody fetch the extension lead.",
+        "Human instinct leads, to the surprise of several spreadsheets.",
+        "You’re winning. The algorithm would prefer we changed the subject.",
+        "Carbon-based life has the upper hand. For now."
+    ]
+
+    static let draws = [
+        "All square. Even the smug little processor looks tense.",
+        "Level pegging. Absolutely nobody is comfortable.",
+        "Nothing between you and several billion calculations.",
+        "Honours even, with plenty of time for a proper collapse.",
+        "Dead level. The nation remains cautiously underwhelmed."
+    ]
+
+    static let losses = [
+        "The machines lead. This is how the documentaries begin.",
+        "AI ahead. Human intuition is currently stuck in traffic.",
+        "The algorithm leads and is being thoroughly unbearable about it.",
+        "A minor setback for humanity. Probably nothing to worry about.",
+        "The robots are on top. At least they can’t celebrate properly."
+    ]
+
+    static func messages(for outcome: PredictionGameRoundOutcome) -> [String] {
+        switch outcome {
+        case .userWin: wins
+        case .draw: draws
+        case .aiWin: losses
+        }
+    }
+
+    static func random(for outcome: PredictionGameRoundOutcome) -> String {
+        messages(for: outcome).randomElement() ?? "Still plenty of football left."
     }
 }
 

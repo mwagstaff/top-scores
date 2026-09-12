@@ -72,6 +72,10 @@ nonisolated struct PredictionGameAPIClient: Sendable {
         ])
     }
 
+    func inPlay(credential: String, competitionId: String) async throws -> PredictionGameInPlayResponse {
+        try await request(path: "in-play", credential: credential, query: competitionQuery(competitionId))
+    }
+
     func nextPredictions(fixtureID: String? = nil, credential: String, includeLocked: Bool = false, competitionId: String? = nil) async throws -> PredictionGamePredictionSet {
         var query = competitionQuery(competitionId)
         if let fixtureID {

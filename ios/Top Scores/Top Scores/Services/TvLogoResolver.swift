@@ -1,7 +1,7 @@
 import Foundation
 import UIKit
 
-final class TvLogoResolver {
+nonisolated final class TvLogoResolver: @unchecked Sendable {
     static let shared = TvLogoResolver()
 
     private let fallbackName = "_noLogo"
@@ -10,9 +10,15 @@ final class TvLogoResolver {
     private var expandedDarkLookup: [String: URL] = [:]
     private var resolvedURLCache: [String: URL] = [:]
     private var unresolvedChannelKeys: Set<String> = []
+    private let resolutionLock = NSLock()
     private let imageCache: NSCache<NSString, UIImage> = {
         let cache = NSCache<NSString, UIImage>()
         cache.countLimit = 64
+        return cache
+    }()
+    private let displayImageCache: NSCache<NSString, UIImage> = {
+        let cache = NSCache<NSString, UIImage>()
+        cache.countLimit = 128
         return cache
     }()
 
@@ -25,19 +31,30 @@ final class TvLogoResolver {
         var seenFiles = Set<String>()
 
         for channel in channels {
-            guard let url = resolveURL(for: channel) ?? resolveURL(for: fallbackName) else { continue }
+            let displayKey = Self.normalizedKey(channel) as NSString
+            if let cached = displayImageCache.object(forKey: displayKey) {
+                let imageKey = "cached:\(ObjectIdentifier(cached))"
+                guard seenFiles.insert(imageKey).inserted else { continue }
+                results.append(cached)
+                continue
+            }
+            guard let url = resolutionLock.withLock({
+                resolveURL(for: channel) ?? resolveURL(for: fallbackName)
+            }) else { continue }
             let fileKey = url.path
             if seenFiles.contains(fileKey) { continue }
             seenFiles.insert(fileKey)
 
             let cacheKey = fileKey as NSString
             if let cached = imageCache.object(forKey: cacheKey) {
+                displayImageCache.setObject(cached, forKey: displayKey)
                 results.append(cached)
                 continue
             }
 
             if let image = UIImage(contentsOfFile: url.path) {
                 imageCache.setObject(image, forKey: cacheKey)
+                displayImageCache.setObject(image, forKey: displayKey)
                 results.append(image)
             }
         }
@@ -46,19 +63,70 @@ final class TvLogoResolver {
     }
 
     func image(for channelName: String) -> UIImage? {
-        let url = resolveURL(for: channelName) ?? resolveURL(for: fallbackName)
+        let displayKey = Self.normalizedKey(channelName) as NSString
+        if let cached = displayImageCache.object(forKey: displayKey) {
+            return cached
+        }
+        let url = resolutionLock.withLock {
+            resolveURL(for: channelName) ?? resolveURL(for: fallbackName)
+        }
         guard let url else { return nil }
 
         let cacheKey = url.path as NSString
         if let cached = imageCache.object(forKey: cacheKey) {
+            displayImageCache.setObject(cached, forKey: displayKey)
             return cached
         }
 
         let image = UIImage(contentsOfFile: url.path)
         if let image {
             imageCache.setObject(image, forKey: cacheKey)
+            displayImageCache.setObject(image, forKey: displayKey)
         }
         return image
+    }
+
+    func prepareImagesForDisplay(for channelNames: [String]) {
+        let uniqueChannelNames = Set(channelNames)
+        guard !uniqueChannelNames.isEmpty else { return }
+
+        ArtworkDisplayPreparationQueue.shared.async { [weak self, uniqueChannelNames] in
+            guard let self else { return }
+            let startedAt = ProcessInfo.processInfo.systemUptime
+            var preparedCount = 0
+            for channelName in uniqueChannelNames {
+                autoreleasepool {
+                    InteractiveMotionGate.shared.waitUntilIdleBlocking(
+                        operation: "fixture_tv_artwork"
+                    )
+                    let url = self.resolutionLock.withLock {
+                        self.resolveURL(for: channelName) ??
+                            self.resolveURL(for: self.fallbackName)
+                    }
+                    guard let url else { return }
+                    let cacheKey = url.path as NSString
+                    let sourceImage = self.imageCache.object(forKey: cacheKey) ??
+                        UIImage(contentsOfFile: url.path)
+                    guard let sourceImage else { return }
+                    let preparedImage = sourceImage.preparingForDisplay() ?? sourceImage
+                    self.imageCache.setObject(preparedImage, forKey: cacheKey)
+                    self.displayImageCache.setObject(
+                        preparedImage,
+                        forKey: Self.normalizedKey(channelName) as NSString
+                    )
+                    preparedCount += 1
+                }
+            }
+            let durationMilliseconds = Int(
+                ((ProcessInfo.processInfo.systemUptime - startedAt) * 1_000).rounded()
+            )
+            if durationMilliseconds >= 25 {
+                diagnosticLogAsync(
+                    "[FixtureArtwork] tv_batch entries=\(uniqueChannelNames.count) " +
+                    "prepared=\(preparedCount) duration_ms=\(durationMilliseconds)"
+                )
+            }
+        }
     }
 
     func expandedImage(for channelName: String, isDarkAppearance: Bool = false) -> UIImage? {
@@ -66,12 +134,15 @@ final class TvLogoResolver {
         guard !normalized.isEmpty, normalized != Self.normalizedKey(fallbackName) else { return nil }
 
         // Unsupported broadcasters keep their text label instead of a guessed or placeholder logo.
-        let logoKey = normalizedLookup[normalized] != nil
-            ? normalized
-            : aliasKeywords.first(where: { normalized.hasPrefix($0.0) })?.1
-        guard let logoKey else { return nil }
-        let appearanceURL = isDarkAppearance ? expandedDarkLookup[logoKey] : nil
-        guard let url = appearanceURL ?? expandedLookup[logoKey] ?? normalizedLookup[logoKey] else { return nil }
+        let url = resolutionLock.withLock { () -> URL? in
+            let logoKey = normalizedLookup[normalized] != nil
+                ? normalized
+                : aliasKeywords.first(where: { normalized.hasPrefix($0.0) })?.1
+            guard let logoKey else { return nil }
+            let appearanceURL = isDarkAppearance ? expandedDarkLookup[logoKey] : nil
+            return appearanceURL ?? expandedLookup[logoKey] ?? normalizedLookup[logoKey]
+        }
+        guard let url else { return nil }
 
         let cacheKey = url.path as NSString
         if let cached = imageCache.object(forKey: cacheKey) {

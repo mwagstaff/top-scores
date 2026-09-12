@@ -588,7 +588,18 @@ struct APIClient {
         let request = try buildRequest(path: "tables", queryItems: [])
         let (data, http) = try await performRequest(request, operation: "league_tables")
         try validateSuccess(http, data: data, operation: "league_tables")
+        let decodeStartedAt = ProcessInfo.processInfo.systemUptime
         let payload = try JSONDecoder().decode(LeagueTablesEnvelope.self, from: data)
+        let decodeMilliseconds = Int(
+            ((ProcessInfo.processInfo.systemUptime - decodeStartedAt) * 1_000).rounded()
+        )
+        if decodeMilliseconds >= 8 {
+            performanceDiagnosticLogAsync(
+                "[CatalogPerformance] phase=league_tables_decode duration_ms=\(decodeMilliseconds) " +
+                "bytes=\(data.count) interaction_active=\(InteractiveMotionGate.shared.isActive ? 1 : 0) " +
+                "main_thread=\(Thread.isMainThread ? 1 : 0)"
+            )
+        }
 
         let formatter = ISO8601DateFormatter()
         let headerUpdatedAt = http
@@ -1808,7 +1819,7 @@ struct TeamRankingSettingsResponse: Codable, Hashable, Sendable {
     }
 }
 
-struct TeamColorsCatalogResponse: Codable, Hashable, Sendable {
+nonisolated struct TeamColorsCatalogResponse: Codable, Hashable, Sendable {
     let updatedAt: String?
     let defaultStyle: TeamColorStyleResponse
     let teams: [TeamColorRecordResponse]
@@ -1842,13 +1853,13 @@ struct TeamColorsCatalogResponse: Codable, Hashable, Sendable {
     }
 }
 
-struct TeamColorStyleResponse: Codable, Hashable, Sendable {
+nonisolated struct TeamColorStyleResponse: Codable, Hashable, Sendable {
     let primary: String
     let secondary: String
     let scheme: String?
 }
 
-struct TeamColorRecordResponse: Codable, Hashable, Sendable {
+nonisolated struct TeamColorRecordResponse: Codable, Hashable, Sendable {
     let name: String
     let aliases: [String]
     let primary: String
@@ -1856,7 +1867,7 @@ struct TeamColorRecordResponse: Codable, Hashable, Sendable {
     let scheme: String?
 }
 
-struct TeamIdentityGroupResponse: Codable, Hashable, Sendable {
+nonisolated struct TeamIdentityGroupResponse: Codable, Hashable, Sendable {
     let name: String
     let aliases: [String]
 }

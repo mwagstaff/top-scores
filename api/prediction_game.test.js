@@ -102,6 +102,21 @@ test("3/1/0 scoring treats draws and both competitors identically", () => {
   assert.equal(pointsFor(null, result), null);
 });
 
+test("fixture responses expose current live scores and clear them at full time", () => {
+  const base = {
+    id: 123, league_id: 1, season_id: 203, home_team: "Arsenal", away_team: "Chelsea",
+    event_date: "2026-09-12T14:00:00Z", status: "inprogress", period: "2nd_half",
+    current_minute: 67, home_score: 2, away_score: 1,
+  };
+  const live = p.fixtureFromEvent({ _id: "123", payload: base });
+  assert.deepEqual(live.liveScore, { homeScore: 2, awayScore: 1, status: "67" });
+  assert.equal(p.fixtureResponse(live, null).result, null);
+
+  const finished = p.fixtureFromEvent({ _id: "123", payload: { ...base, status: "finished", period: "ft", current_minute: 90 } }, live);
+  assert.equal(finished.liveScore, null);
+  assert.deepEqual(p.fixtureResponse(finished, null).result, { homeScore: 2, awayScore: 1 });
+});
+
 test("Ten Steps Ahead records reaching the milestone even after later losses", () => {
   const entries = Array.from({ length: 5 }, (_, i) => ({ fixtureId: String(i), kickoffAt: `2026-09-1${i}T12:00:00Z`, youPoints: i < 4 ? 3 : 0, aiPoints: i < 4 ? 0 : 3 }));
   const achievement = p.buildAchievements(entries, [], []).find((a) => a.id === "tenStepsAhead");
@@ -686,6 +701,34 @@ async function httpRequest(harness, credential, path, query = {}, body) {
   await harness.routes.get(`get /api/v1/prediction-game/${path}`)({ headers: { authorization: `Bearer ${credential}` }, query, body }, response);
   return response;
 }
+
+test("in-play round totals completed and live predicted matches using the same scoring rules", async () => {
+  const c = multiCompetitionContext();
+  const finished = c.add(101, 1, "2030-09-06T12:00:00Z");
+  const live = c.add(102, 1, "2030-09-06T14:00:00Z");
+  await c.game.sync(true);
+  const predictionDoc = c.db.tables.get("bsd_predictions").find((row) => row._id === "1");
+  await c.game.save(c.db, c.player, "101", {
+    homeScore: 1, awayScore: 1,
+    expectedAIRevision: aiPrediction(predictionDoc.payload.find((item) => item.event.id === 101)).sourceRevision,
+  });
+  await c.game.save(c.db, c.player, "102", {
+    homeScore: 2, awayScore: 0,
+    expectedAIRevision: aiPrediction(predictionDoc.payload.find((item) => item.event.id === 102)).sourceRevision,
+  });
+  Object.assign(finished.payload, { status: "finished", period: "ft", current_minute: 90, home_score: 1, away_score: 1 });
+  Object.assign(live.payload, { status: "inprogress", period: "2nd_half", current_minute: 67, home_score: 2, away_score: 0 });
+  c.setNow(Date.parse(live.payload.event_date) + 60 * 60 * 1000);
+  await c.game.sync(true);
+
+  const round = await p.inPlayGameweek(c.db, c.player._id, "1", c.game.now);
+  assert.equal(round.label, "Gameweek 4");
+  assert.equal(round.youPoints, 6);
+  assert.equal(round.aiPoints, 1);
+  assert.equal(round.scoredMatches, 2);
+  assert.equal(round.liveMatches, 1);
+  assert.equal(round.totalMatches, 2);
+});
 
 test("mixed fixture batches read only the involved prediction competitions and save non-EPL entries", async () => {
   const c = multiCompetitionContext(); c.add(101, 1); c.add(201, 7);

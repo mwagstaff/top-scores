@@ -1358,7 +1358,9 @@ final class FantasyViewModel: ObservableObject {
                 managerName: member.playerName,
                 clubBadgeSrc: myProfile?.clubBadgeSrc ?? member.clubBadgeSrc,
                 squad: data,
-                allGameweeksPoints: myProfile?.summaryOverallPoints ?? member.total,
+                allGameweeksPoints: data.seasonTotalPoints
+                    ?? myProfile?.summaryOverallPoints
+                    ?? member.total,
                 projectedGameweekPoints: currentSquadProjectedGameweekPoints,
                 expectedPointsSection: nil,
                 isExpectedPointsLoading: false
@@ -1414,7 +1416,9 @@ final class FantasyViewModel: ObservableObject {
             managerName: member.playerName,
             clubBadgeSrc: profile?.clubBadgeSrc ?? member.clubBadgeSrc,
             squad: squad,
-            allGameweeksPoints: profile?.summaryOverallPoints ?? member.total,
+            allGameweeksPoints: squad.seasonTotalPoints
+                ?? profile?.summaryOverallPoints
+                ?? member.total,
             projectedGameweekPoints: nil,
             expectedPointsSection: nil,
             isExpectedPointsLoading: false
@@ -1869,7 +1873,9 @@ final class FantasyViewModel: ObservableObject {
                         managerName: rival.managerDisplayName,
                         clubBadgeSrc: rivalProfile?.clubBadgeSrc ?? rival.clubBadgeSrc,
                         squad: rivalSquad,
-                        allGameweeksPoints: rivalProfile?.summaryOverallPoints ?? rival.overallPoints,
+                        allGameweeksPoints: rivalSquad.seasonTotalPoints
+                            ?? rivalProfile?.summaryOverallPoints
+                            ?? rival.overallPoints,
                         projectedGameweekPoints: nil,
                         expectedPointsSection: nil,
                         isExpectedPointsLoading: true

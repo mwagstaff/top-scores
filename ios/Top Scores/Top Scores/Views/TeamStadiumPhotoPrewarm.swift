@@ -1,6 +1,19 @@
 import SwiftUI
 
+private struct TeamStadiumPhotoPrewarmingEnabledKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    var teamStadiumPhotoPrewarmingEnabled: Bool {
+        get { self[TeamStadiumPhotoPrewarmingEnabledKey.self] }
+        set { self[TeamStadiumPhotoPrewarmingEnabledKey.self] = newValue }
+    }
+}
+
 private struct TeamStadiumPhotoPrewarmModifier: ViewModifier {
+    @Environment(\.teamStadiumPhotoPrewarmingEnabled) private var isPrewarmingEnabled
+
     let context: TeamDetailsContext
     let candidateMatches: [Match]
     let apiBaseURL: String
@@ -16,13 +29,18 @@ private struct TeamStadiumPhotoPrewarmModifier: ViewModifier {
         ].joined(separator: "|")
     }
 
+    @ViewBuilder
     func body(content: Content) -> some View {
-        content.task(id: taskID) {
-            await TeamLinkStadiumPhotoPrewarmer.shared.prewarm(
-                context: context,
-                candidateMatches: candidateMatches,
-                apiBaseURL: apiBaseURL
-            )
+        if isPrewarmingEnabled {
+            content.task(id: taskID, priority: .utility) {
+                await TeamLinkStadiumPhotoPrewarmer.shared.prewarm(
+                    context: context,
+                    candidateMatches: candidateMatches,
+                    apiBaseURL: apiBaseURL
+                )
+            }
+        } else {
+            content
         }
     }
 }

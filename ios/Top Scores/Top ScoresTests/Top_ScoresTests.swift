@@ -2124,6 +2124,31 @@ struct Top_ScoresTests {
             majorEuropa.id,
             ireland.id,
         ])
+
+        let additiveFiltered = FixtureBrowseSelectionResolver.filterMatches(
+            [promotedPremierLeagueTeams, leaguePhase, majorDomestic],
+            topMatchesOnly: false,
+            selectedCompetitionIDs: [],
+            competitions: competitions,
+            fixtureViewOptionIDs: Set([
+                FixtureViewOptionID.topTeamsPreset,
+                FixtureViewOptionID.team("juventus"),
+            ]),
+            includePostponed: false,
+            topTeamsMatcher: matcher
+        )
+
+        #expect(additiveFiltered.map(\.id) == [
+            promotedPremierLeagueTeams.id,
+            leaguePhase.id,
+            majorDomestic.id,
+        ])
+        #expect(definition.reflectedFixtureViewOptionIDs.contains(
+            FixtureViewOptionID.competition("premier-league")
+        ))
+        #expect(definition.reflectedFixtureViewOptionIDs.contains(
+            FixtureViewOptionID.team("juventus")
+        ))
     }
 
     @Test func topTeamsPresetSanitizesFalseMatchesAndDuplicateAliases() {

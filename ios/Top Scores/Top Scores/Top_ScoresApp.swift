@@ -125,6 +125,9 @@ struct Top_ScoresApp: App {
             try? await Task.sleep(nanoseconds: startupDeferredDelayNanos)
             guard !Task.isCancelled else { return }
 
+            guard await InteractiveMotionGate.shared.waitUntilIdle(
+                operation: "startup_preferences_sync"
+            ) else { return }
             PerformanceSignposter.startup.emitEvent("DeferredStartupPreferencesSync")
             await PreferencesSyncService.shared.syncPreferences(snapshot)
             guard !Task.isCancelled else { return }
@@ -132,6 +135,9 @@ struct Top_ScoresApp: App {
             try? await Task.sleep(nanoseconds: startupDeferredSpacingNanos)
             guard !Task.isCancelled else { return }
 
+            guard await InteractiveMotionGate.shared.waitUntilIdle(
+                operation: "startup_app_metric"
+            ) else { return }
             PerformanceSignposter.startup.emitEvent("DeferredStartupAppMetric")
             await AppMetricsService.shared.sendAppOpenMetric(apiBaseURL: snapshot.apiBaseURL)
             guard !Task.isCancelled else { return }
@@ -139,6 +145,9 @@ struct Top_ScoresApp: App {
             try? await Task.sleep(nanoseconds: startupDeferredSpacingNanos)
             guard !Task.isCancelled else { return }
 
+            guard await InteractiveMotionGate.shared.waitUntilIdle(
+                operation: "startup_league_tables"
+            ) else { return }
             PerformanceSignposter.startup.emitEvent("DeferredStartupLeagueTablesPrefetch")
             await LeagueTablesCatalog.shared.prefetch(apiBaseURL: snapshot.apiBaseURL)
             guard !Task.isCancelled else { return }
@@ -146,6 +155,9 @@ struct Top_ScoresApp: App {
             try? await Task.sleep(nanoseconds: startupDeferredSpacingNanos)
             guard !Task.isCancelled else { return }
 
+            guard await InteractiveMotionGate.shared.waitUntilIdle(
+                operation: "startup_team_rating_settings"
+            ) else { return }
             PerformanceSignposter.startup.emitEvent("DeferredStartupTeamRatingSettings")
             await TeamRankingSettingsCatalog.shared.ensureFresh(apiBaseURL: snapshot.apiBaseURL)
             guard !Task.isCancelled else { return }
@@ -153,6 +165,9 @@ struct Top_ScoresApp: App {
             try? await Task.sleep(nanoseconds: startupDeferredSpacingNanos)
             guard !Task.isCancelled else { return }
 
+            guard await InteractiveMotionGate.shared.waitUntilIdle(
+                operation: "startup_team_ratings"
+            ) else { return }
             PerformanceSignposter.startup.emitEvent("DeferredStartupTeamRatings")
             await TeamRankingsCatalog.shared.ensureFresh(apiBaseURL: snapshot.apiBaseURL)
             guard !Task.isCancelled else { return }
@@ -160,6 +175,9 @@ struct Top_ScoresApp: App {
             try? await Task.sleep(nanoseconds: startupDeferredSpacingNanos)
             guard !Task.isCancelled else { return }
 
+            guard await InteractiveMotionGate.shared.waitUntilIdle(
+                operation: "startup_predictions"
+            ) else { return }
             PerformanceSignposter.startup.emitEvent("DeferredStartupPredictions")
             await PredictionsCatalog.shared.ensureFresh(apiBaseURL: snapshot.apiBaseURL)
             guard !Task.isCancelled else { return }

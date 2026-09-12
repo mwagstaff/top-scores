@@ -448,8 +448,11 @@ nonisolated enum FixtureBrowseSelectionResolver {
         let competitionFiltered: [Match]
         if showAllMatches {
             competitionFiltered = displayableMatches
-        } else if fixtureViewOptionIDs == Set([FixtureViewOptionID.topTeamsPreset]) {
+        } else if fixtureViewOptionIDs.contains(FixtureViewOptionID.topTeamsPreset) {
             let lookup = preparedCompetitionLookup ?? competitionLookup(competitions)
+            let additionalOptionIDs = fixtureViewOptionIDs.subtracting([
+                FixtureViewOptionID.topTeamsPreset
+            ])
             competitionFiltered = displayableMatches.filter { match in
                 topTeamsMatcher.matches(
                     match,
@@ -457,7 +460,12 @@ nonisolated enum FixtureBrowseSelectionResolver {
                         for: match,
                         competitionLookup: lookup
                     )
-                )
+                ) || (!additionalOptionIDs.isEmpty && matchesFixtureViewOption(
+                    match,
+                    optionIDs: additionalOptionIDs,
+                    competitionLookup: lookup,
+                    premierLeagueTeamMatcher: premierLeagueTeamMatcher
+                ))
             }
         } else if fixtureViewOptionIDs == FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs {
             competitionFiltered = displayableMatches.filter(
@@ -1652,6 +1660,8 @@ final class FixtureBrowserStore: ObservableObject {
         prefetchTask = Task(priority: .utility) { [weak self] in
             guard let self else { return }
             guard !Task.isCancelled, prefetchRequestID == requestID else { return }
+            try? await waitUntilDateSwipeWorkMayPublish()
+            guard !Task.isCancelled, prefetchRequestID == requestID else { return }
             if let response = try? await APIClient(
                     baseURL: baseURL,
                     session: apiSession
@@ -1721,6 +1731,11 @@ final class FixtureBrowserStore: ObservableObject {
                     return
                 }
                 do {
+                    try await waitUntilDateSwipeWorkMayPublish()
+                    guard !Task.isCancelled,
+                          allFixturesWarmRequestID == requestID else {
+                        return
+                    }
                     let response = try await APIClient(
                         baseURL: baseURL,
                         session: apiSession
@@ -1960,7 +1975,7 @@ final class FixtureBrowserStore: ObservableObject {
         _ snapshot: PreferencesSnapshot
     ) -> Bool {
         let optionIDs = Set(snapshot.effectiveFixtureViewOptionIDs)
-        if optionIDs == Set([FixtureViewOptionID.topTeamsPreset]) {
+        if optionIDs.contains(FixtureViewOptionID.topTeamsPreset) {
             return true
         }
         if optionIDs == FixtureViewOptionID.premierLeagueMatchesPresetOptionIDs {
@@ -2034,7 +2049,7 @@ final class FixtureBrowserStore: ObservableObject {
     private func applyTopTeamsPreset(_ preset: TopTeamsPresetDefinition) {
         topTeamsMatcher = TopTeamsPresetMatcher(definition: preset)
         guard let snapshot,
-              Set(snapshot.effectiveFixtureViewOptionIDs) == Set([FixtureViewOptionID.topTeamsPreset]) else {
+              Set(snapshot.effectiveFixtureViewOptionIDs).contains(FixtureViewOptionID.topTeamsPreset) else {
             return
         }
         pageCache.replace(with: [:])

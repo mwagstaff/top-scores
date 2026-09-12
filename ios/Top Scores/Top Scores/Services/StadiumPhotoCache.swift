@@ -210,13 +210,17 @@ actor StadiumPhotoCache {
             .appendingPathComponent(cacheKey(for: remoteURL))
             .appendingPathExtension("image")
 
-        if let data = try? Data(contentsOf: fileURL),
-           let image = renderableImage(from: data) {
-            try? FileManager.default.setAttributes(
-                [.modificationDate: Date()],
-                ofItemAtPath: fileURL.path
-            )
-            return image
+        if let data = try? Data(contentsOf: fileURL) {
+            guard await InteractiveMotionGate.shared.waitUntilIdle(
+                operation: "stadium_photo_disk_decode"
+            ) else { return nil }
+            if let image = renderableImage(from: data) {
+                try? FileManager.default.setAttributes(
+                    [.modificationDate: Date()],
+                    ofItemAtPath: fileURL.path
+                )
+                return image
+            }
         }
 
         do {
@@ -226,10 +230,12 @@ actor StadiumPhotoCache {
                   (200..<300).contains(http.statusCode),
                   http.mimeType?.lowercased().hasPrefix("image/") != false,
                   !data.isEmpty,
-                  data.count <= maximumDownloadBytes,
-                  let image = renderableImage(from: data) else {
+                  data.count <= maximumDownloadBytes else {
                 return nil
             }
+            guard await InteractiveMotionGate.shared.waitUntilIdle(
+                operation: "stadium_photo_network_decode"
+            ), let image = renderableImage(from: data) else { return nil }
 
             try FileManager.default.createDirectory(
                 at: cacheDirectory,
@@ -443,7 +449,7 @@ actor StadiumPhotoPrewarmer {
     static let shared = StadiumPhotoPrewarmer()
 
     private static let refreshInterval: TimeInterval = 6 * 60 * 60
-    private static let maximumConcurrentDetailsRequests = 3
+    private static let maximumConcurrentDetailsRequests = 1
     private var activeKeys = Set<String>()
 
     func prewarm(
@@ -467,6 +473,9 @@ actor StadiumPhotoPrewarmer {
         }
 
         do {
+            guard await InteractiveMotionGate.shared.waitUntilIdle(
+                operation: "stadium_photo_fixture_lookup"
+            ) else { return }
             let client = APIClient(baseURL: baseURL)
             let response = try await client.fetchFixtureBrowseMatches(
                 from: dateRange.lowerBound,
@@ -541,6 +550,9 @@ actor StadiumPhotoPrewarmer {
 
         guard let detailsID = match.matchDetailsID else { return }
         do {
+            guard await InteractiveMotionGate.shared.waitUntilIdle(
+                operation: "stadium_photo_match_details"
+            ) else { return }
             let details = try await APIClient(baseURL: baseURL).fetchMatchDetails(matchId: detailsID)
             try Task.checkCancellation()
             guard let value = details.venueDetails?.imageURL,
@@ -586,6 +598,7 @@ actor TeamLinkStadiumPhotoPrewarmer {
         candidateMatches: [Match],
         apiBaseURL: String
     ) async {
+        guard !Task.isCancelled else { return }
         let key = Self.key(context: context, apiBaseURL: apiBaseURL)
         if let task = inFlight[key] {
             await task.value
@@ -599,7 +612,11 @@ actor TeamLinkStadiumPhotoPrewarmer {
             )
         }
         inFlight[key] = task
-        await task.value
+        await withTaskCancellationHandler {
+            await task.value
+        } onCancel: {
+            task.cancel()
+        }
         inFlight[key] = nil
     }
 
@@ -608,6 +625,7 @@ actor TeamLinkStadiumPhotoPrewarmer {
         candidateMatches: [Match],
         apiBaseURL: String
     ) async {
+        guard !Task.isCancelled else { return }
         let cache = StadiumPhotoCache.shared
         if let knownURL = await cache.knownTeamPhotoURL(
             teamID: context.teamID,
@@ -618,6 +636,10 @@ actor TeamLinkStadiumPhotoPrewarmer {
         }
 
         await lookupGate.acquire()
+        guard !Task.isCancelled else {
+            await lookupGate.release()
+            return
+        }
         let imageURL = await resolveUncachedPhotoURL(
             context: context,
             candidateMatches: candidateMatches,

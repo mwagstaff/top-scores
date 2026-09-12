@@ -5,7 +5,7 @@
 const crypto = require("crypto");
 const { getDb } = require("./mongo_client");
 const { canonicalTeamName } = require("./team_identity");
-const { BSD_LEAGUE_NAME_MAP, __private: { bsdEventScoreIncludingExtraTime, extractBsdPeriodSummary } } = require("./bsd_adapter");
+const { BSD_LEAGUE_NAME_MAP, __private: { bsdEventScoreIncludingExtraTime, extractBsdPeriodSummary, mapBsdStatus } } = require("./bsd_adapter");
 
 const PREFIX = "/api/v1/prediction-game";
 const DAY = 86400000;
@@ -122,6 +122,10 @@ function fixtureFromEvent(doc, previous = null, prediction = null) {
   // the complete on-field score in this case (not additive extra-time goals).
   const finalScore = shootout && (periods.extraTimeScore || periods.fullTimeScore)
     ? periods.extraTimeScore || periods.fullTimeScore : bsdEventScoreIncludingExtraTime(e);
+  const displayStatus = mapBsdStatus(e, { periodSummary: periods });
+  const liveScore = displayStatus && !["FT", "AET", "POSTPONED"].includes(displayStatus) && finalScore
+    ? { homeScore: finalScore.home, awayScore: finalScore.away, status: displayStatus }
+    : null;
   const penaltyWinner = shootout && [shootout.home, shootout.away].every(scoreInteger) && shootout.home !== shootout.away
     ? outcome(shootout.home, shootout.away) : null;
   // Never award draw points while a reported shootout has no confirmed winner.
@@ -138,7 +142,7 @@ function fixtureFromEvent(doc, previous = null, prediction = null) {
       ? e.previous_leg_event_id != null && /^[1-9]\d*$/.test(String(e.previous_leg_event_id))
       : previous?.isSecondLeg === true,
     roundNumber: Number.isInteger(Number(e.round_number)) && Number(e.round_number) > 0 ? Number(e.round_number) : previous?.roundNumber || null,
-    void: VOID.has(status), result, resultRevision: digest(JSON.stringify({ status, result })),
+    void: VOID.has(status), liveScore, result, resultRevision: digest(JSON.stringify({ status, result })),
     ai: started ? previous?.ai || null : prediction || previous?.ai || null,
     challengeId: previous?.challengeId || null, sourceUpdatedAt: doc.updated_at || null, updatedAt: iso(),
   };
@@ -258,6 +262,45 @@ async function latestCompletedGameweek(db, playerId) {
   const rounds = await recentGameweeks(db, playerId, null, null, 10);
   return rounds.filter((round) => round.completed && round.played > 0)
     .sort((a, b) => String(b.latestPlayedAt || b.startsAt).localeCompare(String(a.latestPlayedAt || a.startsAt)))[0] || null;
+}
+
+async function inPlayGameweek(db, playerId, selectedCompetition = "1", now = Date.now()) {
+  const queryNow = typeof now === "function" ? now() : now;
+  const source = await db.collection("bsd_events").find({
+    league_id: { $in: [Number(selectedCompetition), selectedCompetition] },
+    event_date: { $gte: iso(queryNow - 2 * DAY), $lte: iso(queryNow + DAY) },
+  }).toArray();
+  if (!source.length) return null;
+  const cached = await db.collection("pg_fixtures").find({ _id: { $in: source.map((doc) => String(doc._id)) } }).toArray();
+  const previousById = new Map(cached.map((fixture) => [fixture._id, fixture]));
+  const live = (await eventDocsWithResults(db, source)).map((doc) => fixtureFromEvent(doc, previousById.get(String(doc._id))))
+    .filter((fixture) => fixture?.liveScore)
+    .sort((a, b) => a.kickoffAt.localeCompare(b.kickoffAt) || a._id.localeCompare(b._id));
+  if (!live.length) return null;
+
+  const context = live[0]; const group = predictionGameweek(context);
+  const matches = await gameweekFixtures(db, context);
+  const entries = await db.collection("pg_entries").find({
+    playerId, fixtureId: { $in: matches.map((fixture) => fixture._id) },
+    withdrawn: false, ai: { $exists: true },
+  }).toArray();
+  const entryById = new Map(entries.map((entry) => [entry.fixtureId, entry]));
+  const supportedLive = matches.filter((fixture) => fixture.liveScore && (fixture.ai || entryById.get(fixture._id)?.ai));
+  if (!supportedLive.length || !entries.length) return null;
+  const scored = matches.flatMap((fixture) => {
+    const entry = entryById.get(fixture._id); const score = fixture.result || fixture.liveScore;
+    if (!entry || !score) return [];
+    const youPoints = pointsFor(entry, score); const aiPoints = pointsFor(entry.ai, score);
+    return Number.isInteger(youPoints) && Number.isInteger(aiPoints) ? [{ youPoints, aiPoints }] : [];
+  });
+  if (!scored.length) return null;
+  return {
+    id: group.id, ...competitionFields(context), label: group.label,
+    youPoints: scored.reduce((sum, item) => sum + item.youPoints, 0),
+    aiPoints: scored.reduce((sum, item) => sum + item.aiPoints, 0),
+    scoredMatches: scored.length, liveMatches: supportedLive.length,
+    totalMatches: matches.filter((fixture) => !fixture.void).length,
+  };
 }
 
 async function nextPredictionSet(db, playerId, contextId = null, now = Date.now, includeLocked = false, selectedCompetition = null) {
@@ -708,6 +751,16 @@ function registerPredictionGameRoutes(app, options = {}) {
     res.json({ fixtures, serverTime: iso(game.now()) });
   }));
 
+  app.get(`${PREFIX}/in-play`, route(async (req, res, db, player) => {
+    const selectedCompetition = requestedCompetition(req.query.competitionId);
+    await game.refresh();
+    res.json({
+      competitionId: selectedCompetition,
+      round: await inPlayGameweek(db, player._id, selectedCompetition, game.now),
+      serverTime: iso(game.now()),
+    });
+  }));
+
   app.get(`${PREFIX}/next-predictions`, route(async (req, res, db, player) => {
     res.json(await nextPredictionSet(db, player._id, req.query.fixtureId == null ? null : cleanId(req.query.fixtureId), game.now, req.query.includeLocked === "true", req.query.competitionId == null ? null : requestedCompetition(req.query.competitionId)));
   }));
@@ -840,4 +893,4 @@ function registerPredictionGameRoutes(app, options = {}) {
 
 module.exports = { registerPredictionGameRoutes, createPredictionGame, pointsFor, aiPrediction,
   __private: { GameError, fixtureFromEvent, fixtureResponse, isLocked, weekId, buildSummary, buildAchievements, publishChallenges,
-    persistFixture, rebuildPlayer, authenticateCredential, issueSession, verifyGameCenter, gameCenterKeyUrl, withFixtureLock, nextPredictionSet, predictionGameweek, gameFixtureBatch, recentGameweeks, latestCompletedGameweek, availableCompetitions, gameCenterLeaderboardConfiguration } };
+    persistFixture, rebuildPlayer, authenticateCredential, issueSession, verifyGameCenter, gameCenterKeyUrl, withFixtureLock, nextPredictionSet, predictionGameweek, gameFixtureBatch, recentGameweeks, latestCompletedGameweek, inPlayGameweek, availableCompetitions, gameCenterLeaderboardConfiguration } };
