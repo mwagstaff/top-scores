@@ -60,4 +60,87 @@ struct FantasyPreviousTeamTests {
             resolvedCurrentGameweekPoints: 53
         ) == 242)
     }
+
+    @Test func reconciledSeasonTotalUsesNewerProfileGameweekWhenPicksAndLiveAreStale() {
+        #expect(fantasyReconciledSeasonTotalPoints(
+            squadSeasonPoints: 242,
+            reportedCurrentGameweekPoints: 53,
+            resolvedCurrentGameweekPoints: 53,
+            gameweekID: 4,
+            profileCurrentGameweekID: 4,
+            profileCurrentGameweekPoints: 82,
+            profileSeasonPoints: 271
+        ) == 271)
+    }
+
+    @Test func reconciledSeasonTotalUsesLiveScoreWhenItHasAdvancedBeyondPicks() {
+        #expect(fantasyReconciledSeasonTotalPoints(
+            squadSeasonPoints: 242,
+            reportedCurrentGameweekPoints: 0,
+            resolvedCurrentGameweekPoints: 53,
+            gameweekID: 3,
+            profileCurrentGameweekID: 3,
+            profileCurrentGameweekPoints: 0,
+            profileSeasonPoints: 189
+        ) == 242)
+    }
+
+    @Test func reconciledSeasonTotalIgnoresProfileThatIsBehindPicks() {
+        #expect(fantasyReconciledSeasonTotalPoints(
+            squadSeasonPoints: 242,
+            reportedCurrentGameweekPoints: 53,
+            resolvedCurrentGameweekPoints: 53,
+            gameweekID: 3,
+            profileCurrentGameweekID: 3,
+            profileCurrentGameweekPoints: 0,
+            profileSeasonPoints: 189
+        ) == 242)
+    }
+
+    @Test func liveProfileDoesNotRegressWhenFPLReturnsAnOlderSnapshot() {
+        let newer = profile(overallPoints: 271, eventPoints: 82)
+        let older = profile(overallPoints: 242, eventPoints: 53)
+
+        #expect(fantasyStableEntryProfile(
+            existing: newer,
+            candidate: older,
+            gameweekDataChecked: false
+        ) == newer)
+    }
+
+    @Test func liveProfileAdvancesWhenFPLReturnsANewerSnapshot() {
+        let older = profile(overallPoints: 242, eventPoints: 53)
+        let newer = profile(overallPoints: 271, eventPoints: 82)
+
+        #expect(fantasyStableEntryProfile(
+            existing: older,
+            candidate: newer,
+            gameweekDataChecked: false
+        ) == newer)
+    }
+
+    @Test func checkedGameweekAcceptsFinalDownwardCorrection() {
+        let provisional = profile(overallPoints: 271, eventPoints: 82)
+        let final = profile(overallPoints: 270, eventPoints: 81)
+
+        #expect(fantasyStableEntryProfile(
+            existing: provisional,
+            candidate: final,
+            gameweekDataChecked: true
+        ) == final)
+    }
+
+    private func profile(overallPoints: Int, eventPoints: Int) -> FantasyEntryProfile {
+        FantasyEntryProfile(
+            id: 658_621,
+            name: "Magic Muck",
+            playerFirstName: "Mike",
+            playerLastName: "Wagstaff",
+            summaryOverallPoints: overallPoints,
+            clubBadgeSrc: nil,
+            currentEvent: 4,
+            summaryEventPoints: eventPoints,
+            leagues: nil
+        )
+    }
 }

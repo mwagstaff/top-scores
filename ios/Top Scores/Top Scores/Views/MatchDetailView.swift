@@ -792,8 +792,17 @@ struct MatchDetailView: View {
 
         let ranked = matches.compactMap { candidate -> (match: Match, score: Int)? in
             guard candidate.date == target.date else { return nil }
-            guard TeamIdentityStore.shared.matches(candidate.homeTeam, target.homeTeam),
-                  TeamIdentityStore.shared.matches(candidate.awayTeam, target.awayTeam) else {
+            guard teamIdentityMatches(
+                candidateID: candidate.homeTeamId,
+                candidateName: candidate.homeTeam,
+                targetID: target.homeTeamId,
+                targetName: target.homeTeam
+            ), teamIdentityMatches(
+                candidateID: candidate.awayTeamId,
+                candidateName: candidate.awayTeam,
+                targetID: target.awayTeamId,
+                targetName: target.awayTeam
+            ) else {
                 return nil
             }
 
@@ -841,6 +850,22 @@ struct MatchDetailView: View {
             }
             .first?
             .match
+    }
+
+    private static func teamIdentityMatches(
+        candidateID: String?,
+        candidateName: String,
+        targetID: String?,
+        targetName: String
+    ) -> Bool {
+        let normalizedCandidateID = candidateID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let normalizedTargetID = targetID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !normalizedCandidateID.isEmpty || !normalizedTargetID.isEmpty {
+            return !normalizedCandidateID.isEmpty &&
+                !normalizedTargetID.isEmpty &&
+                normalizedCandidateID == normalizedTargetID
+        }
+        return TeamIdentityStore.shared.matches(candidateName, targetName)
     }
 
     private static func comparableKickoffTime(_ lhs: String, _ rhs: String) -> Bool {
@@ -1077,7 +1102,7 @@ struct MatchDetailScoreboardHero: View {
 
             HStack(alignment: .center, spacing: 14) {
                 teamLink(
-                    name: match.displayHomeTeam,
+                    name: match.homeTeam,
                     fullName: match.homeTeam,
                     teamId: match.homeTeamId,
                     alternateNames: [match.homeShortName].compactMap { $0 },
@@ -1096,8 +1121,7 @@ struct MatchDetailScoreboardHero: View {
                     if match.isInProgress || match.isFinished {
                         MatchTimeStatusView(
                             text: statusText,
-                            isLive: match.isInProgress,
-                            isFinal: match.isFinalRound
+                            isLive: match.isInProgress
                         )
                     } else {
                         Text(statusText)
@@ -1111,7 +1135,7 @@ struct MatchDetailScoreboardHero: View {
                 .frame(maxWidth: 134)
 
                 teamLink(
-                    name: match.displayAwayTeam,
+                    name: match.awayTeam,
                     fullName: match.awayTeam,
                     teamId: match.awayTeamId,
                     alternateNames: [match.awayShortName].compactMap { $0 },
@@ -1827,11 +1851,11 @@ private struct MatchEventsCard: View {
     }
 
     private var homeTeamName: String {
-        match.teamLineups?.home?.team ?? match.displayHomeTeam
+        match.teamLineups?.home?.team ?? match.homeTeam
     }
 
     private var awayTeamName: String {
-        match.teamLineups?.away?.team ?? match.displayAwayTeam
+        match.teamLineups?.away?.team ?? match.awayTeam
     }
 
     private var homeTeamColors: TeamLineupNumberColors {
@@ -2853,16 +2877,31 @@ private struct FantasyMatchPlayerTableRow: View {
     }
 
     private var pointsPill: some View {
-        Text(pointsText)
+        let tint = pointsTint
+        return Text(pointsText)
             .font(.subheadline.monospacedDigit().weight(.semibold))
-            .foregroundStyle(points == nil ? Color.secondary : Color.primary)
+            .foregroundStyle(points == nil ? Color.secondary : Color.white.opacity(0.96))
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
             .frame(minWidth: 58)
             .background(
-                pointsPhase.tint.opacity(points == nil ? 0.06 : 0.13),
+                tint.opacity(points == nil ? 0.06 : pointsPhase == .expected ? 0.13 : 0.31),
                 in: Capsule(style: .continuous)
             )
+            .overlay {
+                Capsule(style: .continuous)
+                    .stroke(tint.opacity(points == nil ? 0 : 0.92), lineWidth: 0.85)
+            }
+    }
+
+    private var pointsTint: Color {
+        guard let points else { return pointsPhase.tint }
+        switch pointsPhase {
+        case .expected:
+            return pointsPhase.tint
+        case .provisional, .final:
+            return fantasyProvisionalPointsTint(Int(points))
+        }
     }
 
     private var pointsText: String {
@@ -3147,8 +3186,8 @@ private struct MatchLineupPitchSection: View {
                 MatchLineupTeamPanelsView(
                     homeLineup: home,
                     awayLineup: away,
-                    fallbackHomeTeamName: match.displayHomeTeam,
-                    fallbackAwayTeamName: match.displayAwayTeam,
+                    fallbackHomeTeamName: match.homeTeam,
+                    fallbackAwayTeamName: match.awayTeam,
                     homeTeamID: match.homeTeamId,
                     awayTeamID: match.awayTeamId,
                     homeGoals: match.homeGoalScorers,

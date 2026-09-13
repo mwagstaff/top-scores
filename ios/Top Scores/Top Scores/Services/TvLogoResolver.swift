@@ -1,4 +1,5 @@
 import Foundation
+import ImageIO
 import UIKit
 
 nonisolated final class TvLogoResolver: @unchecked Sendable {
@@ -52,7 +53,7 @@ nonisolated final class TvLogoResolver: @unchecked Sendable {
                 continue
             }
 
-            if let image = UIImage(contentsOfFile: url.path) {
+            if let image = loadImage(at: url, channelName: channel) {
                 imageCache.setObject(image, forKey: cacheKey)
                 displayImageCache.setObject(image, forKey: displayKey)
                 results.append(image)
@@ -78,7 +79,7 @@ nonisolated final class TvLogoResolver: @unchecked Sendable {
             return cached
         }
 
-        let image = UIImage(contentsOfFile: url.path)
+        let image = loadImage(at: url, channelName: channelName)
         if let image {
             imageCache.setObject(image, forKey: cacheKey)
             displayImageCache.setObject(image, forKey: displayKey)
@@ -94,36 +95,69 @@ nonisolated final class TvLogoResolver: @unchecked Sendable {
             guard let self else { return }
             let startedAt = ProcessInfo.processInfo.systemUptime
             var preparedCount = 0
+            var workDuration: TimeInterval = 0
             for channelName in uniqueChannelNames {
                 autoreleasepool {
                     InteractiveMotionGate.shared.waitUntilIdleBlocking(
                         operation: "fixture_tv_artwork"
                     )
-                    let url = self.resolutionLock.withLock {
-                        self.resolveURL(for: channelName) ??
-                            self.resolveURL(for: self.fallbackName)
+                    let workStartedAt = ProcessInfo.processInfo.systemUptime
+                    defer {
+                        workDuration += ProcessInfo.processInfo.systemUptime - workStartedAt
                     }
-                    guard let url else { return }
-                    let cacheKey = url.path as NSString
-                    let sourceImage = self.imageCache.object(forKey: cacheKey) ??
-                        UIImage(contentsOfFile: url.path)
-                    guard let sourceImage else { return }
-                    let preparedImage = sourceImage.preparingForDisplay() ?? sourceImage
-                    self.imageCache.setObject(preparedImage, forKey: cacheKey)
-                    self.displayImageCache.setObject(
-                        preparedImage,
-                        forKey: Self.normalizedKey(channelName) as NSString
-                    )
-                    preparedCount += 1
+                    let urls = self.resolutionLock.withLock { () -> [URL] in
+                        let compactURL = self.resolveURL(for: channelName) ??
+                            self.resolveURL(for: self.fallbackName)
+                        let expandedURL = self.expandedURLLocked(
+                            for: channelName,
+                            isDarkAppearance: false
+                        )
+                        let expandedDarkURL = self.expandedURLLocked(
+                            for: channelName,
+                            isDarkAppearance: true
+                        )
+                        var seen = Set<String>()
+                        return [compactURL, expandedURL, expandedDarkURL]
+                            .compactMap { $0 }
+                            .filter { seen.insert($0.path).inserted }
+                    }
+                    guard !urls.isEmpty else { return }
+
+                    for (index, url) in urls.enumerated() {
+                        let cacheKey = url.path as NSString
+                        let sourceImage = self.imageCache.object(forKey: cacheKey) ??
+                            self.loadImage(at: url, channelName: channelName)
+                        guard let sourceImage else { continue }
+                        diagnosticLogAsync(
+                            "[FixtureArtwork] prepare_start kind=tv source=\(url.lastPathComponent) " +
+                            "channel=\(channelName)"
+                        )
+                        let preparedImage = sourceImage.preparingForDisplay() ?? sourceImage
+                        diagnosticLogAsync(
+                            "[FixtureArtwork] prepare_finished kind=tv source=\(url.lastPathComponent) " +
+                            "channel=\(channelName)"
+                        )
+                        self.imageCache.setObject(preparedImage, forKey: cacheKey)
+                        if index == 0 {
+                            self.displayImageCache.setObject(
+                                preparedImage,
+                                forKey: Self.normalizedKey(channelName) as NSString
+                            )
+                        }
+                        preparedCount += 1
+                    }
                 }
             }
             let durationMilliseconds = Int(
                 ((ProcessInfo.processInfo.systemUptime - startedAt) * 1_000).rounded()
             )
+            let workMilliseconds = Int((workDuration * 1_000).rounded())
             if durationMilliseconds >= 25 {
                 diagnosticLogAsync(
                     "[FixtureArtwork] tv_batch entries=\(uniqueChannelNames.count) " +
-                    "prepared=\(preparedCount) duration_ms=\(durationMilliseconds)"
+                    "prepared=\(preparedCount) duration_ms=\(durationMilliseconds) " +
+                    "wait_ms=\(max(0, durationMilliseconds - workMilliseconds)) " +
+                    "work_ms=\(workMilliseconds)"
                 )
             }
         }
@@ -134,13 +168,11 @@ nonisolated final class TvLogoResolver: @unchecked Sendable {
         guard !normalized.isEmpty, normalized != Self.normalizedKey(fallbackName) else { return nil }
 
         // Unsupported broadcasters keep their text label instead of a guessed or placeholder logo.
-        let url = resolutionLock.withLock { () -> URL? in
-            let logoKey = normalizedLookup[normalized] != nil
-                ? normalized
-                : aliasKeywords.first(where: { normalized.hasPrefix($0.0) })?.1
-            guard let logoKey else { return nil }
-            let appearanceURL = isDarkAppearance ? expandedDarkLookup[logoKey] : nil
-            return appearanceURL ?? expandedLookup[logoKey] ?? normalizedLookup[logoKey]
+        let url = resolutionLock.withLock {
+            expandedURLLocked(
+                for: channelName,
+                isDarkAppearance: isDarkAppearance
+            )
         }
         guard let url else { return nil }
 
@@ -148,10 +180,69 @@ nonisolated final class TvLogoResolver: @unchecked Sendable {
         if let cached = imageCache.object(forKey: cacheKey) {
             return cached
         }
-        let image = UIImage(contentsOfFile: url.path)
+        let image = loadImage(at: url, channelName: channelName)
         if let image {
             imageCache.setObject(image, forKey: cacheKey)
         }
+        return image
+    }
+
+    /// Resolves the horizontal broadcaster mark while `resolutionLock` is held.
+    private func expandedURLLocked(
+        for channelName: String,
+        isDarkAppearance: Bool
+    ) -> URL? {
+        let normalized = Self.normalizedKey(channelName)
+        guard !normalized.isEmpty, normalized != Self.normalizedKey(fallbackName) else {
+            return nil
+        }
+        let logoKey = normalizedLookup[normalized] != nil
+            ? normalized
+            : aliasKeywords.first(where: { normalized.hasPrefix($0.0) })?.1
+        guard let logoKey else { return nil }
+        let appearanceURL = isDarkAppearance ? expandedDarkLookup[logoKey] : nil
+        return appearanceURL ?? expandedLookup[logoKey] ?? normalizedLookup[logoKey]
+    }
+
+    private func loadImage(at url: URL, channelName: String) -> UIImage? {
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        let isMainThread = Thread.isMainThread
+        let source = url.lastPathComponent
+        if isMainThread {
+            performanceDiagnosticSetBreadcrumb(
+                category: "artwork_decode",
+                value: "tv source=\(source) channel=\(channelName)"
+            )
+        }
+        defer {
+            if isMainThread {
+                performanceDiagnosticSetBreadcrumb(category: "artwork_decode", value: nil)
+            }
+        }
+        let image: UIImage?
+        let thumbnailOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: 512,
+            kCGImageSourceShouldCacheImmediately: true,
+        ]
+        if let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+           let thumbnail = CGImageSourceCreateThumbnailAtIndex(
+                source,
+                0,
+                thumbnailOptions as CFDictionary
+           ) {
+            image = UIImage(cgImage: thumbnail)
+        } else {
+            image = UIImage(contentsOfFile: url.path)
+        }
+        let finishedAt = ProcessInfo.processInfo.systemUptime
+        let durationMilliseconds = Int(((finishedAt - startedAt) * 1_000).rounded())
+        diagnosticLogAsync(
+            "[FixtureArtwork] cold_load kind=tv source=\(source) channel=\(channelName) " +
+            "duration_ms=\(durationMilliseconds) main_thread=\(isMainThread ? 1 : 0) " +
+            "success=\(image == nil ? 0 : 1) uptime_ms=\(Int((finishedAt * 1_000).rounded()))"
+        )
         return image
     }
 

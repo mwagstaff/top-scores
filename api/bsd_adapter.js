@@ -9,7 +9,7 @@
 // match shape consumed by the API, website, iOS app, widgets, and monitor.
 // ---------------------------------------------------------------------------
 
-const { canonicalTeamName } = require("./team_identity");
+const { bsdTeamCanonicalName } = require("./bsd_team_logo_assets");
 const { utcDateTimeToZonedDateTime } = require("./match_time");
 const {
   getBsdRecords,
@@ -19,6 +19,21 @@ const { BSD_LEAGUE_ALLOWLIST } = require("./bsd_config");
 const { bsdPlayerImageUrl } = require("./player_images");
 const BSD_VENUE_IMAGE_CATALOG = require("./bsd_venue_image_overrides.json");
 const SunCalc = require("suncalc");
+
+function canonicalBsdTeamName(teamID, providerName) {
+  const rawName = String(providerName || "").trim();
+  const normalizedID = String(teamID ?? "").trim();
+
+  // An ID-bearing BSD record must never borrow another team's identity from
+  // a name alias. Unknown IDs deliberately keep the provider label unchanged.
+  if (normalizedID) {
+    return bsdTeamCanonicalName(normalizedID) || rawName;
+  }
+
+  // Old cached/synthetic records without IDs keep the provider label. They are
+  // never assigned an identity from a global name alias.
+  return rawName;
+}
 
 // BSD league_id → canonical league name used by clients and preferences.
 const BSD_LEAGUE_NAME_MAP = {
@@ -234,14 +249,16 @@ function assignFormationGridPositions(starters, formation, options = {}) {
   return result;
 }
 
-// BSD's `decision` names what was under review (e.g. "goalAwarded");
-// `confirmed` says whether that decision stood after review. Only a
-// disallowed goal — a goal decision that did NOT stand — is surfaced as a VAR
-// event; every other VAR review (confirmed goals, penalty/card checks,
-// offside checks, etc.) is noise the user doesn't want in Match Events or
-// notifications.
+// BSD's `decision` names the on-field decision and `confirmed` says whether it
+// stood after review. A goal is disallowed when a goal award is rejected, or
+// when a decision not to award the goal is confirmed. Every other VAR review
+// is noise the user doesn't want in Match Events or notifications.
 function isDisallowedGoalVarDecision(decision, confirmed) {
-  return confirmed === false && /goal/i.test(String(decision || ""));
+  const normalizedDecision = String(decision || "").trim().toLowerCase();
+  return (
+    (normalizedDecision === "goalawarded" && confirmed === false) ||
+    (normalizedDecision === "goalnotawarded" && confirmed === true)
+  );
 }
 
 // Maps BSD status/period/current_minute to the internal score_status vocabulary:
@@ -850,7 +867,7 @@ function parseBsdFormString(form) {
 function bsdStandingsRowToCanonical(row) {
   return {
     position: toNumber(row && row.position) || 0,
-    team: canonicalTeamName(row && row.team_name),
+    team: canonicalBsdTeamName(row && row.team_id, row && row.team_name),
     played: toNumber(row && row.played) || 0,
     won: toNumber(row && row.won) || 0,
     drawn: toNumber(row && row.drawn) || 0,
@@ -921,9 +938,12 @@ function completeBsdStandingsRowsFromEvents(rows, events, { leagueId, seasonId }
     if (!event || String(event.league_id) !== normalizedLeagueId) return;
     if (seasonId != null && String(event.season_id) !== String(seasonId)) return;
 
-    [event.home_team, event.away_team].forEach((rawTeam) => {
+    [
+      [event.home_team_id, event.home_team],
+      [event.away_team_id, event.away_team],
+    ].forEach(([teamID, rawTeam]) => {
       if (isPlaceholderTeam(rawTeam)) return;
-      const team = canonicalTeamName(rawTeam);
+      const team = canonicalBsdTeamName(teamID, rawTeam);
       const key = String(team || "").trim().toLowerCase();
       if (!key || teamKeys.has(key)) return;
       teamKeys.add(key);
@@ -1046,11 +1066,17 @@ function buildBsdStandingsEventsFilter(standingsDocs) {
 
 function bsdStandingsEventFromDoc(doc) {
   const payload = doc && doc.payload ? doc.payload : {};
+  const homeTeamID =
+    doc && doc.home_team_id != null ? doc.home_team_id : payload.home_team_id;
+  const awayTeamID =
+    doc && doc.away_team_id != null ? doc.away_team_id : payload.away_team_id;
   return {
     league_id: doc && doc.league_id != null ? doc.league_id : payload.league_id,
     season_id: doc && doc.season_id != null ? doc.season_id : payload.season_id,
     home_team: doc && doc.home_team ? doc.home_team : payload.home_team,
     away_team: doc && doc.away_team ? doc.away_team : payload.away_team,
+    ...(homeTeamID != null ? { home_team_id: homeTeamID } : {}),
+    ...(awayTeamID != null ? { away_team_id: awayTeamID } : {}),
   };
 }
 
@@ -1068,10 +1094,14 @@ async function projectBsdStandings() {
           season_id: 1,
           home_team: 1,
           away_team: 1,
+          home_team_id: 1,
+          away_team_id: 1,
           "payload.league_id": 1,
           "payload.season_id": 1,
           "payload.home_team": 1,
           "payload.away_team": 1,
+          "payload.home_team_id": 1,
+          "payload.away_team_id": 1,
         },
       })
     : [];
@@ -1108,8 +1138,20 @@ function bsdEventToCanonicalMatch(event, options = {}) {
   // Future knockout-round slots ("W101", "L33", "3D/3E/3I") aren't real teams
   // until earlier rounds decide them, but the fixture itself (date/time/round)
   // is already known — show it with "TBC" rather than hiding it entirely.
-  const home_team = isPlaceholderTeam(homeRaw) ? "TBC" : canonicalTeamName(homeRaw) || homeRaw;
-  const away_team = isPlaceholderTeam(awayRaw) ? "TBC" : canonicalTeamName(awayRaw) || awayRaw;
+  const home_team = isPlaceholderTeam(homeRaw)
+    ? "TBC"
+    : canonicalBsdTeamName(event.home_team_id, homeRaw);
+  const away_team = isPlaceholderTeam(awayRaw)
+    ? "TBC"
+    : canonicalBsdTeamName(event.away_team_id, awayRaw);
+  const homeTeam = options.teamsById instanceof Map && event.home_team_id != null
+    ? options.teamsById.get(String(event.home_team_id))
+    : null;
+  const awayTeam = options.teamsById instanceof Map && event.away_team_id != null
+    ? options.teamsById.get(String(event.away_team_id))
+    : null;
+  const homeShortName = String((homeTeam && homeTeam.short_name) || "").trim();
+  const awayShortName = String((awayTeam && awayTeam.short_name) || "").trim();
   const kickoff = zonedKickoff(event.event_date);
   const venueId = event.venue_id != null ? String(event.venue_id) : null;
   const venue = venueId && options.venuesById ? options.venuesById.get(venueId) : null;
@@ -1156,6 +1198,12 @@ function bsdEventToCanonicalMatch(event, options = {}) {
     match_details_id: id,
     home_team,
     away_team,
+    ...(homeShortName && homeShortName !== home_team
+      ? { home_short_name: homeShortName }
+      : {}),
+    ...(awayShortName && awayShortName !== away_team
+      ? { away_short_name: awayShortName }
+      : {}),
     home_team_id: event.home_team_id != null ? String(event.home_team_id) : null,
     away_team_id: event.away_team_id != null ? String(event.away_team_id) : null,
     venue_id: venueId,
@@ -1228,8 +1276,8 @@ function bsdPredictionFixtureToCanonical(item) {
 
   const homeRaw = String(event.home_team || "").trim();
   const awayRaw = String(event.away_team || "").trim();
-  const home_team = canonicalTeamName(homeRaw) || homeRaw;
-  const away_team = canonicalTeamName(awayRaw) || awayRaw;
+  const home_team = canonicalBsdTeamName(event.home_team_id, homeRaw);
+  const away_team = canonicalBsdTeamName(event.away_team_id, awayRaw);
   const kickoff = zonedKickoff(event.event_date);
 
   return {
@@ -1481,7 +1529,14 @@ async function projectBsdMatches() {
     .map((doc) => doc && doc.payload && doc.payload.venue_id)
     .filter((id) => id != null)
     .map(String))];
-  const [broadcasts, supplementaryListings, incidentsDocs, venueDocs] = eventIds.length > 0
+  const teamIds = [...new Set(events
+    .flatMap((doc) => [
+      doc && doc.payload && doc.payload.home_team_id,
+      doc && doc.payload && doc.payload.away_team_id,
+    ])
+    .filter((id) => id != null)
+    .map(String))];
+  const [broadcasts, supplementaryListings, incidentsDocs, venueDocs, teamDocs] = eventIds.length > 0
     ? await Promise.all([
         getBsdRecords("bsd_broadcasts", { _id: { $in: eventIds } }),
         getActiveLiveFootballTvListings({
@@ -1493,8 +1548,11 @@ async function projectBsdMatches() {
         venueIds.length > 0
           ? getBsdRecords("bsd_venues", { _id: { $in: venueIds } })
           : Promise.resolve([]),
+        teamIds.length > 0
+          ? getBsdRecords("bsd_teams", { _id: { $in: teamIds } })
+          : Promise.resolve([]),
       ])
-    : [[], [], [], []];
+    : [[], [], [], [], []];
   const leagueNameById = new Map();
   leagues.forEach((doc) => {
     const p = doc.payload || {};
@@ -1524,6 +1582,9 @@ async function projectBsdMatches() {
   const venuesById = new Map(
     venueDocs.map((doc) => [String(doc._id), doc.payload || null])
   );
+  const teamsById = new Map(
+    teamDocs.map((doc) => [String(doc._id), doc.payload || null])
+  );
 
   // The live poller ingests every live league, not just the allowlist, so
   // restrict the projection to allowlisted leagues — otherwise live-only
@@ -1545,6 +1606,7 @@ async function projectBsdMatches() {
       channelsByEventId,
       incidentsPayload: eventId ? incidentsByEventId.get(eventId) : null,
       venuesById,
+      teamsById,
     });
     if (match) out.push(match);
   });
@@ -1565,7 +1627,10 @@ async function projectBsdMatchDetails(eventId, options = {}) {
   if (!eventDoc || !eventDoc.payload) return null;
   const previousLegId = String(eventDoc.payload.previous_leg_event_id || "").trim();
   const venueId = eventDoc.payload.venue_id != null ? String(eventDoc.payload.venue_id) : null;
-  const [incidentsDoc, lineupsDoc, broadcastsDoc, supplementaryListings, venueDoc, previousLegDoc, leagues] = await Promise.all([
+  const teamIds = [eventDoc.payload.home_team_id, eventDoc.payload.away_team_id]
+    .filter((teamId) => teamId != null)
+    .map(String);
+  const [incidentsDoc, lineupsDoc, broadcastsDoc, supplementaryListings, venueDoc, previousLegDoc, leagues, teamDocs] = await Promise.all([
     options.incidentsDoc || getBsdRecords("bsd_incidents", { _id: id }).then((r) => r[0] || null),
     options.lineupsDoc || getBsdRecords("bsd_lineups", { _id: id }).then((r) => r[0] || null),
     options.broadcastsDoc || getBsdRecords("bsd_broadcasts", { _id: id }).then((r) => r[0] || null),
@@ -1581,6 +1646,9 @@ async function projectBsdMatchDetails(eventId, options = {}) {
       ? getBsdRecords("bsd_events", { _id: previousLegId }).then((r) => r[0] || null)
       : Promise.resolve(null)),
     getBsdRecords("bsd_leagues"),
+    teamIds.length > 0
+      ? getBsdRecords("bsd_teams", { _id: { $in: teamIds } })
+      : Promise.resolve([]),
   ]);
   const leagueNameById = new Map();
   leagues.forEach((doc) => {
@@ -1597,6 +1665,9 @@ async function projectBsdMatchDetails(eventId, options = {}) {
     venuesById: venueId && venueDoc
       ? new Map([[venueId, venueDoc.payload || null]])
       : new Map(),
+    teamsById: new Map(
+      teamDocs.map((doc) => [String(doc._id), doc.payload || null])
+    ),
   });
   return applyBsdTwoLegAggregates(
     [previousLegDoc && previousLegDoc.payload, eventDoc.payload].filter(Boolean),
@@ -1648,5 +1719,6 @@ module.exports = {
     currentSeasonContextByLeagueFromDocs,
     bsdPredictionFixtureToCanonical,
     bsdPredictionsPayloadToLeague,
+    canonicalBsdTeamName,
   },
 };

@@ -4,8 +4,15 @@
 // BSD remains the only sports-data source. All game records survive BSD retention.
 const crypto = require("crypto");
 const { getDb } = require("./mongo_client");
-const { canonicalTeamName } = require("./team_identity");
-const { BSD_LEAGUE_NAME_MAP, __private: { bsdEventScoreIncludingExtraTime, extractBsdPeriodSummary, mapBsdStatus } } = require("./bsd_adapter");
+const {
+  BSD_LEAGUE_NAME_MAP,
+  __private: {
+    bsdEventScoreIncludingExtraTime,
+    canonicalBsdTeamName,
+    extractBsdPeriodSummary,
+    mapBsdStatus,
+  },
+} = require("./bsd_adapter");
 
 const PREFIX = "/api/v1/prediction-game";
 const DAY = 86400000;
@@ -135,7 +142,7 @@ function fixtureFromEvent(doc, previous = null, prediction = null) {
   const started = previous?.started === true || status === "abandoned" || (!PRESTART.has(status) && !VOID.has(status) && status !== "");
   const kickoffAt = iso(Date.parse(e.event_date));
   return {
-    _id: String(e.id), competitionId: id, competitionName: e.league_name || previous?.competitionName || BSD_LEAGUE_NAME_MAP[id] || (id === "1" ? "Premier League" : `Competition ${id}`), homeTeam: canonicalTeamName(e.home_team) || String(e.home_team), awayTeam: canonicalTeamName(e.away_team) || String(e.away_team),
+    _id: String(e.id), competitionId: id, competitionName: e.league_name || previous?.competitionName || BSD_LEAGUE_NAME_MAP[id] || (id === "1" ? "Premier League" : `Competition ${id}`), homeTeam: canonicalBsdTeamName(e.home_team_id, e.home_team), awayTeam: canonicalBsdTeamName(e.away_team_id, e.away_team),
     seasonId: e.season_id != null ? String(e.season_id) : previous?.seasonId || scopedId(id, `epl-${seasonLabel(kickoffAt)}`),
     seasonLabel: previous?.seasonLabel || seasonLabel(kickoffAt), kickoffAt, status, started,
     isSecondLeg: Object.prototype.hasOwnProperty.call(e, "previous_leg_event_id")

@@ -84,6 +84,7 @@ struct MatchRowTeamSummary: Equatable, Sendable {
 struct MatchRow: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.colorScheme) private var colorScheme
+    @ObservedObject private var teamColorCatalog = TeamColorCatalog.shared
 
     let match: Match
     var showTeamEvents: Bool = false
@@ -105,6 +106,7 @@ struct MatchRow: View {
     var homeTeamSummary: MatchRowTeamSummary? = nil
     var awayTeamSummary: MatchRowTeamSummary? = nil
     var enablesTeamDetailsNavigation: Bool = false
+    var prefersShortTeamNames: Bool = true
     var body: some View {
         matchCard
             .opacity(match.isPostponed ? 0.5 : 1.0)
@@ -319,7 +321,7 @@ struct MatchRow: View {
     }
 
     private func accessibilityCompactTeamName(isHome: Bool) -> some View {
-        let displayName = isHome ? match.displayHomeTeam : match.displayAwayTeam
+        let displayName = teamDisplayName(isHome: isHome)
         let summary = isHome ? homeTeamSummary : awayTeamSummary
 
         return VStack(alignment: .leading, spacing: 4) {
@@ -372,7 +374,7 @@ struct MatchRow: View {
     }
 
     private func teamNameContent(isHome: Bool) -> some View {
-        let displayName = isHome ? match.displayHomeTeam : match.displayAwayTeam
+        let displayName = teamDisplayName(isHome: isHome)
         let summary = isHome ? homeTeamSummary : awayTeamSummary
         let horizontalAlignment: HorizontalAlignment = isHome ? .trailing : .leading
         let frameAlignment: Alignment = isHome ? .trailing : .leading
@@ -406,18 +408,28 @@ struct MatchRow: View {
 
     private func teamDetailsContext(isHome: Bool) -> TeamDetailsContext {
         let teamName = isHome ? match.homeTeam : match.awayTeam
-        let displayName = isHome ? match.displayHomeTeam : match.displayAwayTeam
         let teamID = isHome ? match.homeTeamId : match.awayTeamId
         let shortName = isHome ? match.homeShortName : match.awayShortName
         return TeamDetailsContext(
             teamID: teamID,
             teamName: teamName,
-            displayName: displayName,
+            displayName: teamName,
             alternateNames: [shortName].compactMap { $0 },
             originatingLeagueID: match.leagueId,
             originatingLeagueName: match.league,
             originatingMatch: match
         )
+    }
+
+    private func teamDisplayName(isHome: Bool) -> String {
+        let fullName = isHome ? match.homeTeam : match.awayTeam
+        guard prefersShortTeamNames else { return fullName }
+
+        let providerName = isHome ? match.homeShortName : match.awayShortName
+        if let providerName = TeamIdentityStore.displayShortName(providerName, for: fullName) {
+            return providerName
+        }
+        return TeamIdentityStore.shared.preferredShortName(for: fullName) ?? fullName
     }
 
     private func teamAccessibilityLabel(isHome: Bool, summary: MatchRowTeamSummary?) -> String {
@@ -577,7 +589,6 @@ struct MatchRow: View {
             MatchTimeStatusView(
                 text: centerStatusText,
                 isLive: match.isInProgress,
-                isFinal: match.isFinalRound,
                 isLargePresentation: isLargePresentation
             )
             .fixedSize(horizontal: true, vertical: false)
@@ -1669,6 +1680,10 @@ private enum MatchTimelineBuilder {
 extension Color {
     /// Shared "live / in-progress" green, matched to the website's `--live` token.
     static let liveMatch = Color(red: 0.32, green: 0.82, blue: 0.51)
+    /// High-contrast red reserved for live match-status pills.
+    static let inPlayStatus = Color(red: 0.89, green: 0.024, blue: 0.239)
+    /// Green used for completed match-status pills.
+    static let finishedMatchStatus = liveMatch
     /// Gold used to highlight Final-round fixtures (e.g. World Cup Final).
     static let finalMatch = Color(red: 0.85, green: 0.68, blue: 0.21)
     /// Indigo used for predicted-score chips, matched to the website's `--predict` token.
@@ -1733,13 +1748,16 @@ struct MatchTimeStatusView: View {
 
     let text: String
     let isLive: Bool
-    var isFinal: Bool = false
     var isLargePresentation: Bool = false
 
     @State private var isPulsing = false
 
     private var showsBadge: Bool {
-        isLive || MatchStatusFormatter.isFinished(text)
+        isLive || isFinished
+    }
+
+    private var isFinished: Bool {
+        !isLive && MatchStatusFormatter.isFinished(text)
     }
 
     private var isActivelyPlaying: Bool {
@@ -1751,38 +1769,52 @@ struct MatchTimeStatusView: View {
     }
 
     private var tintColor: Color {
-        isFinal && isActivelyPlaying ? .finalMatch : .liveMatch
+        isLive ? .inPlayStatus : .finishedMatchStatus
     }
 
     var body: some View {
-        Text(text)
+        HStack(spacing: isLive ? 5 : 0) {
+            if isLive {
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: 6, height: 6)
+                    .opacity(isPulsing ? 0.58 : 1)
+                    .scaleEffect(isPulsing ? 0.86 : 1)
+                    .animation(pulseAnimation, value: isPulsing)
+                    .accessibilityHidden(true)
+            }
+
+            Text(text)
+                .monospacedDigit()
+                .lineLimit(1)
+                .minimumScaleFactor(0.9)
+        }
             .font(statusFont)
-            .fontWeight(showsBadge ? .semibold : .regular)
-            .foregroundStyle(showsBadge ? tintColor : Color.secondary)
-            .monospacedDigit()
-            .lineLimit(1)
-            .minimumScaleFactor(0.9)
+            .fontWeight(isLive ? .bold : showsBadge ? .semibold : .regular)
+            .foregroundStyle(isLive ? Color.white : showsBadge ? tintColor : Color.secondary)
             .padding(.horizontal, showsBadge ? 8 : 0)
             .padding(.vertical, showsBadge ? 5 : 0)
             .frame(minWidth: showsBadge ? 28 : nil)
             .background {
-                if showsBadge {
-                    // Opaque backing keeps the label readable over any stadium photo.
+                if isLive {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(tintColor)
+                } else if isFinished {
+                    // The dark backing keeps the translucent green legible over stadium photos.
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .fill(Color(white: 0.08))
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(tintColor.opacity(isPulsing ? 0.08 : 0.16))
-                        .animation(pulseAnimation, value: isPulsing)
+                        .fill(tintColor.opacity(0.14))
                 }
             }
             .overlay {
-                if showsBadge {
+                if isFinished {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(tintColor.opacity(isPulsing ? 0.45 : 0.95), lineWidth: 1)
-                        .scaleEffect(isPulsing ? 1.08 : 1.0)
-                        .animation(pulseAnimation, value: isPulsing)
+                        .stroke(tintColor.opacity(0.95), lineWidth: 1)
                 }
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text(verbatim: accessibilityStatusText))
             .onAppear {
                 isPulsing = shouldPulse
             }
@@ -1798,6 +1830,12 @@ struct MatchTimeStatusView: View {
 
     private var statusFont: Font {
         isLargePresentation ? .subheadline : .caption
+    }
+
+    private var accessibilityStatusText: String {
+        guard isLive else { return text }
+        let elapsedTime = text.hasSuffix("'") ? "\(text.dropLast()) minutes" : text
+        return "Live, \(elapsedTime)"
     }
 }
 

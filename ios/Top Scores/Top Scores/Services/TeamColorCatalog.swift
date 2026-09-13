@@ -494,6 +494,89 @@ final class TeamIdentityStore: @unchecked Sendable {
         return !leftKeys.isDisjoint(with: rightKeys)
     }
 
+    nonisolated func preferredShortName(for rawValue: String) -> String? {
+        let trimmed = rawValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let key = Self.normalizedKey(trimmed)
+
+        lock.lock()
+        let canonicalKey = exactToCanonicalKey[key]
+        let canonicalName = canonicalKey.flatMap { canonicalNameByKey[$0] } ?? trimmed
+        let knownNames = canonicalKey.flatMap { namesByCanonicalKey[$0] } ?? []
+        lock.unlock()
+
+        if canonicalName.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .contains(where: { String($0).caseInsensitiveCompare("United") == .orderedSame }),
+           let normalizedInput = Self.displayShortName(trimmed, for: canonicalName),
+           normalizedInput != trimmed {
+            return normalizedInput
+        }
+
+        return Self.preferredShortName(fullName: trimmed, candidates: knownNames)
+    }
+
+    nonisolated static func displayShortName(
+        _ candidate: String?,
+        for fullName: String
+    ) -> String? {
+        let trimmedFullName = fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+        var trimmedCandidate = candidate?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmedFullName.isEmpty,
+              !trimmedCandidate.isEmpty,
+              normalizedKey(trimmedCandidate) != normalizedKey(trimmedFullName) else {
+            return nil
+        }
+
+        let fullNameWords = trimmedFullName.split { !$0.isLetter && !$0.isNumber }
+        if fullNameWords.contains(where: { String($0).caseInsensitiveCompare("United") == .orderedSame }) {
+            var candidateWords = trimmedCandidate.split(separator: " ").map(String.init)
+            if candidateWords.last?.caseInsensitiveCompare("U") == .orderedSame {
+                candidateWords[candidateWords.count - 1] = "Utd"
+                trimmedCandidate = candidateWords.joined(separator: " ")
+            }
+        }
+
+        let characters = Array(trimmedCandidate)
+        let isUppercaseCode = (2...4).contains(characters.count) &&
+            characters.allSatisfy(\.isLetter) &&
+            trimmedCandidate == trimmedCandidate.uppercased()
+        if isUppercaseCode {
+            let firstFullNameWord = fullNameWords.first.map(String.init) ?? ""
+            let isLeadingName = firstFullNameWord.caseInsensitiveCompare(trimmedCandidate) == .orderedSame
+            let isClubDesignator = ["AFC", "FC", "CF", "SC"].contains(trimmedCandidate)
+            guard isLeadingName, !isClubDesignator else { return nil }
+        }
+
+        return trimmedCandidate
+    }
+
+    nonisolated static func preferredShortName(
+        fullName: String,
+        candidates: [String]
+    ) -> String? {
+        let trimmedFullName = fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedFullName.isEmpty else { return nil }
+        let fullNameKey = normalizedKey(trimmedFullName)
+        let shorterNames = candidates
+            .compactMap { displayShortName($0, for: trimmedFullName) }
+            .filter {
+                !$0.isEmpty &&
+                    $0.count < trimmedFullName.count &&
+                    normalizedKey($0) != fullNameKey
+            }
+
+        guard !shorterNames.isEmpty else { return nil }
+        let readableNames = shorterNames.filter { candidate in
+            candidate.unicodeScalars.contains { CharacterSet.lowercaseLetters.contains($0) }
+        }
+        return (readableNames.isEmpty ? shorterNames : readableNames).min { left, right in
+            if left.count != right.count {
+                return left.count < right.count
+            }
+            return left.localizedCaseInsensitiveCompare(right) == .orderedAscending
+        }
+    }
+
     nonisolated static func normalizedKey(_ value: String) -> String {
         value
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)

@@ -104,6 +104,13 @@ final class FixtureBrowsePageCache: ObservableObject {
             "[FixturePageCache] flush_deferred pages=\(deferredMatchesByDate.count) " +
             "held_ms=\(heldMilliseconds)"
         )
+        performanceDiagnosticSetBreadcrumb(
+            category: "fixture_cache",
+            value: "flush pages=\(deferredMatchesByDate.count)"
+        )
+        defer {
+            performanceDiagnosticSetBreadcrumb(category: "fixture_cache", value: nil)
+        }
         matchesByDate = deferredMatchesByDate
     }
 
@@ -119,6 +126,8 @@ final class FixtureBrowsePageCache: ObservableObject {
 }
 
 nonisolated enum FixtureBrowsePrefetchPlanner {
+    static let surroundingDateRadius = 3
+
     static func dateKeys(
         in days: [FixtureCalendarDay],
         centeredOn dateKey: String,
@@ -291,6 +300,18 @@ nonisolated enum FixtureBrowseSelectionResolver {
             return nil
         }
         return targetDateKey < selectedDateKey ? .earlier : .later
+    }
+
+    static func currentDateJumpTargetKey(
+        from selectedDateKey: String?,
+        todayKey: String,
+        availableDays: [FixtureCalendarDay]
+    ) -> String? {
+        guard selectedDateKey != todayKey,
+              availableDays.contains(where: { $0.date == todayKey }) else {
+            return nil
+        }
+        return todayKey
     }
 
     static func containsNextScheduledMatch(
@@ -838,9 +859,11 @@ final class FixtureBrowserStore: ObservableObject {
 
     private static let cacheFormatVersion = 2
     private static let maximumCachedBuckets = 512
-    private static let prefetchRadius = 3
-    private static let pageCacheRadius = 1
+    private static let prefetchRadius = FixtureBrowsePrefetchPlanner.surroundingDateRadius
+    private static let pageCacheRadius = FixtureBrowsePrefetchPlanner.surroundingDateRadius
     private static let maximumPreparedPageCount = 15
+    private static let dateSwipePublicationQuietPeriodMilliseconds = 500
+    private static let dateSwipeFailSafeMilliseconds = 10_000
     private static let catalogFreshnessInterval: TimeInterval = 24 * 60 * 60
     private var snapshot: PreferencesSnapshot?
     private var contextKey: String?
@@ -850,9 +873,11 @@ final class FixtureBrowserStore: ObservableObject {
     private var selectedDateTask: Task<Void, Never>?
     private var selectedDateTaskDateKey: String?
     private var prefetchTask: Task<Void, Never>?
+    private var prefetchTargetDateKeys: Set<String> = []
     private var allFixturesWarmTask: Task<Void, Never>?
     private var availabilityRefinementTask: Task<Void, Never>?
     private var pageCacheRebuildTask: Task<Void, Never>?
+    private var dateSelectionFollowUpTask: Task<Void, Never>?
     private var autoRefreshTask: Task<Void, Never>?
     private var dateSwipeWorkReleaseTask: Task<Void, Never>?
     private var autoRefreshTaskID = UUID()
@@ -870,10 +895,20 @@ final class FixtureBrowserStore: ObservableObject {
         dateSwipeWorkReleaseTask?.cancel()
         dateSwipeWorkReleaseTask = nil
         if isActive {
+            dateSelectionFollowUpTask?.cancel()
+            dateSelectionFollowUpTask = nil
+            pageCacheRebuildTask?.cancel()
+            pageCacheRebuildTask = nil
+            pageCacheRebuildRequestID = UUID()
             isDateSwipeInteractionActive = true
             pageCache.setDefersPublications(true)
             dateSwipeWorkReleaseTask = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(2))
+                // A genuine main-run-loop pause can outlast the old two-second
+                // fallback. Releasing here while the gesture is still active lets
+                // page-cache and selection follow-up work contend with its animation.
+                try? await Task.sleep(
+                    for: .milliseconds(Self.dateSwipeFailSafeMilliseconds)
+                )
                 guard !Task.isCancelled, let self else { return }
                 isDateSwipeInteractionActive = false
                 pageCache.setDefersPublications(false)
@@ -883,7 +918,9 @@ final class FixtureBrowserStore: ObservableObject {
         }
 
         dateSwipeWorkReleaseTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(250))
+            try? await Task.sleep(
+                for: .milliseconds(Self.dateSwipePublicationQuietPeriodMilliseconds)
+            )
             guard !Task.isCancelled, let self else { return }
             isDateSwipeInteractionActive = false
             pageCache.setDefersPublications(false)
@@ -895,6 +932,11 @@ final class FixtureBrowserStore: ObservableObject {
         while isDateSwipeInteractionActive {
             try Task.checkCancellation()
             try await Task.sleep(for: .milliseconds(25))
+        }
+        guard await InteractiveMotionGate.shared.waitUntilIdle(
+            operation: "fixture_date_selection_follow_up"
+        ) else {
+            throw CancellationError()
         }
     }
 
@@ -936,9 +978,12 @@ final class FixtureBrowserStore: ObservableObject {
             pageCacheRebuildTask?.cancel()
             pageCacheRebuildTask = nil
             pageCacheRebuildRequestID = UUID()
+            dateSelectionFollowUpTask?.cancel()
+            dateSelectionFollowUpTask = nil
             selectedDateTaskDateKey = nil
             prefetchTask?.cancel()
             prefetchTask = nil
+            prefetchTargetDateKeys = []
             allFixturesWarmTask?.cancel()
             allFixturesWarmTask = nil
             availabilityRefinementTask?.cancel()
@@ -977,34 +1022,92 @@ final class FixtureBrowserStore: ObservableObject {
             return
         }
         let signpost = PerformanceSignposter.matches.beginInterval("FixtureBrowserSelectDate")
-        let startedAt = Date()
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        performanceDiagnosticSetBreadcrumb(
+            category: "fixture_selection",
+            value: "select date=\(dateKey)"
+        )
         defer {
+            performanceDiagnosticSetBreadcrumb(category: "fixture_selection", value: nil)
             PerformanceSignposter.matches.endInterval("FixtureBrowserSelectDate", signpost)
-            let durationMilliseconds = Int(Date().timeIntervalSince(startedAt) * 1000)
+            let durationMilliseconds = Int(
+                ((ProcessInfo.processInfo.systemUptime - startedAt) * 1_000).rounded()
+            )
             if durationMilliseconds >= 16 {
-                diagnosticLog(
-                    "[FixtureBrowserStore] select_date_sync_complete date=%@ duration_ms=%d",
-                    dateKey,
-                    durationMilliseconds
+                performanceDiagnosticLogAsync(
+                    "[FixtureBrowserStore] select_date_sync_complete date=\(dateKey) " +
+                    "duration_ms=\(durationMilliseconds)"
                 )
             }
         }
-        prefetchTask?.cancel()
-        prefetchTask = nil
-        prefetchRequestID = UUID()
+        // The previous selection's surrounding-date request is still useful while
+        // the user swipes rapidly. Keep it when it contains the new selection, but
+        // cancel an unrelated range after a larger carousel jump.
+        if prefetchTask != nil, !prefetchTargetDateKeys.contains(dateKey) {
+            prefetchTask?.cancel()
+            prefetchTask = nil
+            prefetchTargetDateKeys = []
+            prefetchRequestID = UUID()
+        }
+        let selectionPublishStartedAt = ProcessInfo.processInfo.systemUptime
         selectedDateKey = dateKey
+        logDateSelectionPhase(
+            "publish_selected_date",
+            dateKey: dateKey,
+            startedAt: selectionPublishStartedAt
+        )
+        let visiblePublishStartedAt = ProcessInfo.processInfo.systemUptime
         let cachedMatches = pageCache.workingMatchesByDate[dateKey] ?? []
         if visibleMatches != cachedMatches {
             visibleMatches = cachedMatches
         }
-        if isTVListingsModeEnabled {
-            refreshSelectedDateUnfilteredMatches()
+        logDateSelectionPhase(
+            "publish_visible_matches",
+            dateKey: dateKey,
+            startedAt: visiblePublishStartedAt
+        )
+        dateSelectionFollowUpTask?.cancel()
+        dateSelectionFollowUpTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await waitUntilDateSwipeWorkMayPublish()
+            } catch {
+                return
+            }
+            guard !Task.isCancelled, selectedDateKey == dateKey else { return }
+            let followUpStartedAt = ProcessInfo.processInfo.systemUptime
+            if isTVListingsModeEnabled {
+                refreshSelectedDateUnfilteredMatches()
+            }
+            schedulePageCacheRebuild()
+            loadSelectedDateIfNeeded(force: false)
+            if isAutoRefreshEnabled {
+                startAutoRefreshLoop(refreshImmediately: true)
+            }
+            logDateSelectionPhase(
+                "deferred_follow_up",
+                dateKey: dateKey,
+                startedAt: followUpStartedAt
+            )
+            if selectedDateKey == dateKey {
+                dateSelectionFollowUpTask = nil
+            }
         }
-        schedulePageCacheRebuild()
-        loadSelectedDateIfNeeded(force: false)
-        if isAutoRefreshEnabled {
-            startAutoRefreshLoop(refreshImmediately: true)
-        }
+    }
+
+    private func logDateSelectionPhase(
+        _ phase: String,
+        dateKey: String,
+        startedAt: TimeInterval
+    ) {
+        let durationMilliseconds = Int(
+            ((ProcessInfo.processInfo.systemUptime - startedAt) * 1_000).rounded()
+        )
+        guard durationMilliseconds >= 8 else { return }
+        performanceDiagnosticLogAsync(
+            "[FixtureBrowserStore] select_date_phase=\(phase) date=\(dateKey) " +
+            "duration_ms=\(durationMilliseconds)"
+        )
     }
 
     func setTVListingsModeEnabled(_ enabled: Bool) {
@@ -1029,16 +1132,19 @@ final class FixtureBrowserStore: ObservableObject {
         recomputeAvailableDays(keepCurrentDate: true)
     }
 
-    var nextMatchDateJumpDirection: FixtureBrowseSelectionResolver.DateJumpDirection? {
-        FixtureBrowseSelectionResolver.dateJumpDirection(
+    var currentDateJumpTargetKey: String? {
+        FixtureBrowseSelectionResolver.currentDateJumpTargetKey(
             from: selectedDateKey,
-            to: nextMatchDateKey
+            todayKey: todayDateKey,
+            availableDays: availableDays
         )
     }
 
-    func selectNextMatchDate() {
-        guard let nextMatchDateKey else { return }
-        selectDate(nextMatchDateKey)
+    var currentDateJumpDirection: FixtureBrowseSelectionResolver.DateJumpDirection? {
+        FixtureBrowseSelectionResolver.dateJumpDirection(
+            from: selectedDateKey,
+            to: currentDateJumpTargetKey
+        )
     }
 
     func selectAdjacentDate(offset: Int) {
@@ -1216,23 +1322,18 @@ final class FixtureBrowserStore: ObservableObject {
             availableDays = days
         }
 
-        let resolvedNextMatchDateKey: String?
-        if requiresMatchLevelFiltering {
-            resolvedNextMatchDateKey = knownAvailability
-                .filter { $0.value.containsNextScheduledMatch }
-                .map(\.key)
-                .min()
-        } else {
-            resolvedNextMatchDateKey = FixtureBrowseSelectionResolver.upcomingDateKey(
-                from: days,
-                todayKey: todayDateKey,
-                topMatchesOnly: calendarUsesTopMatches(snapshot),
-                selectedCompetitionIDs: selectedCompetitionIDs,
-                selectionApplied: false,
-                showAllMatches: calendarShowsAllMatches(snapshot),
-                knownAvailability: knownAvailability
-            )
-        }
+        // Availability is refined progressively from the on-device fixture cache.
+        // Treat uncached dates as possible matches so a partially warmed cache cannot
+        // make the initial selection or jump button skip straight to a later known date.
+        let resolvedNextMatchDateKey = FixtureBrowseSelectionResolver.upcomingDateKey(
+            from: days,
+            todayKey: todayDateKey,
+            topMatchesOnly: calendarUsesTopMatches(snapshot),
+            selectedCompetitionIDs: selectedCompetitionIDs,
+            selectionApplied: requiresMatchLevelFiltering,
+            showAllMatches: calendarShowsAllMatches(snapshot),
+            knownAvailability: knownAvailability
+        )
         if nextMatchDateKey != resolvedNextMatchDateKey {
             nextMatchDateKey = resolvedNextMatchDateKey
         }
@@ -1508,6 +1609,13 @@ final class FixtureBrowserStore: ObservableObject {
         topMatchesOnly: Bool
     ) -> Bool {
         guard let snapshot else { return false }
+        performanceDiagnosticSetBreadcrumb(
+            category: "fixture_publish",
+            value: "bucket date=\(dateKey) matches=\(bucket.matches.count)"
+        )
+        defer {
+            performanceDiagnosticSetBreadcrumb(category: "fixture_publish", value: nil)
+        }
         let filtered = filteredMatches(in: bucket, snapshot: snapshot, topMatchesOnly: topMatchesOnly)
         if selectedDateKey == dateKey {
             let unfiltered = unfilteredMatches(in: bucket, snapshot: snapshot)
@@ -1705,8 +1813,10 @@ final class FixtureBrowserStore: ObservableObject {
             centeredOn: dateKey,
             cachePayload: cachePayload
         )
+        prefetchTargetDateKeys = Set(targets)
         guard let range = FixtureBrowsePrefetchPlanner.range(for: targets) else {
             prefetchTask = nil
+            prefetchTargetDateKeys = []
             return
         }
 
@@ -1742,6 +1852,7 @@ final class FixtureBrowserStore: ObservableObject {
             if prefetchRequestID == requestID {
                 persistCache()
                 prefetchTask = nil
+                prefetchTargetDateKeys = []
             }
         }
     }

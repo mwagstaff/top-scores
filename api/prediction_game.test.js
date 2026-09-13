@@ -117,6 +117,27 @@ test("fixture responses expose current live scores and clear them at full time",
   assert.deepEqual(p.fixtureResponse(finished, null).result, { homeScore: 2, awayScore: 1 });
 });
 
+test("prediction-game fixtures resolve team identity by BSD ID", () => {
+  const fixture = p.fixtureFromEvent({
+    payload: {
+      id: 601024,
+      league_id: 7,
+      season_id: 203,
+      home_team_id: 57,
+      home_team: "Real Madrid",
+      away_team_id: 77,
+      away_team: "Inter Club d'Escaldes",
+      event_date: "2026-09-08T19:00:00Z",
+      status: "finished",
+      home_score: 2,
+      away_score: 1,
+    },
+  });
+
+  assert.equal(fixture.homeTeam, "Real Madrid");
+  assert.equal(fixture.awayTeam, "Inter Milan");
+});
+
 test("Ten Steps Ahead records reaching the milestone even after later losses", () => {
   const entries = Array.from({ length: 5 }, (_, i) => ({ fixtureId: String(i), kickoffAt: `2026-09-1${i}T12:00:00Z`, youPoints: i < 4 ? 3 : 0, aiPoints: i < 4 ? 0 : 3 }));
   const achievement = p.buildAchievements(entries, [], []).find((a) => a.id === "tenStepsAhead");

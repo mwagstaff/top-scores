@@ -25,23 +25,30 @@ struct TeamRatingLookup: Sendable {
 
     private struct Candidate: Sendable {
         let key: String
+        let keyCharacters: [Character]
         let tokens: [String]
+        let tokenSet: Set<String>
         let rating: Double
     }
 
     private let exactByKey: [String: Double]
     private let candidates: [Candidate]
+    private let candidateIndexesByTrigram: [String: [Int]]
+    private let candidateIndexesByToken: [String: [Int]]
     private let defaultPoints: Double
     private let resolutionCache: ResolutionCache
+    private nonisolated static let minimumAcceptedConfidence = 0.86
     private nonisolated static let stopWords: Set<String> = [
         "fc", "cf", "sc", "afc", "ac", "sv", "fk", "bk", "bc", "ks", "nk", "club", "de", "the", "and"
     ]
     nonisolated init(entries: [TeamRankingEntry], defaultPoints: Double = TeamRankingSettings.defaultDefaultElo) {
         var exact: [String: Double] = [:]
         var candidateList: [Candidate] = []
+        var candidateKeys: Set<String> = []
         candidateList.reserveCapacity(entries.count * 2)
 
         for entry in entries {
+            if Task.isCancelled { break }
             guard let points = entry.points, points.isFinite else { continue }
             var names = [entry.name]
             names.append(contentsOf: entry.aliases)
@@ -50,11 +57,20 @@ struct TeamRatingLookup: Sendable {
             ).filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
             for name in dedupedNames {
+                if Task.isCancelled { break }
                 let key = Self.normalizedKey(name)
                 guard !key.isEmpty else { continue }
                 exact[key] = exact[key] ?? points
+                guard candidateKeys.insert(key).inserted else { continue }
+                let tokens = Self.normalizedTokens(name)
                 candidateList.append(
-                    Candidate(key: key, tokens: Self.normalizedTokens(name), rating: points)
+                    Candidate(
+                        key: key,
+                        keyCharacters: Array(key),
+                        tokens: tokens,
+                        tokenSet: Set(tokens),
+                        rating: points
+                    )
                 )
             }
         }
@@ -62,14 +78,28 @@ struct TeamRatingLookup: Sendable {
         self.defaultPoints = defaultPoints
         exactByKey = exact
         candidates = candidateList
+        var trigramIndex: [String: [Int]] = [:]
+        var tokenIndex: [String: [Int]] = [:]
+        for (index, candidate) in candidateList.enumerated() {
+            for trigram in Self.trigrams(candidate.keyCharacters) {
+                trigramIndex[trigram, default: []].append(index)
+            }
+            for token in candidate.tokenSet {
+                tokenIndex[token, default: []].append(index)
+            }
+        }
+        candidateIndexesByTrigram = trigramIndex
+        candidateIndexesByToken = tokenIndex
         resolutionCache = ResolutionCache()
     }
 
     nonisolated func rating(for teamName: String) -> Double? {
+        guard !Task.isCancelled else { return nil }
         var bestRating: Double?
         var bestConfidence = 0.0
 
         for variant in TeamIdentityStore.shared.names(for: teamName) {
+            guard !Task.isCancelled else { return nil }
             let key = Self.normalizedKey(variant)
             guard !key.isEmpty else { continue }
 
@@ -78,12 +108,25 @@ struct TeamRatingLookup: Sendable {
             }
 
             let sourceTokens = Self.normalizedTokens(variant)
-            for candidate in candidates {
+            let sourceTokenSet = Set(sourceTokens)
+            let keyCharacters = Array(key)
+            let candidateIndexes = candidateIndexes(
+                keyCharacters: keyCharacters,
+                tokens: sourceTokenSet
+            )
+            for (scanIndex, candidateIndex) in candidateIndexes.enumerated() {
+                if scanIndex.isMultiple(of: 64), Task.isCancelled {
+                    return nil
+                }
+                let candidate = candidates[candidateIndex]
                 let confidence = Self.similarity(
                     lhsKey: key,
+                    lhsKeyCharacters: keyCharacters,
                     rhsKey: candidate.key,
                     lhsTokens: sourceTokens,
-                    rhsTokens: candidate.tokens
+                    lhsTokenSet: sourceTokenSet,
+                    rhs: candidate,
+                    currentBestConfidence: bestConfidence
                 )
                 if confidence > bestConfidence {
                     bestConfidence = confidence
@@ -92,8 +135,34 @@ struct TeamRatingLookup: Sendable {
             }
         }
 
-        guard bestConfidence >= 0.86 else { return nil }
+        guard bestConfidence >= Self.minimumAcceptedConfidence else { return nil }
         return bestRating
+    }
+
+    /// A rating can only clear the fuzzy threshold when the names share a
+    /// substantial part of their spelling, an exact token, or are very short.
+    /// Index those signals once so each unseen team does not compare itself to
+    /// every alias in the ratings catalogue.
+    private nonisolated func candidateIndexes(
+        keyCharacters: [Character],
+        tokens: Set<String>
+    ) -> [Int] {
+        guard keyCharacters.count >= 5 else {
+            return Array(candidates.indices)
+        }
+
+        var result: Set<Int> = []
+        for trigram in Self.trigrams(keyCharacters) {
+            if let indexes = candidateIndexesByTrigram[trigram] {
+                result.formUnion(indexes)
+            }
+        }
+        for token in tokens {
+            if let indexes = candidateIndexesByToken[token] {
+                result.formUnion(indexes)
+            }
+        }
+        return result.sorted()
     }
 
     nonisolated func resolvedRating(for teamName: String) -> Double {
@@ -101,6 +170,9 @@ struct TeamRatingLookup: Sendable {
     }
 
     nonisolated func resolveRating(for teamName: String) -> TeamRatingResolution {
+        guard !Task.isCancelled else {
+            return TeamRatingResolution(rating: defaultPoints, usedDefault: true)
+        }
         let cacheKey = Self.normalizedKey(teamName)
         if let cached = resolutionCache.value(for: cacheKey) {
             return cached
@@ -110,6 +182,11 @@ struct TeamRatingLookup: Sendable {
             resolution = TeamRatingResolution(rating: exactRating, usedDefault: false)
         } else {
             resolution = TeamRatingResolution(rating: defaultPoints, usedDefault: true)
+        }
+        // A cancelled speculative grouping must not poison the cache with a
+        // fallback value produced by its early exit.
+        guard !Task.isCancelled else {
+            return TeamRatingResolution(rating: defaultPoints, usedDefault: true)
         }
         resolutionCache.store(resolution, for: cacheKey)
         return resolution
@@ -142,29 +219,78 @@ struct TeamRatingLookup: Sendable {
             .replacingOccurrences(of: "[^a-z0-9]", with: "", options: .regularExpression)
     }
 
-    private nonisolated static func similarity(
-        lhsKey: String,
-        rhsKey: String,
-        lhsTokens: [String],
-        rhsTokens: [String]
-    ) -> Double {
-        let base = normalizedEditSimilarity(lhsKey, rhsKey)
-        let dice = diceCoefficient(lhsTokens, rhsTokens)
-        let prefix = prefixSimilarity(lhsKey, rhsKey, lhsTokens, rhsTokens)
-        return max(base, dice, prefix)
+    private nonisolated static func trigrams(_ characters: [Character]) -> Set<String> {
+        guard characters.count >= 3 else { return [] }
+        var result: Set<String> = []
+        result.reserveCapacity(characters.count - 2)
+        for index in 0..<(characters.count - 2) {
+            result.insert(String(characters[index...(index + 2)]))
+        }
+        return result
     }
 
-    private nonisolated static func normalizedEditSimilarity(_ lhs: String, _ rhs: String) -> Double {
+    private nonisolated static func similarity(
+        lhsKey: String,
+        lhsKeyCharacters: [Character],
+        rhsKey: String,
+        lhsTokens: [String],
+        lhsTokenSet: Set<String>,
+        rhs: Candidate,
+        currentBestConfidence: Double
+    ) -> Double {
+        let dice = diceCoefficient(
+            lhsTokens,
+            rhs.tokens,
+            lhsTokenSet: lhsTokenSet,
+            rhsTokenSet: rhs.tokenSet
+        )
+        let prefix = prefixSimilarity(lhsKey, rhsKey, lhsTokens, rhs.tokens)
+        var confidence = max(dice, prefix)
+
+        // The edit score cannot exceed the ratio implied by the two lengths.
+        // Avoid the matrix calculation for candidates that cannot clear the
+        // acceptance threshold or improve the result already found. This is
+        // particularly important for unranked lower-league fixtures, where the
+        // old all-candidate scan could consume seconds of CPU.
+        let maxLength = max(lhsKeyCharacters.count, rhs.keyCharacters.count)
+        if maxLength > 0 {
+            let lengthUpperBound = 1 - (
+                Double(abs(lhsKeyCharacters.count - rhs.keyCharacters.count)) /
+                    Double(maxLength)
+            )
+            let confidenceToBeat = max(currentBestConfidence, confidence)
+            if lengthUpperBound >= minimumAcceptedConfidence,
+               lengthUpperBound > confidenceToBeat {
+                confidence = max(
+                    confidence,
+                    normalizedEditSimilarity(lhsKeyCharacters, rhs.keyCharacters)
+                )
+            }
+        }
+        return confidence
+    }
+
+    private nonisolated static func normalizedEditSimilarity(
+        _ lhs: [Character],
+        _ rhs: [Character]
+    ) -> Double {
         let maxLength = max(lhs.count, rhs.count)
         guard maxLength > 0 else { return 1 }
         return 1 - (Double(levenshtein(lhs, rhs)) / Double(maxLength))
     }
 
-    private nonisolated static func diceCoefficient(_ lhs: [String], _ rhs: [String]) -> Double {
+    private nonisolated static func diceCoefficient(
+        _ lhs: [String],
+        _ rhs: [String],
+        lhsTokenSet: Set<String>,
+        rhsTokenSet: Set<String>
+    ) -> Double {
         guard !lhs.isEmpty || !rhs.isEmpty else { return 1 }
-        let left = Set(lhs)
-        let right = Set(rhs)
-        let overlap = left.intersection(right).count
+        let overlap = lhsTokenSet.reduce(into: 0) { count, token in
+            if rhsTokenSet.contains(token) {
+                count += 1
+            }
+        }
         return (2 * Double(overlap)) / Double(lhs.count + rhs.count)
     }
 
@@ -184,15 +310,16 @@ struct TeamRatingLookup: Sendable {
         return 0
     }
 
-    private nonisolated static func levenshtein(_ lhs: String, _ rhs: String) -> Int {
-        let lhsChars = Array(lhs)
-        let rhsChars = Array(rhs)
-        var previous = Array(0...rhsChars.count)
-        var current = Array(repeating: 0, count: rhsChars.count + 1)
+    private nonisolated static func levenshtein(
+        _ lhsCharacters: [Character],
+        _ rhsCharacters: [Character]
+    ) -> Int {
+        var previous = Array(0...rhsCharacters.count)
+        var current = Array(repeating: 0, count: rhsCharacters.count + 1)
 
-        for (i, lhsChar) in lhsChars.enumerated() {
+        for (i, lhsChar) in lhsCharacters.enumerated() {
             current[0] = i + 1
-            for (j, rhsChar) in rhsChars.enumerated() {
+            for (j, rhsChar) in rhsCharacters.enumerated() {
                 let cost = lhsChar == rhsChar ? 0 : 1
                 current[j + 1] = min(
                     previous[j + 1] + 1,
@@ -203,7 +330,7 @@ struct TeamRatingLookup: Sendable {
             previous = current
         }
 
-        return previous[rhsChars.count]
+        return previous[rhsCharacters.count]
     }
 }
 

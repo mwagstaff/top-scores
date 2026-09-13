@@ -322,6 +322,46 @@ test("toMatchListPayload upgrades status from match details by match id despite 
   assert.equal(payload.score_status, "FT");
 });
 
+test("toMatchListPayload rejects details with conflicting BSD team IDs despite matching names", () => {
+  const payload = toMatchListPayload(baseMatch({
+    home_team_id: "57",
+    away_team_id: "77",
+  }), {
+    matchDetailsLookup: {
+      [DETAILS_ID]: detailsPayload({
+        home_team: "Wolves",
+        away_team: "Liverpool",
+        home_team_id: "57",
+        away_team_id: "398",
+      }),
+    },
+  });
+
+  assert.equal(payload.match_details_id, undefined);
+  assert.equal(payload.home_score, 0);
+  assert.equal(payload.away_score, 0);
+});
+
+test("toMatchListPayload does not name-match ID-bearing fixtures to ID-less details", () => {
+  const payload = toMatchListPayload(baseMatch({
+    home_team_id: "57",
+    away_team_id: "77",
+  }), {
+    matchDetailsLookup: {
+      [DETAILS_ID]: detailsPayload({
+        home_team: "Wolves",
+        away_team: "Liverpool",
+        home_team_id: null,
+        away_team_id: null,
+      }),
+    },
+  });
+
+  assert.equal(payload.match_details_id, undefined);
+  assert.equal(payload.home_score, 0);
+  assert.equal(payload.away_score, 0);
+});
+
 test("toMatchListPayload preserves explicit BBC-source flag without requiring match_details_id", () => {
   const payload = toMatchListPayload(
     baseMatch({
@@ -3795,6 +3835,48 @@ test("toMatchListPayload resolves match_details_id from details lookup when list
   );
 
   assert.equal(payload.match_details_id, fallbackId);
+});
+
+test("toMatchListPayload resolves ID-bearing fixtures by BSD team IDs before names", () => {
+  const correctId = "601024";
+  const payload = toMatchListPayload(
+    {
+      date: "2026-09-08",
+      time: "20:00",
+      league: "UEFA Champions League",
+      home_team: "Real Madrid",
+      away_team: "Inter",
+      home_team_id: "57",
+      away_team_id: "77",
+      tv_channels: [],
+    },
+    {
+      matchDetailsLookup: {
+        601025: {
+          id: "601025",
+          date: "2026-09-08",
+          time: "20:00",
+          league: "UEFA Champions League",
+          home_team: "Real Madrid",
+          away_team: "Inter",
+          home_team_id: "57",
+          away_team_id: "398",
+        },
+        [correctId]: {
+          id: correctId,
+          date: "2026-09-08",
+          time: "20:00",
+          league: "UEFA Champions League",
+          home_team: "Real Madrid",
+          away_team: "Inter Milan",
+          home_team_id: "57",
+          away_team_id: "77",
+        },
+      },
+    }
+  );
+
+  assert.equal(payload.match_details_id, correctId);
 });
 
 test("toMatchListPayload ignores incompatible match details payloads and leaves the fixture unhydrated", () => {

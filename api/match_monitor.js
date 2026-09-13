@@ -35,6 +35,7 @@ const TEAM_SHORT_NAMES_PAYLOAD = require("./team_short_names.json");
 const TEAM_ALIASES_PAYLOAD = require("./team_aliases.json");
 const { teamIdentityNames, teamIdentityKeys } = require("./team_identity");
 const { bsdTeamLogoAsset, legacyBsdTeamLogoAsset } = require("./bsd_team_logo_assets");
+const { normalizeTeamDisplayShortName } = require("./team_display_name");
 const fs = require("fs");
 const path = require("path");
 
@@ -261,7 +262,7 @@ function shouldUseLiveActivityAliasAsDisplayShortName(alias, canonicalName) {
   const trimmedAlias = String(alias || "").trim();
   const trimmedCanonicalName = String(canonicalName || "").trim();
   if (!trimmedAlias || !trimmedCanonicalName) return false;
-  if (trimmedAlias === trimmedAlias.toUpperCase() && /^[A-Z]{2,4}$/.test(trimmedAlias)) {
+  if (!normalizeTeamDisplayShortName(trimmedAlias, trimmedCanonicalName)) {
     return false;
   }
   if (/\b(?:afc|fc|cf|sc)\b/i.test(trimmedAlias)) {
@@ -286,9 +287,9 @@ function refreshLiveActivityTeamShortNameLookup(datasetRecord = null) {
 }
 
 function resolveLiveActivityTeamShortName(shortNameValue, fullNameValue) {
-  const explicitShortName = String(shortNameValue || "").trim();
   const fullName = String(fullNameValue || "").trim();
-  if (explicitShortName && explicitShortName !== fullName) {
+  const explicitShortName = normalizeTeamDisplayShortName(shortNameValue, fullName);
+  if (explicitShortName) {
     return explicitShortName;
   }
   if (!fullName) return null;
@@ -299,10 +300,11 @@ function resolveLiveActivityTeamShortName(shortNameValue, fullNameValue) {
     STATIC_LIVE_ACTIVITY_TEAM_SHORT_NAME_LOOKUP.get(key);
   const displayAliasResolved = LIVE_ACTIVITY_TEAM_DISPLAY_ALIAS_LOOKUP.get(key);
   const aliasResolved = LIVE_ACTIVITY_TEAM_ALIAS_LOOKUP.get(key);
-  const resolvedValue = resolved || displayAliasResolved || aliasResolved;
-  if (!resolvedValue) return null;
-  const trimmed = String(resolvedValue).trim();
-  return trimmed && trimmed !== fullName ? trimmed : null;
+  for (const candidate of [resolved, displayAliasResolved, aliasResolved]) {
+    const displayName = normalizeTeamDisplayShortName(candidate, fullName);
+    if (displayName) return displayName;
+  }
+  return null;
 }
 
 function liveActivityTeamTokenCount(value) {
@@ -312,13 +314,13 @@ function liveActivityTeamTokenCount(value) {
 }
 
 function resolveLiveActivityDisplayTeamName({ explicitShortName, fullName, logoKey }) {
-  const trimmedShortName = String(explicitShortName || "").trim();
+  const trimmedShortName = normalizeTeamDisplayShortName(explicitShortName, fullName);
   if (trimmedShortName) return trimmedShortName;
 
   const trimmedFullName = String(fullName || "").trim();
-  const trimmedLogoKey = String(logoKey || "").trim();
+  const trimmedLogoKey = normalizeTeamDisplayShortName(logoKey, trimmedFullName);
   if (!trimmedFullName) return trimmedLogoKey || null;
-  if (!trimmedLogoKey || trimmedLogoKey === trimmedFullName) return trimmedFullName;
+  if (!trimmedLogoKey) return trimmedFullName;
 
   const fullTokenCount = liveActivityTeamTokenCount(trimmedFullName);
   const logoTokenCount = liveActivityTeamTokenCount(trimmedLogoKey);

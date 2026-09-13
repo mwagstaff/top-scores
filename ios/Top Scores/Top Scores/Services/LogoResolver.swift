@@ -143,11 +143,16 @@ nonisolated final class LogoResolver: @unchecked Sendable {
             guard let self else { return }
             let startedAt = ProcessInfo.processInfo.systemUptime
             var preparedCount = 0
+            var workDuration: TimeInterval = 0
             for entry in entries {
                 autoreleasepool {
                     InteractiveMotionGate.shared.waitUntilIdleBlocking(
                         operation: "fixture_team_artwork"
                     )
+                    let workStartedAt = ProcessInfo.processInfo.systemUptime
+                    defer {
+                        workDuration += ProcessInfo.processInfo.systemUptime - workStartedAt
+                    }
                     let source = self.resolvePreferredSource(
                         for: entry.name,
                         alternateNames: entry.alternateNames
@@ -157,7 +162,13 @@ nonisolated final class LogoResolver: @unchecked Sendable {
                     let sourceImage = self.imageCache.object(forKey: cacheKey) ??
                         self.image(from: source)
                     guard let sourceImage else { return }
+                    diagnosticLogAsync(
+                        "[FixtureArtwork] prepare_start kind=team source=\(source.displayName)"
+                    )
                     let preparedImage = sourceImage.preparingForDisplay() ?? sourceImage
+                    diagnosticLogAsync(
+                        "[FixtureArtwork] prepare_finished kind=team source=\(source.displayName)"
+                    )
                     self.imageCache.setObject(preparedImage, forKey: cacheKey)
                     self.displayImageCache.setObject(
                         preparedImage,
@@ -172,10 +183,13 @@ nonisolated final class LogoResolver: @unchecked Sendable {
             let durationMilliseconds = Int(
                 ((ProcessInfo.processInfo.systemUptime - startedAt) * 1_000).rounded()
             )
+            let workMilliseconds = Int((workDuration * 1_000).rounded())
             if durationMilliseconds >= 25 {
                 diagnosticLogAsync(
                     "[FixtureArtwork] team_batch entries=\(entries.count) " +
-                    "prepared=\(preparedCount) duration_ms=\(durationMilliseconds)"
+                    "prepared=\(preparedCount) duration_ms=\(durationMilliseconds) " +
+                    "wait_ms=\(max(0, durationMilliseconds - workMilliseconds)) " +
+                    "work_ms=\(workMilliseconds)"
                 )
             }
         }
@@ -336,10 +350,6 @@ nonisolated final class LogoResolver: @unchecked Sendable {
             return direct
         }
 
-        if let directAsset = directAssetSource(for: trimmed) {
-            return directAsset
-        }
-
         for alias in Self.aliases(for: trimmed) {
             if let directAlias = originalLookup[alias] {
                 return directAlias
@@ -347,9 +357,6 @@ nonisolated final class LogoResolver: @unchecked Sendable {
             let aliasKey = Self.normalizedKey(alias)
             if let match = normalizedLookup[aliasKey] {
                 return match
-            }
-            if let directAsset = directAssetSource(for: alias) {
-                return directAsset
             }
         }
 
@@ -367,13 +374,6 @@ nonisolated final class LogoResolver: @unchecked Sendable {
         }
 
         return nil
-    }
-
-    private func directAssetSource(for name: String) -> ImageSource? {
-        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        guard UIImage(named: trimmed) != nil else { return nil }
-        return .asset(trimmed)
     }
 
     private func uniqueCoreMatch(for coreKey: String) -> ImageSource? {
@@ -424,12 +424,33 @@ nonisolated final class LogoResolver: @unchecked Sendable {
     }
 
     private func image(from source: ImageSource) -> UIImage? {
-        switch source {
-        case let .file(url):
-            return UIImage(contentsOfFile: url.path)
-        case let .asset(name):
-            return UIImage(named: name)
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        let isMainThread = Thread.isMainThread
+        if isMainThread {
+            performanceDiagnosticSetBreadcrumb(
+                category: "artwork_decode",
+                value: "team source=\(source.displayName)"
+            )
         }
+        defer {
+            if isMainThread {
+                performanceDiagnosticSetBreadcrumb(category: "artwork_decode", value: nil)
+            }
+        }
+        let image: UIImage? = switch source {
+        case let .file(url):
+            UIImage(contentsOfFile: url.path)
+        case let .asset(name):
+            UIImage(named: name)
+        }
+        let finishedAt = ProcessInfo.processInfo.systemUptime
+        let durationMilliseconds = Int(((finishedAt - startedAt) * 1_000).rounded())
+        diagnosticLogAsync(
+            "[FixtureArtwork] cold_load kind=team source=\(source.displayName) " +
+            "duration_ms=\(durationMilliseconds) main_thread=\(isMainThread ? 1 : 0) " +
+            "success=\(image == nil ? 0 : 1) uptime_ms=\(Int((finishedAt * 1_000).rounded()))"
+        )
+        return image
     }
 
     private func isFallbackSource(_ source: ImageSource) -> Bool {

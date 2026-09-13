@@ -2390,6 +2390,43 @@ test("buildLiveActivityContentState sends provided short names as display-ready 
   assert.equal(contentState.matches[0].awayShortName, undefined);
 });
 
+test("buildLiveActivityContentState rejects team codes and normalizes United short names", () => {
+  const contentState = __testHooks.buildLiveActivityContentState(
+    "multi_upcoming",
+    [
+      {
+        match_details_id: "ccodes123",
+        date: "2026-09-13",
+        time: "15:00",
+        league: "Premier League",
+        home_team: "Bournemouth",
+        away_team: "Brentford",
+        home_short_name: "BOU",
+        away_short_name: "BRE",
+        tv_channels: [],
+      },
+      {
+        match_details_id: "cinitialism123",
+        date: "2026-09-13",
+        time: "17:30",
+        league: "Champions League",
+        home_team: "AEK Athens",
+        away_team: "Manchester United",
+        home_short_name: "AEK",
+        away_short_name: "Man U",
+        tv_channels: [],
+      },
+    ],
+    0,
+    Date.parse("2026-09-13T10:00:00Z")
+  );
+
+  assert.equal(contentState.matches[0].homeTeam, "Bournemouth");
+  assert.equal(contentState.matches[0].awayTeam, "Brentford");
+  assert.equal(contentState.matches[1].homeTeam, "AEK");
+  assert.equal(contentState.matches[1].awayTeam, "Man Utd");
+});
+
 test("buildLiveActivityContentState resolves actual fixture team logo keys from long names", () => {
   const contentState = __testHooks.buildLiveActivityContentState(
     "multi_upcoming",
@@ -2430,7 +2467,7 @@ test("buildLiveActivityContentState resolves actual fixture team logo keys from 
 
   assert.equal(contentState.matches[0].homeLogoKey, "Paris Saint-Germain");
   assert.equal(contentState.matches[0].awayLogoKey, "Bayern Munich");
-  assert.equal(contentState.matches[0].homeTeam, "PSG");
+  assert.equal(contentState.matches[0].homeTeam, "Paris SG");
   assert.equal(contentState.matches[0].awayTeam, "Bayern");
   assert.equal(contentState.matches[1].homeLogoKey, "Northampton");
   assert.equal(contentState.matches[1].awayLogoKey, "Barnsley");

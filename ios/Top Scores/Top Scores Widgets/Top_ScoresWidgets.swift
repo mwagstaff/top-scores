@@ -18,6 +18,45 @@ private func formattedExtraTimeMinuteStatus(_ value: String) -> String? {
     return "ET \(minute)'"
 }
 
+private enum WidgetTeamDisplayNamePolicy {
+    static func displayName(fullName: String, shortName: String?) -> String {
+        let trimmedFullName = normalizeUnitedSuffix(
+            fullName.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+        let rawCandidate = shortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !rawCandidate.isEmpty else { return trimmedFullName }
+
+        let candidate = normalizeUnitedSuffix(rawCandidate)
+        guard candidate.caseInsensitiveCompare(trimmedFullName) != .orderedSame else {
+            return trimmedFullName
+        }
+
+        let characters = Array(candidate)
+        let isUppercaseCode = (2...4).contains(characters.count) &&
+            characters.allSatisfy(\.isLetter) &&
+            candidate == candidate.uppercased()
+        if isUppercaseCode {
+            let firstFullNameWord = trimmedFullName
+                .split { !$0.isLetter && !$0.isNumber }
+                .first
+                .map(String.init) ?? ""
+            let isLeadingName = firstFullNameWord.caseInsensitiveCompare(candidate) == .orderedSame
+            let isClubDesignator = ["AFC", "FC", "CF", "SC"].contains(candidate)
+            guard isLeadingName, !isClubDesignator else { return trimmedFullName }
+        }
+
+        return candidate
+    }
+
+    private static func normalizeUnitedSuffix(_ value: String) -> String {
+        var words = value.split(separator: " ").map(String.init)
+        if words.last?.caseInsensitiveCompare("U") == .orderedSame {
+            words[words.count - 1] = "Utd"
+        }
+        return words.joined(separator: " ")
+    }
+}
+
 private enum WidgetAppGroupConfig {
     static let identifier = "group.dev.skynolimit.topscores"
     static let sharedMatchesFileName = "shared-matches.json"
@@ -174,11 +213,11 @@ private struct WidgetMatch: Identifiable, Codable, Hashable {
     }
 
     var displayHomeTeam: String {
-        homeTeam
+        WidgetTeamDisplayNamePolicy.displayName(fullName: homeTeam, shortName: homeShortName)
     }
 
     var displayAwayTeam: String {
-        awayTeam
+        WidgetTeamDisplayNamePolicy.displayName(fullName: awayTeam, shortName: awayShortName)
     }
 
     var displayLeague: String {
@@ -527,13 +566,11 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
     }
 
     var displayHomeTeam: String {
-        let trimmed = homeShortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? homeTeam : trimmed
+        WidgetTeamDisplayNamePolicy.displayName(fullName: homeTeam, shortName: homeShortName)
     }
 
     var displayAwayTeam: String {
-        let trimmed = awayShortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? awayTeam : trimmed
+        WidgetTeamDisplayNamePolicy.displayName(fullName: awayTeam, shortName: awayShortName)
     }
 
     var isInProgress: Bool {

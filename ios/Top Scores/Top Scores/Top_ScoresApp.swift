@@ -34,6 +34,9 @@ struct Top_ScoresApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(matchesStore: matchesStore)
+                .onAppear {
+                    performanceDiagnosticSetSceneState(String(describing: scenePhase))
+                }
                 .onOpenURL { url in
                     PredictionLeagueInvitationRouter.shared.handle(url)
                 }
@@ -71,6 +74,7 @@ struct Top_ScoresApp: App {
                 }
         }
         .onChange(of: scenePhase) { _, newPhase in
+            performanceDiagnosticSetSceneState(String(describing: newPhase))
             diagnosticLog("[TopScoresApp] scenePhase changed to %@", String(describing: newPhase))
             LiveActivitySyncService.shared.handleScenePhaseChange(newPhase)
             switch newPhase {
@@ -155,8 +159,9 @@ struct Top_ScoresApp: App {
             try? await Task.sleep(nanoseconds: startupDeferredSpacingNanos)
             guard !Task.isCancelled else { return }
 
-            guard await InteractiveMotionGate.shared.waitUntilIdle(
-                operation: "startup_team_rating_settings"
+            guard await InteractiveMotionGate.shared.waitUntilSustainedIdle(
+                operation: "startup_team_rating_settings",
+                quietPeriodMilliseconds: 1_000
             ) else { return }
             PerformanceSignposter.startup.emitEvent("DeferredStartupTeamRatingSettings")
             await TeamRankingSettingsCatalog.shared.ensureFresh(apiBaseURL: snapshot.apiBaseURL)
@@ -165,8 +170,9 @@ struct Top_ScoresApp: App {
             try? await Task.sleep(nanoseconds: startupDeferredSpacingNanos)
             guard !Task.isCancelled else { return }
 
-            guard await InteractiveMotionGate.shared.waitUntilIdle(
-                operation: "startup_team_ratings"
+            guard await InteractiveMotionGate.shared.waitUntilSustainedIdle(
+                operation: "startup_team_ratings",
+                quietPeriodMilliseconds: 1_000
             ) else { return }
             PerformanceSignposter.startup.emitEvent("DeferredStartupTeamRatings")
             await TeamRankingsCatalog.shared.ensureFresh(apiBaseURL: snapshot.apiBaseURL)

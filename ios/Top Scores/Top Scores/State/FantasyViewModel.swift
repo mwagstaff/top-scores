@@ -512,8 +512,8 @@ final class FantasyViewModel: ObservableObject {
         return min(15 * 60, max(30, nextKickoff.timeIntervalSince(now)))
     }
 
-    /// Refreshes the locked active-gameweek picks, fixture state, and official live points
-    /// without repeating profile, rival, league, or authenticated-team work.
+    /// Refreshes the locked active-gameweek picks, profile, fixture state, and official live points
+    /// without repeating league or authenticated-team work.
     /// Returns true when FPL has just confirmed the gameweek via `data_checked`.
     func refreshCurrentScores() async -> Bool {
         guard !isLoading, !isRefreshing, !isRefreshingCurrentScores,
@@ -527,6 +527,7 @@ final class FantasyViewModel: ObservableObject {
         defer { isRefreshingCurrentScores = false }
 
         do {
+            async let refreshedProfileTask = fetchMyProfile(entryID: entryID)
             let refreshedBootstrap = try await timed("current_score_bootstrap") {
                 try await fantasyPublicClient.fetchBootstrapStatic()
             }
@@ -574,6 +575,12 @@ final class FantasyViewModel: ObservableObject {
             cachedBootstrapFetchedAt = Date()
             cachedSeasonFixtures = mergedSeasonFixtures
             cachedSeasonFixturesFetchedAt = Date()
+            let refreshedProfile = await refreshedProfileTask
+            myProfile = fantasyStableEntryProfile(
+                existing: myProfile,
+                candidate: refreshedProfile,
+                gameweekDataChecked: refreshedGameweek.dataChecked == true
+            )
             if refreshedGameweek.isCurrent == true,
                refreshedGameweek.dataChecked != true,
                !rivalSquads.isEmpty {
@@ -1117,15 +1124,20 @@ final class FantasyViewModel: ObservableObject {
             let activeEntryID = currentTeamResult.entryID
             async let myProfileTask = fetchMyProfile(entryID: activeEntryID)
 
-            let (bootstrapLookup, myProfile, seasonFixtures, _) = try await (
+            let (bootstrapLookup, fetchedMyProfile, seasonFixtures, _) = try await (
                 bootstrapLookupTask,
                 myProfileTask,
                 seasonFixturesTask,
                 seasonActiveTask
             )
-            self.myProfile = myProfile
 
             let currentTeamGameweek = resolvedCurrentTeamGameweek(events: bootstrapLookup.events)
+            self.myProfile = fantasyStableEntryProfile(
+                existing: self.myProfile,
+                candidate: fetchedMyProfile,
+                gameweekDataChecked: currentTeamGameweek.dataChecked == true
+            )
+            let resolvedMyProfile = self.myProfile
             let currentSnapshot: FantasySquadSnapshot
             if FantasyTeamGameweekResolver.isLiveScoringGameweek(currentTeamGameweek) {
                 currentSnapshot = try await fetchSquadSnapshot(
@@ -1251,7 +1263,7 @@ final class FantasyViewModel: ObservableObject {
                     let refreshedLeagues = await self.fetchTrackedLeagueStandings(
                         trackedLeagues: normalizedTrackedLeagues,
                         managerEntryID: activeEntryID,
-                        managerProfile: myProfile
+                        managerProfile: resolvedMyProfile
                     )
                     guard self.leagueRefreshToken == refreshToken else { return }
                     self.trackedLeagueStandings = refreshedLeagues

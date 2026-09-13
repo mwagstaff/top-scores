@@ -1647,7 +1647,15 @@ struct FantasyView: View {
                 teamName: myTeamName,
                 managerName: myManagerName,
                 currentGameweekScore: mySquad.resolvedCurrentScore,
-                allGameweeksScore: mySquad.seasonTotalPoints ?? profile?.summaryOverallPoints,
+                allGameweeksScore: fantasyReconciledSeasonTotalPoints(
+                    squadSeasonPoints: mySquad.seasonTotalPoints,
+                    reportedCurrentGameweekPoints: mySquad.totalPoints,
+                    resolvedCurrentGameweekPoints: mySquad.resolvedCurrentScore,
+                    gameweekID: mySquad.gameweekID,
+                    profileCurrentGameweekID: profile?.currentEvent,
+                    profileCurrentGameweekPoints: profile?.summaryEventPoints,
+                    profileSeasonPoints: profile?.summaryOverallPoints
+                ),
                 projectedGameweekPoints: fantasyViewModel.currentSquadProjectedGameweekPoints,
                 isExpectedPointsLoading: false,
                 hasActiveChipInCurrentGameweek: mySquad.hasActiveChip,

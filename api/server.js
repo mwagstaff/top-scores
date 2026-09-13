@@ -137,6 +137,7 @@ const {
   buildFantasyShortNameMappings,
 } = require("./team_identity");
 const { bsdTeamLogoAsset, legacyBsdTeamLogoAsset } = require("./bsd_team_logo_assets");
+const { normalizeTeamDisplayShortName } = require("./team_display_name");
 const {
   buildTeamCatalog,
   buildTeamCatalogIndex,
@@ -8107,7 +8108,7 @@ function normalizeTeamShortNameKey(value) {
 
 function normalizeTeamShortNameEntry(name, shortName, options = {}) {
   const resolvedName = String(name || "").trim();
-  const resolvedShortName = String(shortName || "").trim();
+  const resolvedShortName = normalizeTeamDisplayShortName(shortName, resolvedName);
   const key = normalizeTeamShortNameKey(resolvedName);
   const shortKey = normalizeTeamShortNameKey(resolvedShortName);
   if (!key || !resolvedShortName || !shortKey || key === shortKey) {
@@ -8448,36 +8449,60 @@ function applyTeamShortNamesToApiValue(value, lookup = null) {
   const camelAwayTeam =
     typeof output.awayTeam === "string" && output.awayTeam.trim() ? output.awayTeam.trim() : null;
 
-  const homeShortName = resolveApiTeamShortName(snakeHomeTeam || camelHomeTeam, resolvedLookup);
-  const awayShortName = resolveApiTeamShortName(snakeAwayTeam || camelAwayTeam, resolvedLookup);
+  const resolvedHomeShortName = resolveApiTeamShortName(
+    snakeHomeTeam || camelHomeTeam,
+    resolvedLookup
+  );
+  const resolvedAwayShortName = resolveApiTeamShortName(
+    snakeAwayTeam || camelAwayTeam,
+    resolvedLookup
+  );
+  const fullHomeTeam = snakeHomeTeam || camelHomeTeam;
+  const fullAwayTeam = snakeAwayTeam || camelAwayTeam;
+  const snakeHomeShortName = normalizeTeamDisplayShortName(
+    resolvedHomeShortName || output.home_short_name,
+    fullHomeTeam
+  );
+  const snakeAwayShortName = normalizeTeamDisplayShortName(
+    resolvedAwayShortName || output.away_short_name,
+    fullAwayTeam
+  );
+  const camelHomeShortName = normalizeTeamDisplayShortName(
+    resolvedHomeShortName || output.homeShortName,
+    fullHomeTeam
+  );
+  const camelAwayShortName = normalizeTeamDisplayShortName(
+    resolvedAwayShortName || output.awayShortName,
+    fullAwayTeam
+  );
 
   if (snakeHomeTeam) {
-    if (homeShortName && homeShortName !== snakeHomeTeam) {
-      output.home_short_name = homeShortName;
+    if (snakeHomeShortName && snakeHomeShortName !== snakeHomeTeam) {
+      output.home_short_name = snakeHomeShortName;
     } else if (Object.prototype.hasOwnProperty.call(output, "home_short_name")) {
       delete output.home_short_name;
     }
   }
 
   if (snakeAwayTeam) {
-    if (awayShortName && awayShortName !== snakeAwayTeam) {
-      output.away_short_name = awayShortName;
+    if (snakeAwayShortName && snakeAwayShortName !== snakeAwayTeam) {
+      output.away_short_name = snakeAwayShortName;
     } else if (Object.prototype.hasOwnProperty.call(output, "away_short_name")) {
       delete output.away_short_name;
     }
   }
 
   if (camelHomeTeam) {
-    if (homeShortName && homeShortName !== camelHomeTeam) {
-      output.homeShortName = homeShortName;
+    if (camelHomeShortName && camelHomeShortName !== camelHomeTeam) {
+      output.homeShortName = camelHomeShortName;
     } else if (Object.prototype.hasOwnProperty.call(output, "homeShortName")) {
       delete output.homeShortName;
     }
   }
 
   if (camelAwayTeam) {
-    if (awayShortName && awayShortName !== camelAwayTeam) {
-      output.awayShortName = awayShortName;
+    if (camelAwayShortName && camelAwayShortName !== camelAwayTeam) {
+      output.awayShortName = camelAwayShortName;
     } else if (Object.prototype.hasOwnProperty.call(output, "awayShortName")) {
       delete output.awayShortName;
     }
@@ -12347,17 +12372,24 @@ function isCompatibleMatchDetailsPayloadForListMatch(listMatch, detailsPayload) 
     return false;
   }
 
-  const detailsHome = normalizeTeamIdentity(detailsPayload.home_team);
-  const detailsAway = normalizeTeamIdentity(detailsPayload.away_team);
-  if (!detailsHome || !detailsAway) {
-    return false;
-  }
-
-  if (
-    detailsHome !== normalizeTeamIdentity(normalizedList.home_team) ||
-    detailsAway !== normalizeTeamIdentity(normalizedList.away_team)
-  ) {
-    return false;
+  const listHomeId = String(normalizedList.home_team_id || "").trim();
+  const listAwayId = String(normalizedList.away_team_id || "").trim();
+  const detailsHomeId = String(detailsPayload.home_team_id || "").trim();
+  const detailsAwayId = String(detailsPayload.away_team_id || "").trim();
+  const hasAnyTeamId = listHomeId || listAwayId || detailsHomeId || detailsAwayId;
+  if (hasAnyTeamId) {
+    if (!listHomeId || !listAwayId || !detailsHomeId || !detailsAwayId) return false;
+    if (listHomeId !== detailsHomeId || listAwayId !== detailsAwayId) return false;
+  } else {
+    const detailsHome = normalizeTeamIdentity(detailsPayload.home_team);
+    const detailsAway = normalizeTeamIdentity(detailsPayload.away_team);
+    if (!detailsHome || !detailsAway) return false;
+    if (
+      detailsHome !== normalizeTeamIdentity(normalizedList.home_team) ||
+      detailsAway !== normalizeTeamIdentity(normalizedList.away_team)
+    ) {
+      return false;
+    }
   }
 
   const detailsDate = normalizeLookupDateValue(detailsPayload.date);
@@ -12377,6 +12409,7 @@ function isCompatibleMatchDetailsPayloadForListMatch(listMatch, detailsPayload) 
 function buildMatchDetailsIdentityIndex(matchDetailsLookup) {
   const byExact = new Map();
   const byTeams = new Map();
+  const byTeamIds = new Map();
   const entries =
     matchDetailsLookup instanceof Map
       ? Array.from(matchDetailsLookup.entries())
@@ -12397,6 +12430,8 @@ function buildMatchDetailsIdentityIndex(matchDetailsLookup) {
     const teamKey = `${home}|${away}`;
     const candidate = {
       id: detailsId,
+      homeId: String(value.home_team_id || "").trim() || null,
+      awayId: String(value.away_team_id || "").trim() || null,
       home,
       away,
       date,
@@ -12408,6 +12443,12 @@ function buildMatchDetailsIdentityIndex(matchDetailsLookup) {
     if (!byTeams.has(teamKey)) byTeams.set(teamKey, []);
     byTeams.get(teamKey).push(candidate);
 
+    if (candidate.homeId && candidate.awayId) {
+      const teamIdKey = `${candidate.homeId}|${candidate.awayId}`;
+      if (!byTeamIds.has(teamIdKey)) byTeamIds.set(teamIdKey, []);
+      byTeamIds.get(teamIdKey).push(candidate);
+    }
+
     if (date) {
       const exactKey = `${date}|${time || "00:00"}|${league}|${teamKey}`;
       if (!byExact.has(exactKey)) byExact.set(exactKey, []);
@@ -12415,11 +12456,19 @@ function buildMatchDetailsIdentityIndex(matchDetailsLookup) {
     }
   });
 
-  return { byExact, byTeams };
+  return { byExact, byTeams, byTeamIds };
 }
 
 function isCompatibleMatchDetailsCandidate(candidate, normalizedMatch) {
   if (!candidate || !normalizedMatch) return false;
+
+  const matchHomeId = String(normalizedMatch.home_team_id || "").trim();
+  const matchAwayId = String(normalizedMatch.away_team_id || "").trim();
+  const hasAnyTeamId = matchHomeId || matchAwayId || candidate.homeId || candidate.awayId;
+  if (hasAnyTeamId) {
+    if (!matchHomeId || !matchAwayId || !candidate.homeId || !candidate.awayId) return false;
+    if (matchHomeId !== candidate.homeId || matchAwayId !== candidate.awayId) return false;
+  }
 
   if (candidate.date && candidate.date !== normalizedMatch.date) {
     return false;
@@ -12515,6 +12564,17 @@ function resolveMatchDetailsIdFromLookup(normalizedMatch, options = {}) {
   if (!home || !away) return null;
 
   const index = options.matchDetailsIdentityIndex || buildMatchDetailsIdentityIndex(matchDetailsLookup);
+  const homeId = String(normalizedMatch.home_team_id || "").trim();
+  const awayId = String(normalizedMatch.away_team_id || "").trim();
+  if (homeId && awayId) {
+    const idMatch = pickBestMatchDetailsCandidate(
+      index.byTeamIds.get(`${homeId}|${awayId}`) || [],
+      normalizedMatch
+    );
+    // BSD IDs are authoritative. Do not fall through to an alias/name match
+    // when an ID-bearing fixture has no corresponding details payload.
+    return idMatch ? idMatch.id : null;
+  }
   const matchTime = normalizeLookupTimeValue(normalizedMatch.time) || "00:00";
   const matchLeague = normalizeLeagueIdentity(normalizedMatch.league);
   const teamKey = `${home}|${away}`;

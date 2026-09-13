@@ -130,11 +130,11 @@ struct TopScoresLiveActivityMatchState: Codable, Hashable {
     }
 
     var displayHomeTeam: String {
-        homeTeam
+        TeamIdentityStore.displayShortName(homeShortName, for: homeTeam) ?? homeTeam
     }
 
     var displayAwayTeam: String {
-        awayTeam
+        TeamIdentityStore.displayShortName(awayShortName, for: awayTeam) ?? awayTeam
     }
 }
 

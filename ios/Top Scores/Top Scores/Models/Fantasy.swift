@@ -489,6 +489,59 @@ nonisolated func fantasySeasonTotalPoints(
         + resolvedCurrentGameweekPoints
 }
 
+/// Reconciles the picks, live, and profile feeds when FPL publishes them at
+/// different times. The picks feed provides the stable pre-gameweek baseline;
+/// whichever current-gameweek feed has advanced beyond it supplies this round.
+nonisolated func fantasyReconciledSeasonTotalPoints(
+    squadSeasonPoints: Int?,
+    reportedCurrentGameweekPoints: Int,
+    resolvedCurrentGameweekPoints: Int,
+    gameweekID: Int,
+    profileCurrentGameweekID: Int?,
+    profileCurrentGameweekPoints: Int?,
+    profileSeasonPoints: Int?
+) -> Int? {
+    guard let squadSeasonPoints else { return profileSeasonPoints }
+
+    let completedGameweeksPoints = squadSeasonPoints - resolvedCurrentGameweekPoints
+    let currentGameweekPoints: Int
+    if resolvedCurrentGameweekPoints != reportedCurrentGameweekPoints {
+        currentGameweekPoints = resolvedCurrentGameweekPoints
+    } else if profileCurrentGameweekID == gameweekID,
+              let profileCurrentGameweekPoints,
+              let profileSeasonPoints,
+              profileCurrentGameweekPoints != reportedCurrentGameweekPoints,
+              profileSeasonPoints > squadSeasonPoints {
+        currentGameweekPoints = profileCurrentGameweekPoints
+    } else {
+        currentGameweekPoints = resolvedCurrentGameweekPoints
+    }
+
+    return completedGameweeksPoints + currentGameweekPoints
+}
+
+/// FPL's edge-merged profile response can briefly alternate between old and new
+/// score snapshots. Keep the newest observed total while a gameweek is live,
+/// then accept the authoritative response once FPL marks the round as checked.
+nonisolated func fantasyStableEntryProfile(
+    existing: FantasyEntryProfile?,
+    candidate: FantasyEntryProfile?,
+    gameweekDataChecked: Bool
+) -> FantasyEntryProfile? {
+    guard let candidate else { return existing }
+    guard !gameweekDataChecked,
+          let existing,
+          existing.id == candidate.id,
+          existing.currentEvent == candidate.currentEvent,
+          let existingSeasonPoints = existing.summaryOverallPoints,
+          let candidateSeasonPoints = candidate.summaryOverallPoints,
+          candidateSeasonPoints < existingSeasonPoints else {
+        return candidate
+    }
+
+    return existing
+}
+
 nonisolated struct FantasyEventLiveResponse: Codable, Hashable {
     let elements: [FantasyLiveElement]
 }

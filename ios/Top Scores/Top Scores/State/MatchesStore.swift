@@ -2157,10 +2157,14 @@ final class MatchesStore: ObservableObject {
                 try? await Task.sleep(nanoseconds: self.teamRankingsRefreshDelayNanos)
             }
             guard !Task.isCancelled else { return }
+            guard await InteractiveMotionGate.shared.waitUntilSustainedIdle(
+                operation: "matches_store_team_ratings",
+                quietPeriodMilliseconds: 1_000
+            ) else { return }
 
             let cachedSettings = await TeamRankingSettingsCatalog.shared.settings()
             let cachedEntries = await TeamRankingsCatalog.shared.cachedEntries()
-            self?.applyTeamRatingSnapshot(
+            await self?.applyTeamRatingSnapshot(
                 entries: cachedEntries,
                 defaultElo: cachedSettings.defaultElo
             )
@@ -2176,21 +2180,50 @@ final class MatchesStore: ObservableObject {
 
             let refreshedSettings = await TeamRankingSettingsCatalog.shared.settings()
             let refreshedEntries = await TeamRankingsCatalog.shared.cachedEntries()
-            self?.applyTeamRatingSnapshot(
+            await self?.applyTeamRatingSnapshot(
                 entries: refreshedEntries,
                 defaultElo: refreshedSettings.defaultElo
             )
         }
     }
 
-    private func applyTeamRatingSnapshot(entries: [TeamRankingEntry], defaultElo: Double) {
+    private func applyTeamRatingSnapshot(
+        entries: [TeamRankingEntry],
+        defaultElo: Double
+    ) async {
+        guard entries != lastAppliedTeamRankingEntries ||
+                abs(defaultElo - lastAppliedTeamRatingDefaultElo) > 0.0001 else {
+            return
+        }
+        let buildStartedAt = ProcessInfo.processInfo.systemUptime
+        let buildTask = Task.detached(priority: .utility) {
+            TeamRatingLookup(entries: entries, defaultPoints: defaultElo)
+        }
+        let nextLookup = await withTaskCancellationHandler {
+            await buildTask.value
+        } onCancel: {
+            buildTask.cancel()
+        }
+        guard !Task.isCancelled else { return }
+        let buildMilliseconds = Int(
+            ((ProcessInfo.processInfo.systemUptime - buildStartedAt) * 1_000).rounded()
+        )
+        if buildMilliseconds >= 16 {
+            performanceDiagnosticLogAsync(
+                "[MatchesPerformance] phase=team_rating_lookup_build " +
+                "duration_ms=\(buildMilliseconds) entries=\(entries.count) main_thread=false"
+            )
+        }
+        guard await InteractiveMotionGate.shared.waitUntilSustainedIdle(
+            operation: "team_rating_lookup_publish",
+            quietPeriodMilliseconds: 500
+        ) else { return }
         guard entries != lastAppliedTeamRankingEntries ||
                 abs(defaultElo - lastAppliedTeamRatingDefaultElo) > 0.0001 else {
             return
         }
         lastAppliedTeamRankingEntries = entries
         lastAppliedTeamRatingDefaultElo = defaultElo
-        let nextLookup = TeamRatingLookup(entries: entries, defaultPoints: defaultElo)
         teamRatingLookup = nextLookup
         groupingRevision &+= 1
         publishAllModes(priorityMode: activeMode)

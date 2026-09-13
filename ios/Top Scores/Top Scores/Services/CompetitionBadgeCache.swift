@@ -144,7 +144,7 @@ nonisolated final class CompetitionBadgeCache: @unchecked Sendable {
         if let cached = imageCache.object(forKey: key) {
             return cached
         }
-        guard let image = UIImage(named: assetName) else { return nil }
+        guard let image = loadBundledImage(assetName: assetName) else { return nil }
         imageCache.setObject(image, forKey: key)
         return image
     }
@@ -157,7 +157,7 @@ nonisolated final class CompetitionBadgeCache: @unchecked Sendable {
         if let cached = imageCache.object(forKey: key) {
             return cached
         }
-        guard let image = UIImage(contentsOfFile: url.path) else { return nil }
+        guard let image = loadFileImage(url: url, competitionID: competitionID) else { return nil }
         imageCache.setObject(image, forKey: key)
         return image
     }
@@ -188,22 +188,33 @@ nonisolated final class CompetitionBadgeCache: @unchecked Sendable {
             guard let self else { return }
             let startedAt = ProcessInfo.processInfo.systemUptime
             var preparedCount = 0
+            var workDuration: TimeInterval = 0
             for entry in entries {
                 autoreleasepool {
                     InteractiveMotionGate.shared.waitUntilIdleBlocking(
                         operation: "fixture_competition_artwork"
                     )
+                    let workStartedAt = ProcessInfo.processInfo.systemUptime
+                    defer {
+                        workDuration += ProcessInfo.processInfo.systemUptime - workStartedAt
+                    }
                     if let assetName = BundledCompetitionLogo.assetName(
                         competitionID: entry.id,
                         competitionName: entry.name
                     ) {
                         let key = "bundle:\(assetName)" as NSString
                         let sourceImage = self.imageCache.object(forKey: key) ??
-                            UIImage(named: assetName)
+                            self.loadBundledImage(assetName: assetName)
                         guard let sourceImage else { return }
+                        diagnosticLogAsync(
+                            "[FixtureArtwork] prepare_start kind=competition source=asset:\(assetName)"
+                        )
                         self.imageCache.setObject(
                             sourceImage.preparingForDisplay() ?? sourceImage,
                             forKey: key
+                        )
+                        diagnosticLogAsync(
+                            "[FixtureArtwork] prepare_finished kind=competition source=asset:\(assetName)"
                         )
                         preparedCount += 1
                     } else {
@@ -219,11 +230,17 @@ nonisolated final class CompetitionBadgeCache: @unchecked Sendable {
                         guard let url else { return }
                         let key = url.path as NSString
                         let sourceImage = self.imageCache.object(forKey: key) ??
-                            UIImage(contentsOfFile: url.path)
+                            self.loadFileImage(url: url, competitionID: entry.id)
                         guard let sourceImage else { return }
+                        diagnosticLogAsync(
+                            "[FixtureArtwork] prepare_start kind=competition source=file:\(url.lastPathComponent)"
+                        )
                         self.imageCache.setObject(
                             sourceImage.preparingForDisplay() ?? sourceImage,
                             forKey: key
+                        )
+                        diagnosticLogAsync(
+                            "[FixtureArtwork] prepare_finished kind=competition source=file:\(url.lastPathComponent)"
                         )
                         preparedCount += 1
                     }
@@ -232,13 +249,58 @@ nonisolated final class CompetitionBadgeCache: @unchecked Sendable {
             let durationMilliseconds = Int(
                 ((ProcessInfo.processInfo.systemUptime - startedAt) * 1_000).rounded()
             )
+            let workMilliseconds = Int((workDuration * 1_000).rounded())
             if durationMilliseconds >= 25 {
                 diagnosticLogAsync(
                     "[FixtureArtwork] competition_batch entries=\(entries.count) " +
-                    "prepared=\(preparedCount) duration_ms=\(durationMilliseconds)"
+                    "prepared=\(preparedCount) duration_ms=\(durationMilliseconds) " +
+                    "wait_ms=\(max(0, durationMilliseconds - workMilliseconds)) " +
+                    "work_ms=\(workMilliseconds)"
                 )
             }
         }
+    }
+
+    private func loadBundledImage(assetName: String) -> UIImage? {
+        measuredColdLoad(source: "asset:\(assetName)") {
+            UIImage(named: assetName)
+        }
+    }
+
+    private func loadFileImage(url: URL, competitionID: String?) -> UIImage? {
+        measuredColdLoad(
+            source: "file:\(url.lastPathComponent) competition=\(competitionID ?? "unknown")"
+        ) {
+            UIImage(contentsOfFile: url.path)
+        }
+    }
+
+    private func measuredColdLoad(
+        source: String,
+        load: () -> UIImage?
+    ) -> UIImage? {
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        let isMainThread = Thread.isMainThread
+        if isMainThread {
+            performanceDiagnosticSetBreadcrumb(
+                category: "artwork_decode",
+                value: "competition source=\(source)"
+            )
+        }
+        defer {
+            if isMainThread {
+                performanceDiagnosticSetBreadcrumb(category: "artwork_decode", value: nil)
+            }
+        }
+        let image = load()
+        let finishedAt = ProcessInfo.processInfo.systemUptime
+        let durationMilliseconds = Int(((finishedAt - startedAt) * 1_000).rounded())
+        diagnosticLogAsync(
+            "[FixtureArtwork] cold_load kind=competition source=\(source) " +
+            "duration_ms=\(durationMilliseconds) main_thread=\(isMainThread ? 1 : 0) " +
+            "success=\(image == nil ? 0 : 1) uptime_ms=\(Int((finishedAt * 1_000).rounded()))"
+        )
+        return image
     }
 
     func warmIfNeeded(entries: [CompetitionCatalogEntry]) {

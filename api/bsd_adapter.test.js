@@ -20,6 +20,7 @@ const {
   isCurrentSeasonEvent,
   bsdPlayerEntry,
   parseBsdFormString,
+  bsdStandingsRowToCanonical,
   bsdStandingsPayloadToTable,
   bsdStandingsZonesToCanonical,
   completeBsdStandingsRowsFromEvents,
@@ -248,12 +249,14 @@ test("parseBsdIncidents: preserves manager card names outside the match timeline
   assert.deepEqual(r.away_yellow_cards, [{ player: "G. Alfaro", yellow_card_times: ["-5'"] }]);
 });
 
-test("isDisallowedGoalVarDecision: true only for a goal decision that did not stand", () => {
+test("isDisallowedGoalVarDecision: true only when the VAR outcome disallows a goal", () => {
   const { isDisallowedGoalVarDecision } = __private;
   assert.equal(isDisallowedGoalVarDecision("goalAwarded", false), true);
-  // Confirmed goal award, non-goal reviews, and missing/ambiguous confirmed
-  // state are all noise — never surfaced.
+  assert.equal(isDisallowedGoalVarDecision("goalNotAwarded", true), true);
+  // Confirmed goal awards, rejected non-awards, non-goal reviews, and
+  // missing/ambiguous confirmation state are all noise — never surfaced.
   assert.equal(isDisallowedGoalVarDecision("goalAwarded", true), false);
+  assert.equal(isDisallowedGoalVarDecision("goalNotAwarded", false), false);
   assert.equal(isDisallowedGoalVarDecision("penaltyAwarded", false), false);
   assert.equal(isDisallowedGoalVarDecision("redCard", false), false);
   assert.equal(isDisallowedGoalVarDecision("offsideCheck", false), false);
@@ -261,7 +264,7 @@ test("isDisallowedGoalVarDecision: true only for a goal decision that did not st
   assert.equal(isDisallowedGoalVarDecision("", false), false);
 });
 
-test("parseBsdIncidents: drops confirmed goal-award and non-goal VAR decisions entirely", () => {
+test("parseBsdIncidents: drops VAR decisions that do not disallow a goal", () => {
   const incidents = [
     // Goal-award decision that stood on review — not noteworthy, no event.
     { type: "varDecision", minute: 12, player: "A", is_home: true, decision: "goalAwarded", confirmed: true },
@@ -271,6 +274,16 @@ test("parseBsdIncidents: drops confirmed goal-award and non-goal VAR decisions e
   ];
   const r = parseBsdIncidents(incidents);
   assert.deepEqual(r.home_var_events, []);
+  assert.deepEqual(r.away_var_events, []);
+});
+
+test("parseBsdIncidents: keeps Haaland goal when goalNotAwarded is not confirmed", () => {
+  const r = parseBsdIncidents([
+    { type: "goal", minute: 60, player: "E. Haaland", player_id: 852, is_home: false, goal_type: "regular" },
+    { type: "varDecision", minute: 60, player: "E. Haaland", player_id: 852, is_home: false, decision: "goalNotAwarded", confirmed: false },
+  ]);
+
+  assert.deepEqual(r.away_goal_scorers, [{ player: "E. Haaland", id_player: "852", goal_times: ["60'"] }]);
   assert.deepEqual(r.away_var_events, []);
 });
 
@@ -357,6 +370,91 @@ test("bsdEventToCanonicalMatch: canonicalises names, league, zoned date, status"
   assert.equal(m.time, "20:00");
   const compositeId = `${m.date}|${m.time}|${m.league}|${m.home_team}|${m.away_team}`;
   assert.equal(compositeId, "2026-06-21|20:00|FIFA World Cup 2026|Cape Verde|Uruguay");
+});
+
+test("bsdEventToCanonicalMatch: includes provider team short names when available", () => {
+  const match = bsdEventToCanonicalMatch({
+    id: 209572,
+    league_id: 1,
+    home_team: "Manchester United",
+    away_team: "Manchester City",
+    home_team_id: 17,
+    away_team_id: 12,
+    status: "notstarted",
+    event_date: "2026-09-13T15:30:00Z",
+  }, {
+    teamsById: new Map([
+      ["17", { name: "Manchester United", short_name: "Man U" }],
+      ["12", { name: "Manchester City", short_name: "Man City" }],
+    ]),
+  });
+
+  assert.equal(match.home_team, "Manchester United");
+  assert.equal(match.away_team, "Manchester City");
+  assert.equal(match.home_short_name, "Man U");
+  assert.equal(match.away_short_name, "Man City");
+});
+
+test("bsdEventToCanonicalMatch: resolves team identity by BSD ID, not provider name", () => {
+  const baseEvent = {
+    id: 601024,
+    league_id: 7,
+    home_team: "Real Madrid",
+    home_team_id: 57,
+    away_team: "Inter",
+    status: "finished",
+    event_date: "2026-09-08T19:00:00Z",
+  };
+
+  const interMilan = bsdEventToCanonicalMatch({ ...baseEvent, away_team_id: 77 });
+  const interEscaldes = bsdEventToCanonicalMatch({ ...baseEvent, away_team_id: 398 });
+
+  assert.equal(interMilan.away_team_id, "77");
+  assert.equal(interMilan.away_team, "Inter Milan");
+  assert.equal(interEscaldes.away_team_id, "398");
+  assert.equal(interEscaldes.away_team, "Inter Club d'Escaldes");
+
+  const nonInterConflict = bsdEventToCanonicalMatch({
+    ...baseEvent,
+    home_team: "Nantes",
+    home_team_id: 108,
+  });
+  assert.equal(nonInterConflict.home_team, "Paris FC");
+});
+
+test("bsdEventToCanonicalMatch: unknown BSD IDs fail closed without a name alias", () => {
+  const match = bsdEventToCanonicalMatch({
+    id: 999999,
+    league_id: 7,
+    home_team: "Inter",
+    home_team_id: 999999,
+    away_team: "Real Madrid",
+    away_team_id: 57,
+    status: "notstarted",
+    event_date: "2026-09-13T19:00:00Z",
+  });
+
+  assert.equal(match.home_team, "Inter");
+  assert.equal(match.home_team_id, "999999");
+  assert.equal(match.away_team, "Real Madrid");
+});
+
+test("bsdStandingsRowToCanonical: resolves the team record by BSD ID", () => {
+  const row = bsdStandingsRowToCanonical({
+    position: 1,
+    team_id: 17,
+    team_name: "Manchester City",
+    played: 1,
+    won: 1,
+    drawn: 0,
+    lost: 0,
+    gf: 2,
+    ga: 0,
+    gd: 2,
+    pts: 3,
+  });
+
+  assert.equal(row.team, "Manchester United");
 });
 
 test("applyBsdTwoLegAggregates follows previous_leg_event_id and includes extra time", () => {
@@ -1073,6 +1171,7 @@ test("bsdStandingsPayloadToTable: completes a new Championship table from same-s
     standings: [
       {
         position: 1,
+        team_id: 218,
         team_name: "Blackburn Rovers",
         played: 1,
         won: 0,
@@ -1085,6 +1184,7 @@ test("bsdStandingsPayloadToTable: completes a new Championship table from same-s
       },
       {
         position: 2,
+        team_id: 11,
         team_name: "Wolverhampton",
         played: 1,
         won: 0,
@@ -1101,13 +1201,17 @@ test("bsdStandingsPayloadToTable: completes a new Championship table from same-s
     {
       league_id: 12,
       season_id: 1111,
+      home_team_id: 218,
       home_team: "Blackburn Rovers",
+      away_team_id: 11,
       away_team: "Wolverhampton",
     },
     {
       league_id: 12,
       season_id: 1111,
+      home_team_id: 199,
       home_team: "Birmingham City",
+      away_team_id: 8,
       away_team: "West Ham United",
     },
     {
@@ -1285,6 +1389,23 @@ test("bsdPredictionFixtureToCanonical: canonicalises names and zones the kickoff
   assert.deepEqual(fixture.markets, item.markets);
   assert.equal("recommendations" in fixture, false);
   assert.equal("model" in fixture, false);
+});
+
+test("bsdPredictionFixtureToCanonical: resolves team identity by BSD ID", () => {
+  const fixture = bsdPredictionFixtureToCanonical({
+    event: {
+      id: 601024,
+      home_team_id: 57,
+      home_team: "Real Madrid",
+      away_team_id: 77,
+      away_team: "Inter Club d'Escaldes",
+      event_date: "2026-09-08T19:00:00Z",
+    },
+    markets: {},
+  });
+
+  assert.equal(fixture.home_team, "Real Madrid");
+  assert.equal(fixture.away_team, "Inter Milan");
 });
 
 test("bsdPredictionFixtureToCanonical: returns null without an event id", () => {

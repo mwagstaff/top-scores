@@ -41,7 +41,7 @@ test("buildTeamShortNamesPayloadFromMaps prefers override values over scraped on
     updated_at: "2026-04-10T10:00:00.000Z",
     source: "scraped",
   });
-  const overrideEntry = normalizeTeamShortNameEntry("Paris Saint-Germain", "PSG", {
+  const overrideEntry = normalizeTeamShortNameEntry("Paris Saint-Germain", "Paris", {
     updated_at: "2026-04-11T10:00:00.000Z",
     source: "filesystem_override",
   });
@@ -50,7 +50,7 @@ test("buildTeamShortNamesPayloadFromMaps prefers override values over scraped on
   override.set(overrideEntry.key, overrideEntry);
 
   const payload = buildTeamShortNamesPayloadFromMaps(scraped, override);
-  assert.equal(payload.short_names["Paris Saint-Germain"], "PSG");
+  assert.equal(payload.short_names["Paris Saint-Germain"], "Paris");
 });
 
 test("knownTeamLogoNameCandidates expands between long and short team names", () => {
@@ -161,7 +161,7 @@ test("applyTeamShortNamesToApiValue adds nested snake and camel short-name field
   const overrides = new Map();
   const paris = normalizeTeamShortNameEntry("Paris Saint-Germain", "Paris SG");
   const city = normalizeTeamShortNameEntry("Manchester City", "Man City");
-  const override = normalizeTeamShortNameEntry("Paris Saint-Germain", "PSG");
+  const override = normalizeTeamShortNameEntry("Paris Saint-Germain", "Paris");
   scraped.set(paris.key, paris);
   scraped.set(city.key, city);
   overrides.set(override.key, override);
@@ -197,7 +197,7 @@ test("applyTeamShortNamesToApiValue adds nested snake and camel short-name field
 
   assert.equal(transformed.home_team, "Paris Saint-Germain");
   assert.equal(transformed.away_team, "Manchester City");
-  assert.equal(transformed.home_short_name, "PSG");
+  assert.equal(transformed.home_short_name, "Paris");
   assert.equal(transformed.away_short_name, "Man City");
   assert.equal(
     transformed.notes,
@@ -205,7 +205,7 @@ test("applyTeamShortNamesToApiValue adds nested snake and camel short-name field
   );
   assert.equal(transformed.matches[0].homeTeam, "Paris Saint-Germain");
   assert.equal(transformed.matches[0].awayTeam, "Manchester City");
-  assert.equal(transformed.matches[0].homeShortName, "PSG");
+  assert.equal(transformed.matches[0].homeShortName, "Paris");
   assert.equal(transformed.matches[0].awayShortName, "Man City");
   assert.equal(transformed.matches[0].team_lineups.home.team, "Paris Saint-Germain");
   assert.equal(transformed.matches[0].team_lineups.away.team, "Manchester City");
@@ -215,8 +215,44 @@ test("applyTeamShortNamesToApiValue adds nested snake and camel short-name field
   );
   assert.equal(
     transformed.foregroundStart.contentState.matches[0].homeShortName,
-    "PSG"
+    "Paris"
   );
+});
+
+test("applyTeamShortNamesToApiValue normalizes readable provider short names", () => {
+  const transformed = applyTeamShortNamesToApiValue({
+    home_team: "Manchester United",
+    home_short_name: "Man U",
+    away_team: "Manchester City",
+    away_short_name: "Man City",
+  }, new Map());
+
+  assert.equal(transformed.home_short_name, "Man Utd");
+  assert.equal(transformed.away_short_name, "Man City");
+});
+
+test("applyTeamShortNamesToApiValue rejects team codes but permits a genuine initialism", () => {
+  const transformed = applyTeamShortNamesToApiValue({
+    matches: [
+      {
+        home_team: "Bournemouth",
+        home_short_name: "BOU",
+        away_team: "Brentford",
+        away_short_name: "BRE",
+      },
+      {
+        home_team: "AEK Athens",
+        home_short_name: "AEK",
+        away_team: "Manchester United",
+        away_short_name: "MUN",
+      },
+    ],
+  }, new Map());
+
+  assert.equal(transformed.matches[0].home_short_name, undefined);
+  assert.equal(transformed.matches[0].away_short_name, undefined);
+  assert.equal(transformed.matches[1].home_short_name, "AEK");
+  assert.equal(transformed.matches[1].away_short_name, undefined);
 });
 
 test("applyTeamShortNamesToApiValue adds Bolton short name from cache data", () => {

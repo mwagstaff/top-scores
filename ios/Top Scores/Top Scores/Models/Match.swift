@@ -650,6 +650,8 @@ nonisolated struct MatchDetailsPayload: Codable, Hashable, Sendable {
     let league: String?
     let homeTeam: String?
     let awayTeam: String?
+    let homeTeamId: String?
+    let awayTeamId: String?
     let venueID: String?
     let venueDetails: MatchVenueDetails?
     let kickoffAt: String?
@@ -686,6 +688,8 @@ nonisolated struct MatchDetailsPayload: Codable, Hashable, Sendable {
         case league
         case homeTeam = "home_team"
         case awayTeam = "away_team"
+        case homeTeamId = "home_team_id"
+        case awayTeamId = "away_team_id"
         case venueID = "venue_id"
         case venueDetails = "venue_details"
         case kickoffAt = "kickoff_at"
@@ -724,6 +728,8 @@ nonisolated struct MatchDetailsPayload: Codable, Hashable, Sendable {
         league = try container.decodeIfPresent(String.self, forKey: .league)
         homeTeam = try container.decodeIfPresent(String.self, forKey: .homeTeam)
         awayTeam = try container.decodeIfPresent(String.self, forKey: .awayTeam)
+        homeTeamId = try container.decodeIfPresent(String.self, forKey: .homeTeamId)
+        awayTeamId = try container.decodeIfPresent(String.self, forKey: .awayTeamId)
         venueID = try container.decodeIfPresent(String.self, forKey: .venueID)
         venueDetails = try container.decodeIfPresent(MatchVenueDetails.self, forKey: .venueDetails)
         kickoffAt = try container.decodeIfPresent(String.self, forKey: .kickoffAt)
@@ -991,13 +997,11 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     }
 
     nonisolated var displayHomeTeam: String {
-        let trimmed = homeShortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? homeTeam : trimmed
+        TeamIdentityStore.displayShortName(homeShortName, for: homeTeam) ?? homeTeam
     }
 
     nonisolated var displayAwayTeam: String {
-        let trimmed = awayShortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? awayTeam : trimmed
+        TeamIdentityStore.displayShortName(awayShortName, for: awayTeam) ?? awayTeam
     }
 
     nonisolated func goalCredits(for side: MatchCompetitionTeamSide) -> MatchGoalCredits {
@@ -1551,8 +1555,8 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             time: details.time ?? time,
             homeTeam: details.homeTeam ?? homeTeam,
             awayTeam: details.awayTeam ?? awayTeam,
-            homeTeamId: homeTeamId,
-            awayTeamId: awayTeamId,
+            homeTeamId: details.homeTeamId ?? homeTeamId,
+            awayTeamId: details.awayTeamId ?? awayTeamId,
             venueID: details.venueID ?? venueID,
             venueDetails: details.venueDetails ?? venueDetails,
             kickoffAt: details.kickoffAt ?? kickoffAt,
@@ -1653,8 +1657,17 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             return false
         }
 
-        guard TeamIdentityStore.shared.matches(homeTeam, detailsHome),
-              TeamIdentityStore.shared.matches(awayTeam, detailsAway)
+        guard Self.teamIdentityMatches(
+            matchID: homeTeamId,
+            matchName: homeTeam,
+            detailsID: details.homeTeamId,
+            detailsName: detailsHome
+        ), Self.teamIdentityMatches(
+            matchID: awayTeamId,
+            matchName: awayTeam,
+            detailsID: details.awayTeamId,
+            detailsName: detailsAway
+        )
         else {
             return false
         }
@@ -1669,6 +1682,22 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         }
 
         return true
+    }
+
+    private static func teamIdentityMatches(
+        matchID: String?,
+        matchName: String,
+        detailsID: String?,
+        detailsName: String
+    ) -> Bool {
+        let normalizedMatchID = matchID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let normalizedDetailsID = detailsID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !normalizedMatchID.isEmpty || !normalizedDetailsID.isEmpty {
+            return !normalizedMatchID.isEmpty &&
+                !normalizedDetailsID.isEmpty &&
+                normalizedMatchID == normalizedDetailsID
+        }
+        return TeamIdentityStore.shared.matches(matchName, detailsName)
     }
 
     nonisolated func stabilizedScoreStatus(now: Date = Date()) -> String? {

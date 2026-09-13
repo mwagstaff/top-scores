@@ -133,6 +133,12 @@ struct Top_ScoresTests {
         #expect(plan.hasDeferredWork)
     }
 
+    @Test func fixtureBrowsePageContentState_distinguishesLoadingFromConfirmedEmpty() {
+        #expect(FixtureBrowsePageContentState.resolve(groupedDayCount: nil) == .loading)
+        #expect(FixtureBrowsePageContentState.resolve(groupedDayCount: 0) == .empty)
+        #expect(FixtureBrowsePageContentState.resolve(groupedDayCount: 2) == .fixtures)
+    }
+
     @Test @MainActor func logoResolver_resolvesLargeUnknownTeamBatchWithoutBlocking() {
         _ = LogoResolver.shared.hasDedicatedLogo(for: "Arsenal")
         let startedAt = Date()
@@ -148,6 +154,43 @@ struct Top_ScoresTests {
 
     @Test @MainActor func logoResolver_retainsFuzzyTypoMatching() {
         #expect(LogoResolver.shared.hasDedicatedLogo(for: "Arsenel"))
+    }
+
+    @Test func teamRatingLookup_retainsExactAliasAndFuzzyTypoMatching() {
+        let lookup = TeamRatingLookup(
+            entries: [
+                TeamRankingEntry(
+                    name: "Arsenal",
+                    points: 1_750,
+                    aliases: ["Arsenal FC"]
+                ),
+                TeamRankingEntry(
+                    name: "Real Madrid",
+                    points: 1_800,
+                    aliases: []
+                ),
+            ],
+            defaultPoints: 1_000
+        )
+
+        #expect(lookup.resolvedRating(for: "Arsenal FC") == 1_750)
+        #expect(lookup.resolvedRating(for: "Arsenall") == 1_750)
+        #expect(lookup.resolvedRating(for: "Unlisted Town") == 1_000)
+    }
+
+    @Test func teamRatingLookup_retainsTokenOrderFuzzyMatching() {
+        let lookup = TeamRatingLookup(
+            entries: [
+                TeamRankingEntry(
+                    name: "Paris Saint Germain",
+                    points: 1_700,
+                    aliases: []
+                )
+            ],
+            defaultPoints: 1_000
+        )
+
+        #expect(lookup.resolvedRating(for: "Saint Germain Paris") == 1_700)
     }
 
     @Test func playerDatePresentation_formatsExpectedReturnDateWithOrdinalDay() {
@@ -1502,6 +1545,69 @@ struct Top_ScoresTests {
                     "2026-09-04": 1,
                 ]
             ).map(\.date) == ["2026-09-04"]
+        )
+    }
+
+    @Test func fixtureBrowserNextMatch_doesNotSkipUnknownEarlierDates() {
+        let days = ["2026-09-13", "2026-09-15", "2026-09-18", "2026-09-24"].map {
+            FixtureCalendarDay(
+                date: $0,
+                matchCount: 1,
+                topMatchCount: 1,
+                hasUnfinished: true,
+                topMatchesHaveUnfinished: true,
+                competitions: []
+            )
+        }
+        let knownLaterAvailability = FixtureBrowseMatchAvailability(
+            matchCount: 1,
+            containsNextScheduledMatch: true
+        )
+
+        let nextDate = FixtureBrowseSelectionResolver.upcomingDateKey(
+            from: days,
+            todayKey: "2026-09-13",
+            topMatchesOnly: false,
+            selectedCompetitionIDs: [],
+            selectionApplied: true,
+            knownAvailability: ["2026-09-24": knownLaterAvailability]
+        )
+
+        #expect(nextDate == "2026-09-13")
+    }
+
+    @Test func fixtureBrowserCurrentDateJump_isHiddenOnTodayAndAlwaysTargetsToday() {
+        let days = ["2026-09-13", "2026-09-14", "2026-09-15"].map {
+            FixtureCalendarDay(
+                date: $0,
+                matchCount: 1,
+                topMatchCount: 1,
+                hasUnfinished: true,
+                topMatchesHaveUnfinished: true,
+                competitions: []
+            )
+        }
+
+        #expect(
+            FixtureBrowseSelectionResolver.currentDateJumpTargetKey(
+                from: "2026-09-13",
+                todayKey: "2026-09-13",
+                availableDays: days
+            ) == nil
+        )
+        #expect(
+            FixtureBrowseSelectionResolver.currentDateJumpTargetKey(
+                from: "2026-09-14",
+                todayKey: "2026-09-13",
+                availableDays: days
+            ) == "2026-09-13"
+        )
+        #expect(
+            FixtureBrowseSelectionResolver.currentDateJumpTargetKey(
+                from: "2026-09-15",
+                todayKey: "2026-09-13",
+                availableDays: days
+            ) == "2026-09-13"
         )
     }
 

@@ -92,12 +92,19 @@ final class Top_ScoresUITests: XCTestCase {
     }
 
     @MainActor
-    func testJumpButtonReturnsToItsDisplayedDate() throws {
+    func testCurrentDateButtonReturnsToToday() throws {
         let app = XCUIApplication()
         app.launch()
 
         let calendarButton = app.buttons["calendar"]
         XCTAssertTrue(calendarButton.waitForExistence(timeout: 20))
+        let todayButton = try XCTUnwrap(
+            app.buttons.allElementsBoundByIndex.first { element in
+                (element.value as? String)?.contains("today") == true
+            }
+        )
+        XCTAssertTrue((todayButton.value as? String)?.contains("selected") == true)
+        XCTAssertFalse(app.buttons["Return to today"].exists)
 
         for _ in 0..<2 {
             let previousDate = calendarButton.value as? String
@@ -112,9 +119,9 @@ final class Top_ScoresUITests: XCTestCase {
             XCTAssertEqual(XCTWaiter.wait(for: [dateChanged], timeout: 3), .completed)
         }
 
-        let jumpButton = app.buttons["Jump to next scheduled match"]
+        let jumpButton = app.buttons["Return to today"]
         XCTAssertTrue(jumpButton.waitForExistence(timeout: 3))
-        let targetPrefix = "fixtureDateJump-"
+        let targetPrefix = "fixtureCurrentDateJump-"
         XCTAssertTrue(jumpButton.identifier.hasPrefix(targetPrefix))
         let targetDateKey = String(jumpButton.identifier.dropFirst(targetPrefix.count))
         jumpButton.tap()
@@ -125,6 +132,8 @@ final class Top_ScoresUITests: XCTestCase {
             object: targetDateButton
         )
         XCTAssertEqual(XCTWaiter.wait(for: [selectedDisplayedTarget], timeout: 3), .completed)
+        XCTAssertTrue((targetDateButton.value as? String)?.contains("today") == true)
+        XCTAssertFalse(app.buttons["Return to today"].exists)
         XCTAssertTrue(app.tabBars.buttons["Scores"].isSelected)
     }
 

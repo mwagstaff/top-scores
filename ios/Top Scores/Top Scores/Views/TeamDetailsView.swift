@@ -2421,7 +2421,8 @@ private struct TeamDetailsMatchRow: View {
                         ),
                         homeTeamSummary: homeSummary,
                         awayTeamSummary: awaySummary,
-                        enablesTeamDetailsNavigation: false
+                        enablesTeamDetailsNavigation: false,
+                        prefersShortTeamNames: false
                     )
 
                     Image(systemName: "chevron.right")

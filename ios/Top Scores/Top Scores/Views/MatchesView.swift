@@ -64,6 +64,124 @@ enum MatchesViewMode: String, Sendable {
 
 }
 
+enum FixtureBrowsePageContentState: Equatable, Sendable {
+    case loading
+    case empty
+    case fixtures
+
+    static func resolve(groupedDayCount: Int?) -> Self {
+        guard let groupedDayCount else { return .loading }
+        return groupedDayCount == 0 ? .empty : .fixtures
+    }
+}
+
+private struct FixtureMatchesLoadingPlaceholder: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isHighlighted = false
+
+    var body: some View {
+        VStack(spacing: 14) {
+            FixtureLoadingLozenge(height: 176, rowCount: 2)
+            FixtureLoadingLozenge(height: 226, rowCount: 3)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 7)
+        .opacity(reduceMotion ? 0.72 : (isHighlighted ? 0.88 : 0.50))
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .allowsHitTesting(false)
+        .onAppear {
+            updateAnimation()
+        }
+        .onChange(of: reduceMotion) { _, _ in
+            updateAnimation()
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading fixtures for this date")
+    }
+
+    private func updateAnimation() {
+        isHighlighted = false
+        guard !reduceMotion else { return }
+        withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) {
+            isHighlighted = true
+        }
+    }
+}
+
+private struct FixtureLoadingLozenge: View {
+    let height: CGFloat
+    let rowCount: Int
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 11) {
+                Circle()
+                    .fill(Color.white.opacity(0.12))
+                    .frame(width: 29, height: 29)
+                Capsule()
+                    .fill(Color.white.opacity(0.14))
+                    .frame(width: 138, height: 13)
+                Spacer()
+                Circle()
+                    .fill(Color.accentColor.opacity(0.42))
+                    .frame(width: 6, height: 6)
+            }
+            .padding(.bottom, 14)
+
+            ForEach(0..<rowCount, id: \.self) { index in
+                Rectangle()
+                    .fill(FootballVisualStyle.divider)
+                    .frame(height: 1)
+
+                HStack(spacing: 12) {
+                    Circle()
+                        .fill(Color.white.opacity(0.10))
+                        .frame(width: 34, height: 34)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Capsule()
+                            .fill(Color.white.opacity(0.13))
+                            .frame(maxWidth: index.isMultiple(of: 2) ? 190 : 152)
+                            .frame(height: 11)
+                        Capsule()
+                            .fill(Color.accentColor.opacity(0.16))
+                            .frame(maxWidth: 220)
+                            .frame(height: 9)
+                    }
+                    Spacer(minLength: 6)
+                    Circle()
+                        .fill(Color.white.opacity(0.10))
+                        .frame(width: 34, height: 34)
+                }
+                .frame(maxHeight: .infinity)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(height: height)
+        .background {
+            FootballCardSurface(
+                accentColor: Color.accentColor,
+                accentOpacity: 0.06
+            )
+        }
+        .clipShape(
+            RoundedRectangle(
+                cornerRadius: FootballVisualStyle.cardCornerRadius,
+                style: .continuous
+            )
+        )
+        .overlay {
+            RoundedRectangle(
+                cornerRadius: FootballVisualStyle.cardCornerRadius,
+                style: .continuous
+            )
+            .stroke(FootballVisualStyle.border, lineWidth: 1)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
 enum CompetitionAccentRole: Equatable, Sendable {
     case premierLeague
     case laLiga
@@ -193,7 +311,7 @@ final class FixturesViewCoordinator: ObservableObject {
         clearSaveFixtureViewPresentation()
     }
 
-    func beginDateSwipeInteraction(failSafeNanoseconds: UInt64 = 2_000_000_000) {
+    func beginDateSwipeInteraction(failSafeNanoseconds: UInt64 = 10_000_000_000) {
         dateSwipeNavigationReleaseTask?.cancel()
         isDateSwipeSuppressingMatchNavigation = true
         dateSwipeNavigationReleaseTask = Task { @MainActor [weak self] in
@@ -323,6 +441,7 @@ struct MatchesView: View {
     @State private var visibleGroupedDaysSource: [MatchDay] = []
     @State private var fixtureBrowseGroupedDays: [MatchDay] = []
     @State private var fixtureBrowsePageGroupedDays: [String: [MatchDay]] = [:]
+    @State private var fixtureBrowsePageRevisions: [String: UInt] = [:]
     @State private var fixtureBrowsePageSourceMatchesByDate: [String: [Match]] = [:]
     @State private var fixtureBrowseUnfilteredPageGroupedDays: [String: [MatchDay]] = [:]
     @State private var fixtureBrowseUnfilteredPageSourceMatchesByDate: [String: [Match]] = [:]
@@ -506,17 +625,14 @@ struct MatchesView: View {
     @ViewBuilder
     private func fixtureBrowsePageContent(for dateKey: String?) -> some View {
         if let dateKey {
-            let days = fixtureBrowsePageGroupedDays[dateKey] ?? []
-            let cachedMatches = fixtureBrowser.cachedMatchesByDate[dateKey] ?? []
-            if days.isEmpty && !cachedMatches.isEmpty {
-                nativeMatchesLoadingState
-            } else if days.isEmpty {
+            let days = fixtureBrowsePageGroupedDays[dateKey]
+            switch FixtureBrowsePageContentState.resolve(groupedDayCount: days?.count) {
+            case .loading:
+                FixtureMatchesLoadingPlaceholder()
+            case .empty:
                 emptyState
-            } else {
-                fixtureMatchesScrollContent(
-                    days: days,
-                    eagerlyLayOutCards: cachedMatches.count <= 24
-                )
+            case .fixtures:
+                fixtureMatchesScrollContent(days: days ?? [])
                     .refreshable {
                         await refreshMatchesManually()
                     }
@@ -538,16 +654,23 @@ struct MatchesView: View {
             nextPageIsReady: nextDateKey.map { fixtureBrowsePageGroupedDays[$0] != nil } ?? false,
             previousPageMatchCount: previousDateKey.flatMap { fixtureBrowser.cachedMatchesByDate[$0]?.count } ?? 0,
             nextPageMatchCount: nextDateKey.flatMap { fixtureBrowser.cachedMatchesByDate[$0]?.count } ?? 0,
+            previousPageRevision: previousDateKey.flatMap { fixtureBrowsePageRevisions[$0] } ?? 0,
+            currentPageRevision: fixtureBrowser.selectedDateKey.flatMap { fixtureBrowsePageRevisions[$0] } ?? 0,
+            nextPageRevision: nextDateKey.flatMap { fixtureBrowsePageRevisions[$0] } ?? 0,
             isSwipeEnabled: fixturesCoordinator.isDateSwipeEnabled,
             reduceMotion: accessibilityReduceMotion,
-            onPresent: { dateKey in
-                fixtureDateCarouselState.present(
-                    dateKey,
-                    reduceMotion: accessibilityReduceMotion
-                )
-            },
+            onSwipeProgressChanged: fixtureDateCarouselState.updateSwipeProgress,
+            onSwipeSelectionSettled: fixtureDateCarouselState.settleOnSelection,
             onSelect: fixtureBrowser.selectDate,
             onSwipeInteractionChanged: { isActive in
+                if isActive, let fixtureBrowseGroupingTask {
+                    // Stop speculative sorting before it can compete with direct
+                    // manipulation for CPU time. Selection restarts any needed work.
+                    fixtureBrowseGroupingTask.cancel()
+                    performanceDiagnosticLogAsync(
+                        "[FixtureSwipe] cancelled speculative grouping at gesture begin"
+                    )
+                }
                 fixtureBrowser.setDateSwipeInteractionActive(isActive)
                 if isActive {
                     fixturesCoordinator.beginDateSwipeInteraction()
@@ -678,6 +801,7 @@ struct MatchesView: View {
             cancelFixtureBrowseGrouping()
             fixtureBrowsePageSourceMatchesByDate = [:]
             fixtureBrowsePageGroupedDays = [:]
+            fixtureBrowsePageRevisions = [:]
             fixtureBrowseUnfilteredPageSourceMatchesByDate = [:]
             fixtureBrowseUnfilteredPageGroupedDays = [:]
             fixtureArtworkPreparation.reset()
@@ -1327,21 +1451,10 @@ struct MatchesView: View {
         }
     }
 
-    private func fixtureMatchesScrollContent(
-        days: [MatchDay],
-        eagerlyLayOutCards: Bool = false
-    ) -> some View {
+    private func fixtureMatchesScrollContent(days: [MatchDay]) -> some View {
         ScrollView {
-            Group {
-                if eagerlyLayOutCards {
-                    VStack(spacing: 0) {
-                        fixtureCompetitionCards(days: days)
-                    }
-                } else {
-                    LazyVStack(spacing: 0) {
-                        fixtureCompetitionCards(days: days)
-                    }
-                }
+            LazyVStack(spacing: 0) {
+                fixtureCompetitionCards(days: days)
             }
         }
         .background(Color.clear)
@@ -1920,7 +2033,7 @@ struct MatchesView: View {
     }
 
     private var fixtureDateBrowserControl: some View {
-        let jumpTargetDateKey = fixtureBrowser.nextMatchDateKey
+        let jumpTargetDateKey = fixtureBrowser.currentDateJumpTargetKey
         let jumpTargetLabel: String?
         if let jumpTargetDateKey {
             jumpTargetLabel = Self.friendlyFixtureDateLabel(jumpTargetDateKey)
@@ -1934,7 +2047,7 @@ struct MatchesView: View {
             todayDateKey: fixtureBrowser.todayDateKey,
             hasLoadedCalendar: fixtureBrowser.hasLoadedCalendar,
             errorMessage: fixtureBrowser.errorMessage,
-            jumpDirection: fixtureBrowser.nextMatchDateJumpDirection,
+            jumpDirection: fixtureBrowser.currentDateJumpDirection,
             jumpTargetDateKey: jumpTargetDateKey,
             jumpTargetLabel: jumpTargetLabel,
             height: fixtureDateCarouselHeight,
@@ -3109,18 +3222,19 @@ struct FixtureCompetitionDockView: View {
 private extension MatchesView {
     private func handleFixtureBrowserDateChange(_ dateKey: String?) {
         guard mode == .fixtures, let dateKey else { return }
+        // The page-cache publisher owns regrouping when match data changes. A date
+        // selection only needs to switch to the already-grouped page; comparing the
+        // complete match dictionary here made every swipe scale with the full season.
         if !fixturesCoordinator.allowsMatchNavigation {
             Task { @MainActor in
                 guard await fixturesCoordinator.waitUntilDateSwipeFinishes(),
                       fixtureBrowser.selectedDateKey == dateKey else {
                     return
                 }
-                rebuildFixtureBrowseGrouping()
                 applyFixtureBrowseGrouping(for: dateKey)
                 prewarmFixtureArtworkAroundSelection()
             }
         } else {
-            rebuildFixtureBrowseGrouping()
             applyFixtureBrowseGrouping(for: dateKey)
             prewarmFixtureArtworkAroundSelection()
         }
@@ -3187,7 +3301,7 @@ private extension MatchesView {
             Set(FixtureBrowsePrefetchPlanner.dateKeys(
                 in: fixtureBrowser.availableDays,
                 centeredOn: $0,
-                radius: 1
+                radius: FixtureBrowsePrefetchPlanner.surroundingDateRadius
             ))
         } ?? []
         let workPlan = FixtureBrowseGroupingWorkPlan(
@@ -3277,7 +3391,10 @@ private extension MatchesView {
             }
 
             if workPlan.hasDeferredWork {
-                try? await Task.sleep(for: .milliseconds(150))
+                guard await InteractiveMotionGate.shared.waitUntilSustainedIdle(
+                    operation: "fixture_browse_background_grouping",
+                    quietPeriodMilliseconds: 1_000
+                ) else { return }
                 guard !Task.isCancelled,
                       fixtureBrowseGroupingRequestID == requestID else {
                     return
@@ -3382,6 +3499,12 @@ private extension MatchesView {
         fixtureBrowsePageSourceMatchesByDate = nextFilteredSources
         fixtureBrowseUnfilteredPageSourceMatchesByDate = nextUnfilteredSources
         if fixtureBrowsePageGroupedDays != nextFilteredPages {
+            let changedPageKeys = Set(fixtureBrowsePageGroupedDays.keys)
+                .union(nextFilteredPages.keys)
+                .filter { fixtureBrowsePageGroupedDays[$0] != nextFilteredPages[$0] }
+            for dateKey in changedPageKeys {
+                fixtureBrowsePageRevisions[dateKey, default: 0] &+= 1
+            }
             fixtureBrowsePageGroupedDays = nextFilteredPages
         }
         if fixtureBrowseUnfilteredPageGroupedDays != nextUnfilteredPages {
@@ -3985,8 +4108,32 @@ private final class FixtureSwipeFrameMonitor: NSObject, ObservableObject {
 
 /// Owns high-frequency drag state so a swipe doesn't invalidate the entire fixtures screen.
 /// Adjacent pages stay mounted so the commit animation only translates prepared views;
-/// lightweight date presentation starts with that animation, while data selection and its
-/// wider state updates wait until the destination reaches the viewport.
+/// data selection and its wider state updates wait until the destination reaches the viewport.
+private struct StableFixtureDatePage<Content: View>: View, Equatable {
+    let dateKey: String
+    let revision: UInt
+    let freezesContent: Bool
+    let content: Content
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.freezesContent && rhs.freezesContent &&
+            lhs.dateKey == rhs.dateKey && lhs.revision == rhs.revision
+    }
+
+    var body: some View {
+        content
+    }
+}
+
+private struct FixtureDatePageDescriptor: Identifiable {
+    let dateKey: String?
+    let slot: String
+    let revision: UInt
+    let isCurrent: Bool
+
+    var id: String { dateKey ?? "empty:\(slot)" }
+}
+
 private struct FixtureDatePagingContainer<Content: View>: View {
     let containerWidth: CGFloat
     let currentDateKey: String?
@@ -3996,9 +4143,13 @@ private struct FixtureDatePagingContainer<Content: View>: View {
     let nextPageIsReady: Bool
     let previousPageMatchCount: Int
     let nextPageMatchCount: Int
+    let previousPageRevision: UInt
+    let currentPageRevision: UInt
+    let nextPageRevision: UInt
     let isSwipeEnabled: Bool
     let reduceMotion: Bool
-    let onPresent: (String?) -> Void
+    let onSwipeProgressChanged: (CGFloat) -> Void
+    let onSwipeSelectionSettled: (String) -> Void
     let onSelect: (String) -> Void
     let onSwipeInteractionChanged: (Bool) -> Void
     private let content: (String?) -> Content
@@ -4008,6 +4159,9 @@ private struct FixtureDatePagingContainer<Content: View>: View {
     @State private var dragAxis: DragAxis?
     @State private var isCommittingSwipe = false
     @State private var commitUnlockTask: Task<Void, Never>?
+    @State private var animationCompletionFallbackTask: Task<Void, Never>?
+    @State private var swipeCommitID = UUID()
+    @State private var isAwaitingAnimationCompletion = false
     @State private var isSuppressingMatchTaps = false
     @State private var swipeStartedAt: Date?
     @State private var swipeTargetDateKey: String?
@@ -4027,9 +4181,13 @@ private struct FixtureDatePagingContainer<Content: View>: View {
         nextPageIsReady: Bool,
         previousPageMatchCount: Int,
         nextPageMatchCount: Int,
+        previousPageRevision: UInt,
+        currentPageRevision: UInt,
+        nextPageRevision: UInt,
         isSwipeEnabled: Bool,
         reduceMotion: Bool,
-        onPresent: @escaping (String?) -> Void,
+        onSwipeProgressChanged: @escaping (CGFloat) -> Void,
+        onSwipeSelectionSettled: @escaping (String) -> Void,
         onSelect: @escaping (String) -> Void,
         onSwipeInteractionChanged: @escaping (Bool) -> Void,
         @ViewBuilder content: @escaping (String?) -> Content
@@ -4042,9 +4200,13 @@ private struct FixtureDatePagingContainer<Content: View>: View {
         self.nextPageIsReady = nextPageIsReady
         self.previousPageMatchCount = previousPageMatchCount
         self.nextPageMatchCount = nextPageMatchCount
+        self.previousPageRevision = previousPageRevision
+        self.currentPageRevision = currentPageRevision
+        self.nextPageRevision = nextPageRevision
         self.isSwipeEnabled = isSwipeEnabled
         self.reduceMotion = reduceMotion
-        self.onPresent = onPresent
+        self.onSwipeProgressChanged = onSwipeProgressChanged
+        self.onSwipeSelectionSettled = onSwipeSelectionSettled
         self.onSelect = onSelect
         self.onSwipeInteractionChanged = onSwipeInteractionChanged
         self.content = content
@@ -4053,11 +4215,10 @@ private struct FixtureDatePagingContainer<Content: View>: View {
     var body: some View {
         ZStack {
             HStack(spacing: 0) {
-                page(for: previousDateKey, slot: "previous", prewarmsTeamPhotos: false)
-                    .accessibilityHidden(true)
-                page(for: currentDateKey, slot: "current", prewarmsTeamPhotos: true)
-                page(for: nextDateKey, slot: "next", prewarmsTeamPhotos: false)
-                    .accessibilityHidden(true)
+                ForEach(pageDescriptors) { descriptor in
+                    page(for: descriptor)
+                        .accessibilityHidden(!descriptor.isCurrent)
+                }
             }
             .frame(width: containerWidth * 3)
             .offset(x: dragOffset)
@@ -4068,8 +4229,14 @@ private struct FixtureDatePagingContainer<Content: View>: View {
         .clipped()
         .contentShape(Rectangle())
         .simultaneousGesture(swipeGesture)
-        .onChange(of: currentDateKey) { _, _ in
-            if !isCommittingSwipe {
+        .onChange(of: currentDateKey) { _, dateKey in
+            if isCommittingSwipe, isAwaitingAnimationCompletion {
+                performanceDiagnosticLogAsync(
+                    "[FixtureSwipe] external_selection_recovered_pending_animation " +
+                    "date=\(dateKey ?? "nil")"
+                )
+                resetTransition()
+            } else if !isCommittingSwipe {
                 resetTransition()
             }
         }
@@ -4080,9 +4247,14 @@ private struct FixtureDatePagingContainer<Content: View>: View {
         }
         .onDisappear {
             commitUnlockTask?.cancel()
+            animationCompletionFallbackTask?.cancel()
+            animationCompletionFallbackTask = nil
+            isAwaitingAnimationCompletion = false
+            swipeCommitID = UUID()
             logInterruptedSwipe(reason: "pager_disappeared")
             _ = frameMonitor.stop()
-            onPresent(nil)
+            onSwipeProgressChanged(0)
+            performanceDiagnosticSetBreadcrumb(category: "fixture_swipe", value: nil)
             releaseMatchTapSuppression()
         }
     }
@@ -4092,24 +4264,51 @@ private struct FixtureDatePagingContainer<Content: View>: View {
     }
 
     private func page(
-        for dateKey: String?,
-        slot: String,
-        prewarmsTeamPhotos: Bool
+        for descriptor: FixtureDatePageDescriptor
     ) -> some View {
-        content(dateKey)
-            .id(dateKey ?? slot)
+        StableFixtureDatePage(
+            dateKey: descriptor.id,
+            revision: descriptor.revision,
+            freezesContent: isSuppressingMatchTaps || isCommittingSwipe,
+            content: content(descriptor.dateKey)
+        )
+            .equatable()
             .frame(width: containerWidth)
             .frame(maxHeight: .infinity, alignment: .top)
             .environment(
                 \.teamStadiumPhotoPrewarmingEnabled,
-                prewarmsTeamPhotos && !isSuppressingMatchTaps
+                false
             )
+    }
+
+    private var pageDescriptors: [FixtureDatePageDescriptor] {
+        [
+            FixtureDatePageDescriptor(
+                dateKey: previousDateKey,
+                slot: "previous",
+                revision: previousPageRevision,
+                isCurrent: false
+            ),
+            FixtureDatePageDescriptor(
+                dateKey: currentDateKey,
+                slot: "current",
+                revision: currentPageRevision,
+                isCurrent: true
+            ),
+            FixtureDatePageDescriptor(
+                dateKey: nextDateKey,
+                slot: "next",
+                revision: nextPageRevision,
+                isCurrent: false
+            ),
+        ]
     }
 
     private var datePageAnimation: Animation {
         reduceMotion
             ? .easeOut(duration: 0.12)
             : .timingCurve(0.22, 1, 0.36, 1, duration: 0.22)
+                .logicallyComplete(after: 0.22)
     }
 
     private var swipeGesture: some Gesture {
@@ -4138,10 +4337,12 @@ private struct FixtureDatePagingContainer<Content: View>: View {
                     : previousDateKey != nil
                 let maximumOffset = reduceMotion ? CGFloat(8) : containerWidth
                 let resistance: CGFloat = hasAdjacentDate ? 1 : 0.08
-                dragOffset = min(
+                let nextDragOffset = min(
                     maximumOffset,
                     max(-maximumOffset, value.translation.width * resistance)
                 )
+                dragOffset = nextDragOffset
+                onSwipeProgressChanged(nextDragOffset / containerWidth)
             }
             .onEnded { value in
                 guard canBeginSwipe else { return }
@@ -4174,7 +4375,9 @@ private struct FixtureDatePagingContainer<Content: View>: View {
         logInterruptedSwipe(reason: reason)
         withAnimation(.easeOut(duration: reduceMotion ? 0.08 : 0.16)) {
             dragOffset = 0
+            onSwipeProgressChanged(0)
         }
+        performanceDiagnosticSetBreadcrumb(category: "fixture_swipe", value: nil)
     }
 
     private func beginMatchTapSuppression() {
@@ -4204,6 +4407,10 @@ private struct FixtureDatePagingContainer<Content: View>: View {
             "matches=\(pageMatchCount(direction: direction))"
         )
         PerformanceSignposter.matches.emitEvent("FixtureSwipeCommit")
+        performanceDiagnosticSetBreadcrumb(
+            category: "fixture_swipe",
+            value: "commit target=\(targetDateKey)"
+        )
         let gestureFrameSummary = frameMonitor.stop()
         frameMonitor.start()
         performanceDiagnosticLogAsync(
@@ -4215,30 +4422,30 @@ private struct FixtureDatePagingContainer<Content: View>: View {
         clearSwipeDiagnostics()
 
         let transitionDurationMilliseconds = reduceMotion ? 0 : 220
-        let presentationStartedAt = ProcessInfo.processInfo.systemUptime
-        onPresent(targetDateKey)
-        let presentationMilliseconds = Int(
-            ((ProcessInfo.processInfo.systemUptime - presentationStartedAt) * 1_000).rounded()
+        performanceDiagnosticSetBreadcrumb(
+            category: "fixture_swipe",
+            value: "animation target=\(targetDateKey)"
         )
-        performanceDiagnosticLogAsync(
-            "[FixtureSwipe] presentation target=\(targetDateKey) " +
-            "duration_ms=\(presentationMilliseconds)"
-        )
-        if !reduceMotion {
-            withAnimation(datePageAnimation) {
-                dragOffset = -CGFloat(direction) * containerWidth
-            }
-        }
-
         commitUnlockTask?.cancel()
-        commitUnlockTask = Task { @MainActor in
-            let animationWaitStartedAt = ProcessInfo.processInfo.systemUptime
-            if transitionDurationMilliseconds > 0 {
-                try? await Task.sleep(for: .milliseconds(transitionDurationMilliseconds))
+        commitUnlockTask = nil
+        animationCompletionFallbackTask?.cancel()
+        animationCompletionFallbackTask = nil
+        let commitID = UUID()
+        swipeCommitID = commitID
+        isAwaitingAnimationCompletion = true
+        let animationStartedAt = ProcessInfo.processInfo.systemUptime
+
+        let finishAnimation = {
+            guard isCommittingSwipe,
+                  swipeCommitID == commitID,
+                  isAwaitingAnimationCompletion else {
+                return
             }
-            guard !Task.isCancelled else { return }
+            isAwaitingAnimationCompletion = false
+            animationCompletionFallbackTask?.cancel()
+            animationCompletionFallbackTask = nil
             let animationWaitMilliseconds = Int(
-                ((ProcessInfo.processInfo.systemUptime - animationWaitStartedAt) * 1_000).rounded()
+                ((ProcessInfo.processInfo.systemUptime - animationStartedAt) * 1_000).rounded()
             )
             let animationFrameSummary = frameMonitor.stop()
             performanceDiagnosticLogAsync(
@@ -4249,16 +4456,67 @@ private struct FixtureDatePagingContainer<Content: View>: View {
                 frameDiagnostics(animationFrameSummary)
             )
             frameMonitor.start()
-            let selectionStartedAt = Date()
+            performanceDiagnosticSetBreadcrumb(
+                category: "fixture_swipe",
+                value: "selection target=\(targetDateKey)"
+            )
+            finishSwipeSelection(targetDateKey: targetDateKey, commitID: commitID)
+        }
+
+        if reduceMotion {
+            dragOffset = -CGFloat(direction) * containerWidth
+            onSwipeProgressChanged(-CGFloat(direction))
+            finishAnimation()
+        } else {
+            // SwiftUI animation completions can be withheld if an animatable value is
+            // replaced while the transaction is in flight. Guarantee that the pager
+            // cannot remain permanently locked if that happens.
+            animationCompletionFallbackTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(350))
+                guard !Task.isCancelled,
+                      isCommittingSwipe,
+                      swipeCommitID == commitID,
+                      isAwaitingAnimationCompletion else {
+                    return
+                }
+                let elapsedMilliseconds = Int(
+                    ((ProcessInfo.processInfo.systemUptime - animationStartedAt) * 1_000).rounded()
+                )
+                performanceDiagnosticLogAsync(
+                    "[FixtureSwipe] animation_completion_fallback target=\(targetDateKey) " +
+                    "elapsed_ms=\(elapsedMilliseconds)"
+                )
+                finishAnimation()
+            }
+            // Complete from SwiftUI's animation transaction rather than a wall-clock
+            // sleep. If the main run loop is briefly delayed, this avoids resetting
+            // the carousel while its previous animation is still in flight.
+            withAnimation(
+                datePageAnimation,
+                completionCriteria: .logicallyComplete
+            ) {
+                dragOffset = -CGFloat(direction) * containerWidth
+                onSwipeProgressChanged(-CGFloat(direction))
+            } completion: {
+                finishAnimation()
+            }
+        }
+    }
+
+    private func finishSwipeSelection(targetDateKey: String, commitID: UUID) {
+        guard isCommittingSwipe, swipeCommitID == commitID else { return }
+        commitUnlockTask = Task { @MainActor in
+            guard swipeCommitID == commitID else { return }
+            let selectionStartedAt = ProcessInfo.processInfo.systemUptime
             var transaction = Transaction()
             transaction.disablesAnimations = true
             withTransaction(transaction) {
                 onSelect(targetDateKey)
-                onPresent(nil)
+                onSwipeSelectionSettled(targetDateKey)
                 dragOffset = 0
             }
             let selectionDurationMilliseconds = Int(
-                Date().timeIntervalSince(selectionStartedAt) * 1_000
+                ((ProcessInfo.processInfo.systemUptime - selectionStartedAt) * 1_000).rounded()
             )
             performanceDiagnosticLogAsync(
                 "[FixtureSwipe] selection target=\(targetDateKey) " +
@@ -4266,7 +4524,7 @@ private struct FixtureDatePagingContainer<Content: View>: View {
             )
             let selectionSettleStartedAt = ProcessInfo.processInfo.systemUptime
             await Task.yield()
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, swipeCommitID == commitID else { return }
             let selectionSettleMilliseconds = Int(
                 ((ProcessInfo.processInfo.systemUptime - selectionSettleStartedAt) * 1_000).rounded()
             )
@@ -4279,6 +4537,7 @@ private struct FixtureDatePagingContainer<Content: View>: View {
                 frameDiagnostics(selectionFrameSummary)
             )
             performanceDiagnosticLogAsync("[FixtureSwipe] complete target=\(targetDateKey)")
+            performanceDiagnosticSetBreadcrumb(category: "fixture_swipe", value: nil)
             PerformanceSignposter.matches.emitEvent("FixtureSwipeComplete")
             releaseMatchTapSuppression()
             isCommittingSwipe = false
@@ -4299,6 +4558,10 @@ private struct FixtureDatePagingContainer<Content: View>: View {
             "target=\(targetDateKey ?? "nil") direction=\(direction > 0 ? "next" : "previous") " +
             "ready=\(pageIsReady(direction: direction) ? 1 : 0) " +
             "matches=\(pageMatchCount(direction: direction)) width=\(Int(containerWidth))"
+        )
+        performanceDiagnosticSetBreadcrumb(
+            category: "fixture_swipe",
+            value: "drag target=\(targetDateKey ?? "nil")"
         )
     }
 
@@ -4348,8 +4611,13 @@ private struct FixtureDatePagingContainer<Content: View>: View {
     private func resetTransition() {
         commitUnlockTask?.cancel()
         commitUnlockTask = nil
+        animationCompletionFallbackTask?.cancel()
+        animationCompletionFallbackTask = nil
+        isAwaitingAnimationCompletion = false
+        swipeCommitID = UUID()
         _ = frameMonitor.stop()
-        onPresent(nil)
+        onSwipeProgressChanged(0)
+        performanceDiagnosticSetBreadcrumb(category: "fixture_swipe", value: nil)
         isCommittingSwipe = false
         dragAxis = nil
         clearSwipeDiagnostics()
@@ -4366,25 +4634,40 @@ private struct FixtureDatePagingContainer<Content: View>: View {
 @Observable
 private final class FixtureDateCarouselState {
     var position = ScrollPosition(idType: String.self)
-    private(set) var presentedDateKey: String?
+    private(set) var swipeProgress: CGFloat = 0
+    private var centeredDateKey: String?
 
-    func present(_ dateKey: String?, reduceMotion: Bool) {
-        guard let dateKey else {
-            presentedDateKey = nil
-            return
-        }
+    func updateSwipeProgress(_ progress: CGFloat) {
+        let clampedProgress = min(1, max(-1, progress))
+        guard abs(swipeProgress - clampedProgress) > 0.0001 else { return }
+        swipeProgress = clampedProgress
+    }
 
-        let update = {
-            self.presentedDateKey = dateKey
-            self.position.scrollTo(id: dateKey, anchor: .center)
+    func settleOnSelection(_ dateKey: String) {
+        centeredDateKey = dateKey
+        position.scrollTo(id: dateKey, anchor: .center)
+        swipeProgress = 0
+    }
+
+    func centerOnSelection(_ dateKey: String) {
+        guard centeredDateKey != dateKey else { return }
+        centeredDateKey = dateKey
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            position.scrollTo(id: dateKey, anchor: .center)
         }
-        if reduceMotion {
-            var transaction = Transaction()
-            transaction.disablesAnimations = true
-            withTransaction(transaction, update)
-        } else {
-            withAnimation(.timingCurve(0.22, 1, 0.36, 1, duration: 0.22), update)
-        }
+    }
+}
+
+/// Isolates high-frequency swipe progress from the carousel's date/tile builder.
+/// Only this transform modifier is invalidated as the user's finger moves.
+private struct FixtureDateCarouselMotionModifier: ViewModifier {
+    let state: FixtureDateCarouselState
+    let dateTileStride: CGFloat
+
+    func body(content: Content) -> some View {
+        content.offset(x: state.swipeProgress * dateTileStride)
     }
 }
 
@@ -4400,6 +4683,7 @@ private struct FixtureDateCarousel: View {
     let jumpTargetLabel: String?
     let height: CGFloat
     let onSelect: (String) -> Void
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         @Bindable var state = state
@@ -4428,12 +4712,17 @@ private struct FixtureDateCarousel: View {
                     ScrollView(.horizontal) {
                         LazyHStack(spacing: 10) {
                             ForEach(availableDays) { day in
-                                let selected = (state.presentedDateKey ?? selectedDateKey) == day.date
+                                let selected = selectedDateKey == day.date
+                                let presentation = FixtureDateCarouselLabelCache.shared.presentation(
+                                    for: day.date
+                                )
                                 Button {
                                     onSelect(day.date)
                                 } label: {
                                     FixtureDateCarouselTile(
-                                        dateKey: day.date,
+                                        weekdayText: presentation.weekdayText,
+                                        dayText: presentation.dayText,
+                                        accessibilityDate: presentation.accessibilityDate,
                                         matchCount: day.matchCount,
                                         isSelected: selected,
                                         isToday: day.date == todayDateKey
@@ -4446,6 +4735,12 @@ private struct FixtureDateCarousel: View {
                             }
                         }
                         .scrollTargetLayout()
+                        .modifier(
+                            FixtureDateCarouselMotionModifier(
+                                state: state,
+                                dateTileStride: dateTileStride
+                            )
+                        )
                     }
                     // Symmetric margins keep the selected tile at the physical centre.
                     .contentMargins(
@@ -4475,19 +4770,15 @@ private struct FixtureDateCarousel: View {
                     }
                     .frame(height: height)
                     .onChange(of: selectedDateKey, initial: true) { _, dateKey in
-                        guard state.presentedDateKey == nil, let dateKey else { return }
-                        var transaction = Transaction()
-                        transaction.disablesAnimations = true
-                        withTransaction(transaction) {
-                            state.position.scrollTo(id: dateKey, anchor: .center)
-                        }
+                        guard let dateKey else { return }
+                        state.centerOnSelection(dateKey)
                     }
 
                     if let direction = jumpDirection,
                        let targetDateKey = jumpTargetDateKey {
                         HStack(spacing: 0) {
                             if direction == .later { Spacer(minLength: 0) }
-                            nextMatchButton(direction: direction, targetDateKey: targetDateKey)
+                            currentDateButton(direction: direction, targetDateKey: targetDateKey)
                             if direction == .earlier { Spacer(minLength: 0) }
                         }
                     }
@@ -4507,13 +4798,15 @@ private struct FixtureDateCarousel: View {
         }
     }
 
-    private func nextMatchButton(
+    private var dateTileStride: CGFloat {
+        (dynamicTypeSize.isAccessibilitySize ? 132 : 78) + 10
+    }
+
+    private func currentDateButton(
         direction: FixtureBrowseSelectionResolver.DateJumpDirection,
         targetDateKey: String
     ) -> some View {
         Button {
-            // Use the target rendered under the user's finger. The store can discover a
-            // different next-match date while this tap is being resolved.
             onSelect(targetDateKey)
         } label: {
             ZStack {
@@ -4521,8 +4814,7 @@ private struct FixtureDateCarousel: View {
                     if direction == .earlier {
                         Image(systemName: "chevron.left")
                     }
-                    Image(systemName: "soccerball")
-                        .symbolRenderingMode(.hierarchical)
+                    FixtureCurrentDateIcon(dateKey: targetDateKey)
                     if direction == .later {
                         Image(systemName: "chevron.right")
                     }
@@ -4546,33 +4838,140 @@ private struct FixtureDateCarousel: View {
         }
         .buttonStyle(.plain)
         .zIndex(1)
-        .accessibilityIdentifier("fixtureDateJump-\(targetDateKey)")
-        .accessibilityLabel("Jump to next scheduled match")
+        .accessibilityIdentifier("fixtureCurrentDateJump-\(targetDateKey)")
+        .accessibilityLabel("Return to today")
         .accessibilityHint("Moves to \(jumpTargetLabel ?? targetDateKey)")
     }
 }
 
-private struct FixtureDateCarouselTile: View {
+private struct FixtureCurrentDateIcon: View {
     let dateKey: String
+
+    private var dayText: String {
+        let components = dateKey.split(separator: "-")
+        guard let day = components.last.flatMap({ Int($0) }) else { return "–" }
+        return String(day)
+    }
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 4.5, style: .continuous)
+                .stroke(Color.accentColor, lineWidth: 2)
+                .frame(width: 25, height: 23)
+                .offset(y: 1.5)
+
+            Rectangle()
+                .fill(Color.accentColor)
+                .frame(width: 23, height: 2)
+                .offset(y: -5)
+
+            HStack(spacing: 10) {
+                Capsule()
+                    .fill(Color.accentColor)
+                    .frame(width: 2.5, height: 6)
+                Capsule()
+                    .fill(Color.accentColor)
+                    .frame(width: 2.5, height: 6)
+            }
+            .offset(y: -10.5)
+
+            Text(dayText)
+                .font(.system(size: 10, weight: .heavy, design: .rounded))
+                .monospacedDigit()
+                .foregroundStyle(Color.accentColor)
+                .offset(y: 3)
+        }
+        .frame(width: 28, height: 28)
+        .accessibilityHidden(true)
+    }
+}
+
+@MainActor
+private final class FixtureDateCarouselLabelCache {
+    struct Presentation {
+        let weekdayText: String
+        let dayText: String
+        let accessibilityDate: String
+    }
+
+    static let shared = FixtureDateCarouselLabelCache()
+
+    private var presentationsByDateKey: [String: Presentation] = [:]
+    private var formattingContext = ""
+
+    private lazy var weekdayFormatter: DateFormatter = makeFormatter(format: "EEE")
+    private lazy var dayFormatter: DateFormatter = {
+        let formatter = makeFormatter()
+        formatter.setLocalizedDateFormatFromTemplate("MMM d")
+        return formatter
+    }()
+    private lazy var accessibilityFormatter: DateFormatter = {
+        let formatter = makeFormatter()
+        formatter.dateStyle = .full
+        return formatter
+    }()
+
+    func presentation(for dateKey: String) -> Presentation {
+        refreshFormattingContextIfNeeded()
+        if let cached = presentationsByDateKey[dateKey] {
+            return cached
+        }
+
+        let date = Self.date(from: dateKey)
+        let presentation = Presentation(
+            weekdayText: date.map { weekdayFormatter.string(from: $0) } ?? "–",
+            dayText: date.map { dayFormatter.string(from: $0) } ?? dateKey,
+            accessibilityDate: date.map { accessibilityFormatter.string(from: $0) } ?? dateKey
+        )
+        presentationsByDateKey[dateKey] = presentation
+        return presentation
+    }
+
+    private func refreshFormattingContextIfNeeded() {
+        let nextContext = "\(Locale.current.identifier)|\(TimeZone.current.identifier)"
+        guard formattingContext != nextContext else { return }
+        formattingContext = nextContext
+        presentationsByDateKey.removeAll(keepingCapacity: true)
+        weekdayFormatter.locale = .current
+        weekdayFormatter.timeZone = .current
+        dayFormatter.locale = .current
+        dayFormatter.timeZone = .current
+        accessibilityFormatter.locale = .current
+        accessibilityFormatter.timeZone = .current
+    }
+
+    private func makeFormatter(format: String? = nil) -> DateFormatter {
+        let formatter = DateFormatter()
+        formatter.locale = .current
+        formatter.timeZone = .current
+        formatter.dateFormat = format
+        return formatter
+    }
+
+    private static func date(from dateKey: String) -> Date? {
+        let parts = dateKey.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return nil }
+        return Calendar.current.date(
+            from: DateComponents(year: parts[0], month: parts[1], day: parts[2])
+        )
+    }
+}
+
+private struct FixtureDateCarouselTile: View {
+    let weekdayText: String
+    let dayText: String
+    let accessibilityDate: String
     let matchCount: Int
     let isSelected: Bool
     let isToday: Bool
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
-    private var date: Date? {
-        Self.inputFormatter.date(from: dateKey)
-    }
-
-    private var accessibilityDate: String {
-        date.map { Self.accessibilityFormatter.string(from: $0) } ?? dateKey
-    }
-
     var body: some View {
         VStack(spacing: 4) {
-            Text(isToday ? "Today" : (date.map { Self.weekdayFormatter.string(from: $0) } ?? "–"))
+            Text(isToday ? "Today" : weekdayText)
                 .font(.caption2.weight(isToday ? .bold : .semibold))
                 .textCase(.uppercase)
-            Text(date.map { Self.dayFormatter.string(from: $0) } ?? dateKey)
+            Text(dayText)
                 .font(
                     (dynamicTypeSize.isAccessibilitySize ? Font.caption : .subheadline)
                         .weight(isSelected || isToday ? .bold : .medium)
@@ -4615,38 +5014,6 @@ private struct FixtureDateCarouselTile: View {
             (isSelected ? ", selected" : "")
         )
     }
-
-    private static let inputFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = .current
-        formatter.dateFormat = "yyyy-MM-dd"
-        return formatter
-    }()
-
-    private static let weekdayFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = .current
-        formatter.timeZone = .current
-        formatter.dateFormat = "EEE"
-        return formatter
-    }()
-
-    private static let dayFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = .current
-        formatter.timeZone = .current
-        formatter.setLocalizedDateFormatFromTemplate("MMM d")
-        return formatter
-    }()
-
-    private static let accessibilityFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = .current
-        formatter.timeZone = .current
-        formatter.dateStyle = .full
-        return formatter
-    }()
 }
 
 struct MatchesListRowLabel: View, Equatable {
@@ -4668,7 +5035,8 @@ struct MatchesListRowLabel: View, Equatable {
             presentationStyle: .embedded,
             fantasyContext: fantasyContext,
             rowPreferences: rowPreferences,
-            predictionDisplay: predictionDisplay
+            predictionDisplay: predictionDisplay,
+            prefersShortTeamNames: true
         )
     }
 }

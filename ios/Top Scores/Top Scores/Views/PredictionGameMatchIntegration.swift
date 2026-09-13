@@ -168,33 +168,49 @@ private struct PredictionGameMatchButton<Fallback: View>: View {
         }
     }
 
+    @ViewBuilder
     private func predictionButton(at date: Date) -> some View {
         let state = pillState(at: date)
-        return Button {
-            isEditing = true
-        } label: {
-            PredictionGamePillLabel(
-                aiText: store.enabled ? (fixture?.ai?.displayText ?? previewScore?.displayText) : previewScore?.displayText,
-                userText: store.enabled ? fixture?.prediction?.displayText : nil,
-                state: state,
-                isLargePresentation: isLargePresentation,
-                scoreTitle: store.enabled ? "AI" : isLargePresentation ? nil : "Predicted",
-                fillsAvailableWidth: fillsAvailableWidth
-            )
-            .padding(.vertical, isLargePresentation ? 0 : 8)
-            .frame(minHeight: 44)
-            .contentShape(Rectangle())
+        if match.isFinished {
+            predictionLabel(state: state, showsDisclosureIndicator: false)
+        } else {
+            Button {
+                isEditing = true
+            } label: {
+                predictionLabel(state: state, showsDisclosureIndicator: true)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("prediction-game-\(fixtureID)")
+            .accessibilityLabel(accessibilityLabel(state: state))
+            .accessibilityHint(state.accessibilityHint)
+            .sheet(isPresented: $isEditing) {
+                PredictionGameEditor(fixtureID: fixtureID)
+                    .environmentObject(store)
+                    .environmentObject(preferences)
+            }
         }
-        .buttonStyle(.plain)
+    }
+
+    private func predictionLabel(
+        state: PredictionGamePillState,
+        showsDisclosureIndicator: Bool
+    ) -> some View {
+        PredictionGamePillLabel(
+            aiText: store.enabled ? (fixture?.ai?.displayText ?? previewScore?.displayText) : previewScore?.displayText,
+            userText: store.enabled ? fixture?.prediction?.displayText : nil,
+            state: state,
+            isLargePresentation: isLargePresentation,
+            scoreTitle: store.enabled ? "AI" : isLargePresentation ? nil : "Predicted",
+            fillsAvailableWidth: fillsAvailableWidth,
+            showsDisclosureIndicator: showsDisclosureIndicator
+        )
+        .padding(.vertical, isLargePresentation ? 0 : 8)
+        .frame(minHeight: 44)
+        .contentShape(Rectangle())
         .padding(.vertical, isLargePresentation ? 0 : -8)
         .accessibilityIdentifier("prediction-game-\(fixtureID)")
         .accessibilityLabel(accessibilityLabel(state: state))
-        .accessibilityHint(state.accessibilityHint)
-        .sheet(isPresented: $isEditing) {
-            PredictionGameEditor(fixtureID: fixtureID)
-                .environmentObject(store)
-                .environmentObject(preferences)
-        }
+        .accessibilityHint(match.isFinished ? "View match details" : state.accessibilityHint)
     }
 
     private func accessibilityLabel(state: PredictionGamePillState) -> String {
@@ -280,6 +296,7 @@ private struct PredictionGamePillLabel: View {
     var isLargePresentation = false
     var scoreTitle: String? = "AI"
     var fillsAvailableWidth = false
+    var showsDisclosureIndicator = true
 
     private var accent: Color {
         switch state {
@@ -301,7 +318,7 @@ private struct PredictionGamePillLabel: View {
 
     var body: some View {
         Group {
-            if isLargePresentation || dynamicTypeSize.isAccessibilitySize {
+            if dynamicTypeSize.isAccessibilitySize && !isLargePresentation {
                 VStack(alignment: .leading, spacing: 4) {
                     if let aiText {
                         Text(scoreTitle.map { "\($0): \(aiText)" } ?? aiText)
@@ -311,6 +328,10 @@ private struct PredictionGamePillLabel: View {
                         }
                     }
                     interactionLabel(shortPrompt: false)
+                }
+            } else if isLargePresentation {
+                HStack(spacing: 12) {
+                    scoreLabels()
                 }
             } else if fillsAvailableWidth {
                 ViewThatFits(in: .horizontal) {
@@ -327,8 +348,8 @@ private struct PredictionGamePillLabel: View {
             }
         }
         .font(isLargePresentation ? .headline : .caption2.weight(.semibold))
-        .lineLimit(isLargePresentation || dynamicTypeSize.isAccessibilitySize ? nil : 1)
-        .minimumScaleFactor(dynamicTypeSize.isAccessibilitySize ? 1 : 0.8)
+        .lineLimit(dynamicTypeSize.isAccessibilitySize && !isLargePresentation ? nil : 1)
+        .minimumScaleFactor(dynamicTypeSize.isAccessibilitySize && !isLargePresentation ? 1 : 0.8)
         .monospacedDigit()
         .foregroundStyle(accent)
         .padding(.horizontal, fillsAvailableWidth ? 8 : 10)
@@ -360,21 +381,21 @@ private struct PredictionGamePillLabel: View {
             switch state {
             case .makePick:
                 Text(shortPrompt ? "Predict" : "Make your pick")
-                Image(systemName: "chevron.right").imageScale(.small)
+                disclosureIndicator
             case .editPick:
                 Image(systemName: "pencil")
-                Image(systemName: "chevron.right").imageScale(.small)
+                disclosureIndicator
             case .locked:
-                Image(systemName: "chevron.right").imageScale(.small)
+                disclosureIndicator
             case .exactScore:
                 Image(systemName: "scope")
-                Image(systemName: "chevron.right").imageScale(.small)
+                disclosureIndicator
             case .userWin:
                 Image(systemName: "checkmark.circle.fill")
-                Image(systemName: "chevron.right").imageScale(.small)
+                disclosureIndicator
             case .aiWin:
                 Image(systemName: "xmark.circle.fill")
-                Image(systemName: "chevron.right").imageScale(.small)
+                disclosureIndicator
             case .unavailable:
                 Label("Unavailable", systemImage: "minus.circle")
             case .checking:
@@ -382,6 +403,13 @@ private struct PredictionGamePillLabel: View {
             }
         }
         .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private var disclosureIndicator: some View {
+        if showsDisclosureIndicator {
+            Image(systemName: "chevron.right").imageScale(.small)
+        }
     }
 }
 
