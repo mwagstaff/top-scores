@@ -51,20 +51,70 @@ private actor FixtureBrowseCacheWriter {
 @MainActor
 final class FixtureBrowsePageCache: ObservableObject {
     @Published private(set) var matchesByDate: [String: [Match]] = [:]
+    private var deferredMatchesByDate: [String: [Match]]?
+    private var deferredPublicationStartedAt: TimeInterval?
+    private var defersPublications = false
+
+    fileprivate var workingMatchesByDate: [String: [Match]] {
+        deferredMatchesByDate ?? matchesByDate
+    }
 
     fileprivate func replace(with matchesByDate: [String: [Match]]) {
-        guard self.matchesByDate != matchesByDate else { return }
-        self.matchesByDate = matchesByDate
+        guard workingMatchesByDate != matchesByDate else { return }
+        if defersPublications {
+            deferPublication(matchesByDate)
+        } else {
+            self.matchesByDate = matchesByDate
+        }
     }
 
     fileprivate func set(_ matches: [Match], for dateKey: String) {
-        guard matchesByDate[dateKey] != matches else { return }
-        matchesByDate[dateKey] = matches
+        guard workingMatchesByDate[dateKey] != matches else { return }
+        if defersPublications {
+            var deferred = workingMatchesByDate
+            deferred[dateKey] = matches
+            deferPublication(deferred)
+        } else {
+            matchesByDate[dateKey] = matches
+        }
     }
 
     fileprivate func remove(_ dateKey: String) {
-        guard matchesByDate[dateKey] != nil else { return }
-        matchesByDate.removeValue(forKey: dateKey)
+        guard workingMatchesByDate[dateKey] != nil else { return }
+        if defersPublications {
+            var deferred = workingMatchesByDate
+            deferred.removeValue(forKey: dateKey)
+            deferPublication(deferred)
+        } else {
+            matchesByDate.removeValue(forKey: dateKey)
+        }
+    }
+
+    fileprivate func setDefersPublications(_ defersPublications: Bool) {
+        guard self.defersPublications != defersPublications else { return }
+        self.defersPublications = defersPublications
+        guard !defersPublications, let deferredMatchesByDate else { return }
+        self.deferredMatchesByDate = nil
+        let heldMilliseconds = deferredPublicationStartedAt.map {
+            Int(((ProcessInfo.processInfo.systemUptime - $0) * 1_000).rounded())
+        } ?? 0
+        deferredPublicationStartedAt = nil
+        guard matchesByDate != deferredMatchesByDate else { return }
+        performanceDiagnosticLogAsync(
+            "[FixturePageCache] flush_deferred pages=\(deferredMatchesByDate.count) " +
+            "held_ms=\(heldMilliseconds)"
+        )
+        matchesByDate = deferredMatchesByDate
+    }
+
+    private func deferPublication(_ matchesByDate: [String: [Match]]) {
+        if deferredMatchesByDate == nil {
+            deferredPublicationStartedAt = ProcessInfo.processInfo.systemUptime
+            performanceDiagnosticLogAsync(
+                "[FixturePageCache] publication_deferred pages=\(matchesByDate.count)"
+            )
+        }
+        deferredMatchesByDate = matchesByDate
     }
 }
 
@@ -821,10 +871,12 @@ final class FixtureBrowserStore: ObservableObject {
         dateSwipeWorkReleaseTask = nil
         if isActive {
             isDateSwipeInteractionActive = true
+            pageCache.setDefersPublications(true)
             dateSwipeWorkReleaseTask = Task { [weak self] in
                 try? await Task.sleep(for: .seconds(2))
                 guard !Task.isCancelled, let self else { return }
                 isDateSwipeInteractionActive = false
+                pageCache.setDefersPublications(false)
                 dateSwipeWorkReleaseTask = nil
             }
             return
@@ -834,6 +886,7 @@ final class FixtureBrowserStore: ObservableObject {
             try? await Task.sleep(for: .milliseconds(250))
             guard !Task.isCancelled, let self else { return }
             isDateSwipeInteractionActive = false
+            pageCache.setDefersPublications(false)
             dateSwipeWorkReleaseTask = nil
         }
     }
@@ -940,7 +993,7 @@ final class FixtureBrowserStore: ObservableObject {
         prefetchTask = nil
         prefetchRequestID = UUID()
         selectedDateKey = dateKey
-        let cachedMatches = pageCache.matchesByDate[dateKey] ?? []
+        let cachedMatches = pageCache.workingMatchesByDate[dateKey] ?? []
         if visibleMatches != cachedMatches {
             visibleMatches = cachedMatches
         }
@@ -1465,7 +1518,7 @@ final class FixtureBrowserStore: ObservableObject {
         if visibleMatches != filtered {
             visibleMatches = filtered
         }
-        if pageCache.matchesByDate[dateKey] != filtered {
+        if pageCache.workingMatchesByDate[dateKey] != filtered {
             pageCache.set(filtered, for: dateKey)
         }
         let updatedAt = bucket.lastUpdated ?? bucket.fetchedAt
@@ -1904,7 +1957,7 @@ final class FixtureBrowserStore: ObservableObject {
         let fetchedAt = Date()
         var bucketsByDate: [String: FixtureBrowseBucket] = [:]
         var cacheBuckets: [String: FixtureBrowseBucket] = [:]
-        var cachedMatches = pageCache.matchesByDate
+        var cachedMatches = pageCache.workingMatchesByDate
 
         for dateKey in dateKeys {
             let bucket = FixtureBrowseBucket(

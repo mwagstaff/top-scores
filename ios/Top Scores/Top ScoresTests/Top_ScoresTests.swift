@@ -112,15 +112,23 @@ struct Top_ScoresTests {
         )
     }
 
-    @Test func fixtureBrowseGroupingWorkPlan_prioritizesOnlyTheSelectedFilteredPage() {
-        let changedDateKeys: Set<String> = ["2026-09-04", "2026-09-05", "2026-09-06"]
+    @Test func fixtureBrowseGroupingWorkPlan_prioritizesSelectedThenAdjacentFilteredPages() {
+        let changedDateKeys: Set<String> = [
+            "2026-09-03",
+            "2026-09-04",
+            "2026-09-05",
+            "2026-09-06",
+            "2026-09-07",
+        ]
         let plan = FixtureBrowseGroupingWorkPlan(
             changedDateKeys: changedDateKeys,
-            selectedDateKey: "2026-09-05"
+            selectedDateKey: "2026-09-05",
+            priorityDateKeys: ["2026-09-04", "2026-09-05", "2026-09-06"]
         )
 
         #expect(plan.immediateFilteredDateKeys == ["2026-09-05"])
-        #expect(plan.deferredFilteredDateKeys == ["2026-09-04", "2026-09-06"])
+        #expect(plan.priorityFilteredDateKeys == ["2026-09-04", "2026-09-06"])
+        #expect(plan.deferredFilteredDateKeys == ["2026-09-03", "2026-09-07"])
         #expect(plan.deferredUnfilteredDateKeys == changedDateKeys)
         #expect(plan.hasDeferredWork)
     }
