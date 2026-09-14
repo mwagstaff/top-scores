@@ -4969,42 +4969,30 @@ private struct FixtureDateCarouselTile: View {
     var body: some View {
         VStack(spacing: 4) {
             Text(isToday ? "Today" : weekdayText)
-                .font(.caption2.weight(isToday ? .bold : .semibold))
+                .font(.caption2.weight(isToday ? .heavy : .semibold))
                 .textCase(.uppercase)
             Text(dayText)
                 .font(
                     (dynamicTypeSize.isAccessibilitySize ? Font.caption : .subheadline)
-                        .weight(isSelected || isToday ? .bold : .medium)
+                        .weight(isToday ? .heavy : (isSelected ? .bold : .medium))
                 )
                 .monospacedDigit()
         }
         .foregroundStyle(
-            isSelected || isToday
-                ? Color.accentColor
-                : FootballVisualStyle.mutedText.opacity(0.78)
+            isToday
+                ? Color.white
+                : (isSelected ? Color.accentColor : FootballVisualStyle.mutedText.opacity(0.78))
         )
         .frame(
             width: dynamicTypeSize.isAccessibilitySize ? 132 : 78,
             height: dynamicTypeSize.isAccessibilitySize ? 72 : 54
         )
-        .background {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(isToday ? Color.accentColor.opacity(isSelected ? 0.18 : 0.10) : .clear)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .stroke(
-                    isToday ? Color.accentColor.opacity(isSelected ? 0.78 : 0.44) : .clear,
-                    lineWidth: 1
-                )
-        }
         .overlay(alignment: .bottom) {
             Capsule()
                 .fill(isSelected ? Color.accentColor : Color.clear)
                 .frame(width: 44, height: 3)
                 .shadow(color: isSelected ? Color.accentColor.opacity(0.70) : .clear, radius: 5)
         }
-        .shadow(color: isToday ? Color.accentColor.opacity(0.14) : .clear, radius: 6)
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityDate)
