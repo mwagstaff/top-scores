@@ -818,6 +818,8 @@ test("getMatchDetailsSummaryPayload omits heavyweight fixture detail fields", ()
       home_score: 2,
       away_score: 1,
       score_status: "84'",
+      home_team_id: "19",
+      away_team_id: "4",
     }),
     team_lineups: {
       home: { starting_lineup: [{ name: "Home player" }] },
@@ -830,6 +832,8 @@ test("getMatchDetailsSummaryPayload omits heavyweight fixture detail fields", ()
   assert.equal(payload.away_score, 1);
   assert.equal(payload.score_status, "84");
   assert.equal(payload.in_progress, true);
+  assert.equal(payload.home_team_id, "19");
+  assert.equal(payload.away_team_id, "4");
   assert.equal(payload.team_lineups, undefined);
   assert.equal(payload.tv_channels, undefined);
 });

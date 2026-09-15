@@ -1,5 +1,6 @@
 import ClockKit
 import Foundation
+import SwiftUI
 import UIKit
 
 final class MatchComplicationController: NSObject, CLKComplicationDataSource {
@@ -12,6 +13,7 @@ final class MatchComplicationController: NSObject, CLKComplicationDataSource {
     private let openGaugeDescriptorIdentifier = "today-matches-open"
     private let colorfulOpenGaugeDescriptorIdentifier = "today-matches-open-color"
     private let rectangularDescriptorIdentifier = "today-matches-rectangular"
+    private let matchRectangularDescriptorIdentifier = "today-match-rectangular"
     private let fallbackRectangularSize = CGSize(width: 300, height: 140)
     private let matchTimeFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -43,7 +45,12 @@ final class MatchComplicationController: NSObject, CLKComplicationDataSource {
             displayName: "Top Scores Rect",
             supportedFamilies: [.graphicRectangular]
         )
-        handler([closedGaugeDescriptor, openGaugeDescriptor, colorfulOpenGaugeDescriptor, rectangularDescriptor])
+        let matchRectangularDescriptor = CLKComplicationDescriptor(
+            identifier: matchRectangularDescriptorIdentifier,
+            displayName: "Top Scores Match",
+            supportedFamilies: [.graphicRectangular]
+        )
+        handler([closedGaugeDescriptor, openGaugeDescriptor, colorfulOpenGaugeDescriptor, rectangularDescriptor, matchRectangularDescriptor])
     }
 
     func handleSharedComplicationDescriptors(_ complicationDescriptors: [CLKComplicationDescriptor]) {}
@@ -77,29 +84,61 @@ final class MatchComplicationController: NSObject, CLKComplicationDataSource {
         limit: Int,
         withHandler handler: @escaping ([CLKComplicationTimelineEntry]?) -> Void
     ) {
-        guard limit > 0,
-              let nextMidnight = Calendar.current.nextDate(
-                after: date,
-                matching: DateComponents(hour: 0, minute: 0, second: 0),
-                matchingPolicy: .nextTime
-              ),
-              let entry = makeEntry(for: nextMidnight, complication: complication)
-        else {
+        guard limit > 0 else {
             handler(nil)
             return
         }
 
-        handler([entry])
+        let calendar = Calendar.current
+        let todaysMatches = todaysMatches(in: loadMatches(), on: date)
+        var transitionDates = todaysMatches.flatMap { match -> [Date] in
+            guard let kickoff = match.dateTime else { return [] }
+            return [kickoff, kickoff.addingTimeInterval(2 * 60 * 60)]
+        }
+        if let nextMidnight = calendar.nextDate(
+            after: date,
+            matching: DateComponents(hour: 0, minute: 0, second: 0),
+            matchingPolicy: .nextTime
+        ) {
+            transitionDates.append(nextMidnight)
+        }
+
+        let entries = Array(Set(transitionDates))
+            .filter { $0 > date }
+            .sorted()
+            .prefix(limit)
+            .compactMap { makeEntry(for: $0, complication: complication) }
+        handler(entries.isEmpty ? nil : entries)
     }
 
     func getNextRequestedUpdateDate(handler: @escaping (Date?) -> Void) {
-        handler(Date().addingTimeInterval(15 * 60))
+        let now = Date()
+        let today = todaysMatches(in: loadMatches(), on: now)
+        let interval: TimeInterval
+        if today.contains(where: \.isInProgress) {
+            interval = 2 * 60
+        } else if !today.isEmpty {
+            interval = 5 * 60
+        } else {
+            interval = 30 * 60
+        }
+        handler(now.addingTimeInterval(interval))
+    }
+
+    func requestedUpdateDidBegin() {
+        reloadActiveComplications()
     }
 
     func getLocalizableSampleTemplate(
         for complication: CLKComplication,
         withHandler handler: @escaping (CLKComplicationTemplate?) -> Void
     ) {
+        if complication.identifier == matchRectangularDescriptorIdentifier {
+            handler(CLKComplicationTemplateGraphicRectangularFullView(
+                MatchRectangularComplicationView(match: MatchRectangularComplicationView.sampleMatch)
+            ))
+            return
+        }
         handler(makeTemplate(for: complication, count: 4, todaysMatches: [], date: Date()))
     }
 
@@ -139,6 +178,11 @@ final class MatchComplicationController: NSObject, CLKComplicationDataSource {
             }
             return makeClosedGaugeTemplate(count: count)
         case .graphicRectangular:
+            if complication.identifier == matchRectangularDescriptorIdentifier {
+                return CLKComplicationTemplateGraphicRectangularFullView(
+                    MatchRectangularComplicationView(match: featuredMatch(for: date, todaysMatches: todaysMatches))
+                )
+            }
             return makeRectangularTemplate(count: count, todaysMatches: todaysMatches, date: date)
         default:
             return nil
@@ -216,7 +260,23 @@ final class MatchComplicationController: NSObject, CLKComplicationDataSource {
         else {
             return []
         }
-        return payload.matches
+
+        let source = payload.snapshot.showAllMatches && !payload.unfilteredMatches.isEmpty
+            ? payload.unfilteredMatches
+            : payload.matches
+        guard let cacheData = loadMatchDetailsCacheData(),
+              let cache = try? decoder.decode([String: WatchCachedMatchDetails].self, from: cacheData) else {
+            return source
+        }
+
+        return source.map { match in
+            guard let matchID = match.matchDetailsIDValue,
+                  let cached = cache[matchID],
+                  cached.cachedAt > payload.generatedAt else {
+                return match
+            }
+            return match.mergingLatestSummary(cached.match)
+        }
     }
 
     private func todaysMatches(in matches: [WatchMatch], on date: Date) -> [WatchMatch] {
@@ -230,34 +290,7 @@ final class MatchComplicationController: NSObject, CLKComplicationDataSource {
     }
 
     private func featuredMatch(for date: Date, todaysMatches: [WatchMatch]) -> WatchMatch? {
-        guard !todaysMatches.isEmpty else { return nil }
-
-        let sorted = WatchMatchGrouping.sortedMatches(todaysMatches)
-        let now = date
-
-        if let next = sorted.first(where: { match in
-            guard let kickoff = match.dateTime else { return false }
-            return kickoff > now && !match.isInProgress
-        }) {
-            return next
-        }
-
-        let allInProgress = sorted.allSatisfy(\.isInProgress)
-        if allInProgress {
-            return sorted.max { lhs, rhs in
-                (lhs.dateTime ?? .distantPast) < (rhs.dateTime ?? .distantPast)
-            }
-        }
-
-        if let inProgressLatest = sorted
-            .filter(\.isInProgress)
-            .max(by: { lhs, rhs in
-                (lhs.dateTime ?? .distantPast) < (rhs.dateTime ?? .distantPast)
-            }) {
-            return inProgressLatest
-        }
-
-        return sorted.first
+        WatchFeaturedMatchSelector.select(from: todaysMatches, at: date)
     }
 
     private func makeRectangularComplicationImage(
@@ -283,14 +316,10 @@ final class MatchComplicationController: NSObject, CLKComplicationDataSource {
         let countText = centerCountText(for: count)
         let matchWord = count == 1 ? "match" : "matches"
         let topText = "\u{26BD}\u{FE0E} \(countText) \(matchWord) today"
-        let tvLogos = topRowTvLogos(for: featuredMatch)
+        let tvLogo = topRowTvLogo(for: featuredMatch)
         let logoHeight: CGFloat = 18
-        let logoSpacing: CGFloat = 4
-        let logoCount = tvLogos.count
-        let logosWidth = logoCount > 0
-            ? (CGFloat(logoCount) * logoHeight) + (CGFloat(logoCount - 1) * logoSpacing)
-            : 0
-        let logoGapFromText: CGFloat = logoCount > 0 ? 8 : 0
+        let logosWidth = tvLogo == nil ? 0 : logoHeight
+        let logoGapFromText: CGFloat = tvLogo == nil ? 0 : 8
         let topTextWidth = bounds.width - 32 - logosWidth - logoGapFromText
 
         let paragraph = NSMutableParagraphStyle()
@@ -304,15 +333,12 @@ final class MatchComplicationController: NSObject, CLKComplicationDataSource {
         let topRect = CGRect(x: 16, y: topY, width: max(0, topTextWidth), height: 28)
         topText.draw(in: topRect, withAttributes: attrs)
 
-        guard !tvLogos.isEmpty else { return }
+        guard let tvLogo else { return }
 
         let logosStartX = bounds.width - 16 - logosWidth
         let logoY = topY + ((28 - logoHeight) / 2)
-        for (index, logo) in tvLogos.enumerated() {
-            let x = logosStartX + (CGFloat(index) * (logoHeight + logoSpacing))
-            let frame = CGRect(x: x, y: logoY, width: logoHeight, height: logoHeight)
-            drawTvLogoTile(logo, in: frame)
-        }
+        let frame = CGRect(x: logosStartX, y: logoY, width: logoHeight, height: logoHeight)
+        drawTvLogoTile(tvLogo, in: frame)
     }
 
     private func drawTeamNamesRow(featuredMatch: WatchMatch?, in bounds: CGRect) {
@@ -378,10 +404,12 @@ final class MatchComplicationController: NSObject, CLKComplicationDataSource {
 
         let homeLogo = WatchTeamLogoResolver.shared.image(
             for: featuredMatch.homeTeam,
+            teamId: featuredMatch.homeTeamId,
             alternateNames: [featuredMatch.homeShortName].compactMap { $0 }
         )
         let awayLogo = WatchTeamLogoResolver.shared.image(
             for: featuredMatch.awayTeam,
+            teamId: featuredMatch.awayTeamId,
             alternateNames: [featuredMatch.awayShortName].compactMap { $0 }
         )
         drawLogo(homeLogo, in: leftLogoFrame)
@@ -440,35 +468,9 @@ final class MatchComplicationController: NSObject, CLKComplicationDataSource {
         return CGRect(x: x, y: y, width: width, height: height)
     }
 
-    private func topRowTvLogos(for featuredMatch: WatchMatch?) -> [UIImage] {
-        guard let featuredMatch else { return [] }
-        let channels = uniqueSortedChannels(featuredMatch.tvChannels)
-        guard !channels.isEmpty else { return [] }
-
-        let resolved = WatchTvLogoResolver.shared.images(for: channels)
-        return Array(resolved.prefix(3))
-    }
-
-    private func uniqueSortedChannels(_ channels: [String]) -> [String] {
-        var seen = Set<String>()
-        var output: [String] = []
-
-        for value in channels {
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else { continue }
-
-            let key = trimmed
-                .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
-                .lowercased()
-            guard !seen.contains(key) else { continue }
-
-            seen.insert(key)
-            output.append(trimmed)
-        }
-
-        return output.sorted { lhs, rhs in
-            lhs.localizedCaseInsensitiveCompare(rhs) == .orderedAscending
-        }
+    private func topRowTvLogo(for featuredMatch: WatchMatch?) -> UIImage? {
+        guard let featuredMatch else { return nil }
+        return WatchTvLogoResolver.shared.primaryResolvedLogo(for: featuredMatch.tvChannels)?.image
     }
 
     private func colorfulGaugeStops() -> [UIColor] {
@@ -501,6 +503,24 @@ final class MatchComplicationController: NSObject, CLKComplicationDataSource {
             return nil
         }
         return try? Data(contentsOf: url)
+    }
+
+    private func loadMatchDetailsCacheData() -> Data? {
+        guard let url = FileManager.default
+            .containerURL(forSecurityApplicationGroupIdentifier: WatchAppGroupConfig.identifier)?
+            .appendingPathComponent(WatchAppGroupConfig.matchDetailsCacheFileName)
+        else {
+            return nil
+        }
+        return try? Data(contentsOf: url)
+    }
+
+    private func reloadActiveComplications() {
+        let server = CLKComplicationServer.sharedInstance()
+        guard let activeComplications = server.activeComplications else { return }
+        for complication in activeComplications {
+            server.reloadTimeline(for: complication)
+        }
     }
 
     private func footballText(for count: Int) -> String {

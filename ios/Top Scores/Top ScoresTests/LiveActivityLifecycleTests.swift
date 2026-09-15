@@ -4,6 +4,20 @@ import Testing
 @testable import Top_Scores
 
 struct LiveActivityLifecycleTests {
+    @Test func acceptedActivityTokenResponseAllowsDuplicateCleanup() {
+        let data = Data(#"{"success":true,"data":{"liveActivity":{}}}"#.utf8)
+        #expect(LiveActivitySyncService.activityTokenRegistrationWasAccepted(data))
+    }
+
+    @Test func ignoredActivityTokenResponseKeepsOlderActivityAsFallback() {
+        let data = Data(#"{"success":true,"ignored":true,"reason":"recently_ended_activity"}"#.utf8)
+        #expect(!LiveActivitySyncService.activityTokenRegistrationWasAccepted(data))
+    }
+
+    @Test func invalidActivityTokenResponseKeepsOlderActivityAsFallback() {
+        #expect(!LiveActivitySyncService.activityTokenRegistrationWasAccepted(Data("not-json".utf8)))
+    }
+
     @Test func legacyActivityAttributesRemainDecodable() throws {
         let data = Data(#"{"appScope":"top-scores"}"#.utf8)
         let attributes = try JSONDecoder().decode(TopScoresLiveActivityAttributes.self, from: data)

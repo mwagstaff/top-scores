@@ -1,62 +1,145 @@
 import Foundation
 import UIKit
 
+enum WatchCompetitionLogoResolver {
+    private static let assetNamesByCompetitionName: [String: String] = [
+        "bundesliga": "CompetitionLogo5",
+        "champions league": "CompetitionLogo7",
+        "championship": "CompetitionLogo12",
+        "copa del rey": "CompetitionLogo41",
+        "coppa italia": "CompetitionLogo42",
+        "coupe de france": "CompetitionLogo44",
+        "dfb pokal": "CompetitionLogo43",
+        "dfl supercup": "CompetitionLogoGermanSuperCup",
+        "dutch eredivisie": "CompetitionLogo10",
+        "efl cup": "CompetitionLogo40",
+        "efl league one": "CompetitionLogo86",
+        "efl league two": "CompetitionLogo87",
+        "english league cup": "CompetitionLogo40",
+        "english national league": "CompetitionLogo91",
+        "english premier league": "FantasyPremierLeagueLion",
+        "enterprise national league": "CompetitionLogo91",
+        "fa cup": "CompetitionLogo39",
+        "fifa world cup": "CompetitionLogo27",
+        "fifa world cup 2026": "CompetitionLogo27",
+        "german super cup": "CompetitionLogoGermanSuperCup",
+        "international friendlies": "CompetitionLogoInternationalFriendly",
+        "international friendly": "CompetitionLogoInternationalFriendly",
+        "international friendly games": "CompetitionLogoInternationalFriendly",
+        "la liga": "CompetitionLogo3",
+        "league one": "CompetitionLogo86",
+        "league two": "CompetitionLogo87",
+        "ligue 1": "CompetitionLogo6",
+        "national league": "CompetitionLogo91",
+        "premier league": "FantasyPremierLeagueLion",
+        "scottish championship": "CompetitionLogo13",
+        "scottish league one": "CompetitionLogo13",
+        "scottish league two": "CompetitionLogo13",
+        "scottish premiership": "CompetitionLogo13",
+        "serie a": "CompetitionLogo4",
+        "spanish la liga": "CompetitionLogo3",
+        "uefa champions league": "CompetitionLogo7",
+        "uefa conference league": "CompetitionLogo83",
+        "uefa europa conference league": "CompetitionLogo83",
+        "uefa europa league": "CompetitionLogo8",
+        "uefa nations league": "CompetitionLogo64",
+        "uefa super cup": "CompetitionLogo90"
+    ]
+
+    static func image(for competitionName: String) -> UIImage? {
+        guard let assetName = assetName(for: competitionName),
+              let image = UIImage(named: assetName) else {
+            return nil
+        }
+        if assetName == "CompetitionLogo7" {
+            return image.withRenderingMode(.alwaysTemplate)
+        }
+        return image
+    }
+
+    static func assetName(for competitionName: String) -> String? {
+        assetNamesByCompetitionName[normalizedName(competitionName)]
+    }
+
+    private static func normalizedName(_ value: String) -> String {
+        value
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased()
+            .replacingOccurrences(of: "-", with: " ")
+            .split(whereSeparator: \Character.isWhitespace)
+            .joined(separator: " ")
+    }
+}
+
+private struct BSDTeamLogoAssetCatalog: Decodable {
+    let teams: [String: BSDTeamLogoAssetEntry]
+}
+
+private struct BSDTeamLogoAssetEntry: Decodable {
+    let assetName: String
+
+    private enum CodingKeys: String, CodingKey {
+        case assetName = "asset_name"
+    }
+}
+
 final class WatchTeamLogoResolver {
     static let shared = WatchTeamLogoResolver()
 
     private let fallbackName = "_noTeamLogo"
+    private let lock = NSLock()
     private let bundlesToSearch: [Bundle]
+    private let assetNameByTeamID: [String: String]
     private var normalizedLookup: [String: URL] = [:]
     private var coreLookup: [String: [URL]] = [:]
     private var originalLookup: [String: URL] = [:]
     private var cache: [String: UIImage] = [:]
 
     private init() {
-        bundlesToSearch = Self.buildBundlesToSearch()
+        let bundles = Self.buildBundlesToSearch()
+        bundlesToSearch = bundles
+        assetNameByTeamID = Self.loadBSDAssetNames(from: bundles)
         loadLogos()
     }
 
     func image(for teamName: String, teamId: String?, alternateNames: [String] = []) -> UIImage? {
-        if let teamId, let badge = watchBadgeImage(forTeamId: teamId) {
-            return badge
+        let normalizedTeamID = teamId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if let assetName = assetNameByTeamID[normalizedTeamID],
+           let image = imageFromAssets(named: assetName) {
+            return image
         }
         return image(for: teamName, alternateNames: alternateNames)
     }
 
-    private func watchBadgeImage(forTeamId teamId: String) -> UIImage? {
-        guard let dir = FileManager.default
-            .containerURL(forSecurityApplicationGroupIdentifier: WatchAppGroupConfig.identifier)?
-            .appendingPathComponent("team-badges", isDirectory: true) else { return nil }
-        let manifestURL = dir.appendingPathComponent("manifest.json")
-        guard let data = try? Data(contentsOf: manifestURL),
-              let manifest = try? JSONDecoder().decode([String: String].self, from: data),
-              let filename = manifest[teamId] else { return nil }
-        let fileURL = dir.appendingPathComponent(filename)
-        guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
-        return UIImage(contentsOfFile: fileURL.path)
-    }
-
     func image(for teamName: String, alternateNames: [String] = []) -> UIImage? {
         let cacheKey = Self.cacheKey(for: teamName, alternateNames: alternateNames)
+
+        lock.lock()
         if let cached = cache[cacheKey] {
+            lock.unlock()
             return cached
         }
+        lock.unlock()
 
-        if let assetImage = resolveAssetImage(for: teamName, alternateNames: alternateNames) ??
-            resolveAssetFallbackImage() {
+        if let assetImage = resolveAssetImage(for: teamName, alternateNames: alternateNames) {
+            lock.lock()
             cache[cacheKey] = assetImage
+            lock.unlock()
             return assetImage
         }
 
-        let url = resolveURL(for: teamName, alternateNames: alternateNames) ?? resolveURL(for: fallbackName)
-        guard let url else { return nil }
-
-        let image = UIImage(contentsOfFile: url.path)
-        if let image {
+        if let url = resolveURL(for: teamName, alternateNames: alternateNames),
+           let image = UIImage(contentsOfFile: url.path) {
+            lock.lock()
             cache[cacheKey] = image
+            lock.unlock()
+            return image
         }
 
-        return image
+        // A fallback must not poison this team's cache. If a resource lookup is
+        // temporarily unavailable, the next complication refresh can recover.
+        return resolveAssetFallbackImage() ??
+            resolveURL(for: fallbackName).flatMap { UIImage(contentsOfFile: $0.path) }
     }
 
     private func loadLogos() {
@@ -95,7 +178,7 @@ final class WatchTeamLogoResolver {
 
     private func resolveAssetImage(for teamName: String, alternateNames: [String] = []) -> UIImage? {
         for candidate in assetNameCandidates(for: teamName, alternateNames: alternateNames) {
-            if let image = UIImage(named: candidate) {
+            if let image = imageFromAssets(named: candidate) {
                 return image
             }
         }
@@ -105,11 +188,27 @@ final class WatchTeamLogoResolver {
 
     private func resolveAssetFallbackImage() -> UIImage? {
         for candidate in [fallbackName, "\(fallbackName) 1"] {
-            if let image = UIImage(named: candidate) {
+            if let image = imageFromAssets(named: candidate) {
                 return image
             }
         }
         return nil
+    }
+
+    private func imageFromAssets(named name: String) -> UIImage? {
+        UIImage(named: name)
+    }
+
+    private static func loadBSDAssetNames(from bundles: [Bundle]) -> [String: String] {
+        for bundle in bundles {
+            guard let url = bundle.url(forResource: "bsd_team_logo_assets", withExtension: "json"),
+                  let data = try? Data(contentsOf: url),
+                  let catalog = try? JSONDecoder().decode(BSDTeamLogoAssetCatalog.self, from: data) else {
+                continue
+            }
+            return catalog.teams.mapValues(\.assetName)
+        }
+        return [:]
     }
 
     private func assetNameCandidates(for teamName: String, alternateNames: [String] = []) -> [String] {
@@ -370,7 +469,7 @@ final class WatchTvLogoResolver {
     private let fallbackName = "_noLogo"
     private let bundlesToSearch: [Bundle]
     private var normalizedLookup: [String: URL] = [:]
-    private var cache: [String: UIImage] = [:]
+    private var resolvedCache: [String: UIImage] = [:]
 
     private init() {
         bundlesToSearch = Self.buildBundlesToSearch()
@@ -378,33 +477,46 @@ final class WatchTvLogoResolver {
     }
 
     func image(for channelName: String) -> UIImage? {
-        if let cached = cache[channelName] {
+        if let resolved = imageIfAvailable(for: channelName) {
+            return resolved
+        }
+
+        return resolveAssetFallbackImage() ?? resolveURL(for: fallbackName).flatMap {
+            UIImage(contentsOfFile: $0.path)
+        }
+    }
+
+    func imageIfAvailable(for channelName: String) -> UIImage? {
+        if let cached = resolvedCache[channelName] {
             return cached
         }
 
         if let assetImage = resolveAssetImage(for: channelName) {
-            cache[channelName] = assetImage
+            resolvedCache[channelName] = assetImage
             return assetImage
         }
 
         if let url = resolveURL(for: channelName),
            let image = UIImage(contentsOfFile: url.path) {
-            cache[channelName] = image
+            resolvedCache[channelName] = image
             return image
         }
 
-        if let fallbackImage = resolveAssetFallbackImage() {
-            cache[channelName] = fallbackImage
-            return fallbackImage
-        }
+        return nil
+    }
 
-        guard let fallbackURL = resolveURL(for: fallbackName) else { return nil }
-        let image = UIImage(contentsOfFile: fallbackURL.path)
-        if let image {
-            cache[channelName] = image
+    func primaryResolvedLogo(for channels: [String]) -> (channel: String, image: UIImage)? {
+        var seen = Set<String>()
+        for rawChannel in channels {
+            let channel = rawChannel.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !channel.isEmpty else { continue }
+            let key = Self.normalizedKey(channel)
+            guard seen.insert(key).inserted else { continue }
+            if let image = imageIfAvailable(for: channel) {
+                return (channel, image)
+            }
         }
-
-        return image
+        return nil
     }
 
     func images(for channels: [String]) -> [UIImage] {
@@ -414,7 +526,7 @@ final class WatchTvLogoResolver {
         for channel in channels {
             let dedupeKey = Self.normalizedKey(channel)
             guard !seenChannels.contains(dedupeKey) else { continue }
-            guard let image = image(for: channel) else { continue }
+            guard let image = imageIfAvailable(for: channel) else { continue }
             seenChannels.insert(dedupeKey)
             output.append(image)
         }
@@ -489,6 +601,7 @@ final class WatchTvLogoResolver {
             add(logoKey)
             add(logoKey.uppercased())
             add(logoKey.capitalized)
+            add(assetNameByLogoKey[logoKey])
         }
 
         return candidates
@@ -584,10 +697,33 @@ final class WatchTvLogoResolver {
         ("amazonprime", "amazon"),
         ("primevideo", "amazon"),
         ("amazon", "amazon"),
+        ("dazn", "dazn"),
+        ("premiersports", "premiersports"),
+        ("laligatv", "laligatv"),
+        ("hbomax", "hbomax"),
+        ("disneyplus", "disneyplus"),
+        ("nowtv", "now"),
+        ("now", "now"),
         ("apple", "apple"),
         ("mlsseasonpass", "apple"),
         ("bbc", "bbc"),
         ("itv", "itv"),
         ("channel4", "channel4")
+    ]
+
+    private let assetNameByLogoKey: [String: String] = [
+        "amazon": "TVLogoAmazon",
+        "apple": "TVLogoApple",
+        "bbc": "TVLogoBBC",
+        "channel4": "TVLogoChannel4",
+        "dazn": "TVLogoDAZN",
+        "disneyplus": "TVLogoDisneyPlus",
+        "hbomax": "TVLogoHBOMax",
+        "itv": "TVLogoITV",
+        "laligatv": "TVLogoLaLigaTV",
+        "now": "TVLogoNOW",
+        "premiersports": "TVLogoPremierSports",
+        "sky": "TVLogoSky",
+        "tnt": "TVLogoTNT"
     ]
 }

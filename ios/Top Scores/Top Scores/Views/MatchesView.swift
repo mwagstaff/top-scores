@@ -1842,13 +1842,6 @@ struct MatchesView: View {
 
     @ViewBuilder
     private func matchButton(for match: Match, day: MatchDay) -> some View {
-        let showFPLChevron = fantasyParticipationBadgeVisibility(
-            for: match,
-            showFantasyBadge: mode == .fixtures,
-            layoutStyle: .compactFixture,
-            rowPreferences: matchRowPreferences,
-            fantasyContext: fantasyViewModel.matchRowContext
-        )
         let openMatch = {
             guard !match.isPostponed else { return }
             guard fixturesCoordinator.allowsMatchNavigation else {
@@ -1870,12 +1863,12 @@ struct MatchesView: View {
                 predictionDisplay: predictionDisplayState(for: match, dateKey: day.dateKey)
             )
             .equatable()
-            Image(systemName: "chevron.right")
-                .font(.caption.weight(showFPLChevron ? .semibold : .regular))
-                .foregroundStyle(showFPLChevron
-                    ? FootballSectionAccent.fantasy
-                    : Color(.tertiaryLabel))
-                .frame(width: 16)
+            FixtureMatchNavigationChevron(
+                match: match,
+                showFantasyBadge: mode == .fixtures,
+                rowPreferences: matchRowPreferences,
+                fantasyViewModel: fantasyViewModel
+            )
         }
         Group {
             if match.predictionGameFixtureID != nil {
@@ -5026,6 +5019,36 @@ struct MatchesListRowLabel: View, Equatable {
             predictionDisplay: predictionDisplay,
             prefersShortTeamNames: true
         )
+    }
+}
+
+/// Observes fantasy state independently of the cached fixture page so a squad loaded
+/// after the Scores screen appears can immediately update the navigation chevron.
+private struct FixtureMatchNavigationChevron: View {
+    let match: Match
+    let showFantasyBadge: Bool
+    let rowPreferences: MatchRowPreferences
+    @ObservedObject var fantasyViewModel: FantasyViewModel
+
+    private var showsFantasyParticipation: Bool {
+        fantasyParticipationBadgeVisibility(
+            for: match,
+            showFantasyBadge: showFantasyBadge,
+            layoutStyle: .compactFixture,
+            rowPreferences: rowPreferences,
+            fantasyContext: fantasyViewModel.matchRowContext
+        )
+    }
+
+    var body: some View {
+        Image(systemName: "chevron.right")
+            .font(.caption.weight(showsFantasyParticipation ? .semibold : .regular))
+            .foregroundStyle(
+                showsFantasyParticipation
+                    ? FootballSectionAccent.fantasy
+                    : Color(.tertiaryLabel)
+            )
+            .frame(width: 16)
     }
 }
 

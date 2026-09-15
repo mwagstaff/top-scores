@@ -96,6 +96,11 @@ test("every mapped BSD ID resolves independently of names to a bundled Live Acti
     assert.match(id, /^[1-9]\d*$/);
     assert.ok(entry.name);
     assert.ok(manifest.has(entry.asset_name), `${id}: ${entry.asset_name}`);
+    const standardDirectory = path.join(__dirname, "../ios/Top Scores/Media.xcassets", `${entry.asset_name}.imageset`);
+    const standardContents = JSON.parse(fs.readFileSync(path.join(standardDirectory, "Contents.json"), "utf8"));
+    const standardImage = standardContents.images.find((image) => image.filename);
+    assert.ok(standardImage, entry.asset_name);
+    assert.ok(fs.existsSync(path.join(standardDirectory, standardImage.filename)), entry.asset_name);
     const variant = `${entry.asset_name} Live Activity`;
     assert.ok(widgetManifest.has(variant), variant);
     const directory = path.join(__dirname, "../ios/Top Scores/Media.xcassets/LiveActivityGenerated", `${variant}.imageset`);

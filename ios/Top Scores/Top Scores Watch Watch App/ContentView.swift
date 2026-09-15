@@ -33,7 +33,17 @@ struct ContentView: View {
                     .padding()
                 } else {
                     List {
-                        if todaySections.isEmpty {
+                        if todayCompetitions.count > 1 {
+                            Section("Today") {
+                                ForEach(todayCompetitions) { competition in
+                                    NavigationLink {
+                                        WatchCompetitionMatchesView(competition: competition)
+                                    } label: {
+                                        WatchCompetitionRow(competition: competition)
+                                    }
+                                }
+                            }
+                        } else if todaySections.isEmpty {
                             Section {
                                 VStack(spacing: 8) {
                                     Image(systemName: "calendar.badge.exclamationmark")
@@ -99,6 +109,10 @@ struct ContentView: View {
         WatchMatchCollections.todaySections(from: sourceMatches)
     }
 
+    private var todayCompetitions: [WatchCompetition] {
+        WatchMatchCollections.todayCompetitions(from: sourceMatches)
+    }
+
     private var resultDays: [WatchMatchDay] {
         WatchMatchCollections.resultDays(from: sourceMatches)
     }
@@ -112,10 +126,10 @@ struct ContentView: View {
     }
 }
 
-private enum WatchMatchCollections {
-    static func todaySections(from matches: [WatchMatch]) -> [WatchFixtureSection] {
+enum WatchMatchCollections {
+    static func todaySections(from matches: [WatchMatch], now: Date = Date()) -> [WatchFixtureSection] {
         let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
+        let today = calendar.startOfDay(for: now)
 
         let live = matches
             .filter { match in
@@ -130,7 +144,7 @@ private enum WatchMatchCollections {
                 guard let date = match.dateTime ?? WatchMatchDateParser.shared.parse(date: match.date, time: "00:00") else {
                     return false
                 }
-                return date >= Date() && !match.isInProgress && !isFinished(match)
+                return date >= now && !match.isInProgress && !isFinished(match)
             }
             .sorted(by: ascendingMatchDate)
 
@@ -147,29 +161,58 @@ private enum WatchMatchCollections {
         ].filter { !$0.matches.isEmpty }
     }
 
-    static func fixtureDays(from matches: [WatchMatch]) -> [WatchMatchDay] {
+    static func todayCompetitions(from matches: [WatchMatch], now: Date = Date()) -> [WatchCompetition] {
         let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
+        let today = calendar.startOfDay(for: now)
+        let todayMatches = matches.filter {
+            isSameDay($0, as: today, calendar: calendar)
+        }
+        return competitions(from: todayMatches)
+    }
+
+    static func competitions(from matches: [WatchMatch]) -> [WatchCompetition] {
+        let matchesByCompetition = Dictionary(grouping: matches) {
+            normalizedCompetitionName($0.league)
+        }
+
+        return matchesByCompetition.compactMap { id, competitionMatches in
+            guard let firstMatch = competitionMatches.first else { return nil }
+            return WatchCompetition(
+                id: id,
+                name: firstMatch.league.trimmingCharacters(in: .whitespacesAndNewlines),
+                weight: competitionMatches.compactMap(\.competitionWeight).max() ?? 0,
+                matches: competitionMatches.sorted(by: ascendingMatchDate)
+            )
+        }
+        .sorted { lhs, rhs in
+            if lhs.weight != rhs.weight {
+                return lhs.weight > rhs.weight
+            }
+            return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
+        }
+    }
+
+    static func fixtureDays(from matches: [WatchMatch], now: Date = Date()) -> [WatchMatchDay] {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: now)
         let start = calendar.date(byAdding: .day, value: 1, to: today) ?? today
-        let end = calendar.date(byAdding: .day, value: 7, to: today) ?? today
         let fixtures = matches
             .filter { match in
                 guard let matchDate = day(for: match, calendar: calendar) else { return false }
-                return matchDate >= start && matchDate <= end && !match.isInProgress && !isFinished(match)
+                return matchDate >= start && !match.isInProgress && !isFinished(match)
             }
             .sorted(by: ascendingMatchDate)
 
         return groupedDays(fixtures, descending: false)
     }
 
-    static func resultDays(from matches: [WatchMatch]) -> [WatchMatchDay] {
+    static func resultDays(from matches: [WatchMatch], now: Date = Date()) -> [WatchMatchDay] {
         let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
-        let start = calendar.date(byAdding: .day, value: -6, to: today) ?? today
+        let today = calendar.startOfDay(for: now)
         let results = matches
             .filter { match in
                 guard let matchDate = day(for: match, calendar: calendar) else { return false }
-                return matchDate >= start && matchDate <= today && isFinished(match)
+                return matchDate <= today && isFinished(match)
             }
             .sorted(by: descendingMatchDate)
 
@@ -218,6 +261,13 @@ private enum WatchMatchCollections {
         return calendar.startOfDay(for: date)
     }
 
+    private static func normalizedCompetitionName(_ value: String) -> String {
+        value
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased()
+    }
+
     private static func ascendingMatchDate(_ lhs: WatchMatch, _ rhs: WatchMatch) -> Bool {
         let leftDate = lhs.dateTime ?? WatchMatchDateParser.shared.parse(date: lhs.date, time: "00:00") ?? .distantFuture
         let rightDate = rhs.dateTime ?? WatchMatchDateParser.shared.parse(date: rhs.date, time: "00:00") ?? .distantFuture
@@ -243,47 +293,140 @@ private enum WatchMatchCollections {
     }
 }
 
-private struct WatchFixtureSection: Identifiable {
+struct WatchFixtureSection: Identifiable {
     let id: String
     let title: String
     let matches: [WatchMatch]
+}
+
+struct WatchCompetition: Identifiable {
+    let id: String
+    let name: String
+    let weight: Double
+    let matches: [WatchMatch]
+}
+
+enum WatchMatchDayLabel {
+    static func text(for day: WatchMatchDay, now: Date = Date()) -> String {
+        guard let date = WatchMatchDateParser.shared.parse(date: day.id, time: "00:00") else {
+            return day.displayDate
+        }
+
+        let calendar = Calendar.current
+        if calendar.isDate(date, inSameDayAs: now) {
+            return "Today"
+        }
+        if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now),
+           calendar.isDate(date, inSameDayAs: tomorrow) {
+            return "Tomorrow"
+        }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
+           calendar.isDate(date, inSameDayAs: yesterday) {
+            return "Yesterday"
+        }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale.current
+        formatter.timeZone = TimeZone.current
+        formatter.dateFormat = "EEE d MMM"
+        return formatter.string(from: date)
+    }
+}
+
+enum WatchMatchDayNavigation {
+    static func previousDay(to selectedDay: WatchMatchDay, in days: [WatchMatchDay]) -> WatchMatchDay? {
+        chronologicallySorted(days)
+            .last { $0.id < selectedDay.id }
+    }
+
+    static func nextDay(to selectedDay: WatchMatchDay, in days: [WatchMatchDay]) -> WatchMatchDay? {
+        chronologicallySorted(days)
+            .first { $0.id > selectedDay.id }
+    }
+
+    private static func chronologicallySorted(_ days: [WatchMatchDay]) -> [WatchMatchDay] {
+        days.sorted { $0.id < $1.id }
+    }
+}
+
+private struct WatchCompetitionRow: View {
+    let competition: WatchCompetition
+
+    var body: some View {
+        HStack(spacing: 10) {
+            WatchCompetitionLogo(name: competition.name)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(competition.name)
+                    .font(.body)
+                    .lineLimit(2)
+
+                Text("\(competition.matches.count) \(competition.matches.count == 1 ? "match" : "matches")")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+private struct WatchCompetitionLogo: View {
+    let name: String
+
+    var body: some View {
+        Group {
+            if let image = WatchCompetitionLogoResolver.image(for: name) {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+            } else {
+                Image(systemName: name.localizedCaseInsensitiveContains("cup") ? "trophy.fill" : "soccerball")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: 28, height: 28)
+        .accessibilityHidden(true)
+    }
+}
+
+private struct WatchCompetitionMatchesView: View {
+    let competition: WatchCompetition
+    let groupIntoTodaySections: Bool
+
+    init(competition: WatchCompetition, groupIntoTodaySections: Bool = true) {
+        self.competition = competition
+        self.groupIntoTodaySections = groupIntoTodaySections
+    }
+
+    var body: some View {
+        List {
+            if groupIntoTodaySections {
+                ForEach(WatchMatchCollections.todaySections(from: competition.matches)) { section in
+                    Section(section.title) {
+                        WatchMatchRows(matches: section.matches)
+                    }
+                }
+            } else {
+                Section {
+                    WatchMatchRows(matches: competition.matches)
+                }
+            }
+        }
+        .listStyle(.plain)
+        .navigationTitle(competition.name)
+    }
 }
 
 private struct WatchFixturesView: View {
     let days: [WatchMatchDay]
 
     var body: some View {
-        List {
-            if days.isEmpty {
-                Section {
-                    VStack(spacing: 8) {
-                        Image(systemName: "calendar.badge.exclamationmark")
-                            .font(.title3)
-                            .foregroundStyle(.secondary)
-                        Text("No fixtures")
-                            .font(.caption)
-                    }
-                    .frame(maxWidth: .infinity)
-                }
-            } else {
-                ForEach(days) { day in
-                    Section(day.displayDate) {
-                        ForEach(day.matches) { match in
-                            NavigationLink {
-                                WatchMatchDetailView(match: match)
-                            } label: {
-                                WatchMatchLozenge(match: match)
-                            }
-                            .buttonStyle(.plain)
-                            .listRowBackground(Color.clear)
-                            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
-                        }
-                    }
-                }
-            }
-        }
-        .listStyle(.plain)
-        .navigationTitle("Fixtures")
+        WatchMatchDateListView(
+            days: days,
+            title: "Fixtures",
+            emptyTitle: "No upcoming fixtures"
+        )
     }
 }
 
@@ -291,6 +434,20 @@ private struct WatchResultsView: View {
     let days: [WatchMatchDay]
 
     var body: some View {
+        WatchMatchDateListView(
+            days: days,
+            title: "Results",
+            emptyTitle: "No recent results"
+        )
+    }
+}
+
+private struct WatchMatchDateListView: View {
+    let days: [WatchMatchDay]
+    let title: String
+    let emptyTitle: String
+
+    var body: some View {
         List {
             if days.isEmpty {
                 Section {
@@ -298,34 +455,165 @@ private struct WatchResultsView: View {
                         Image(systemName: "calendar.badge.exclamationmark")
                             .font(.title3)
                             .foregroundStyle(.secondary)
-                        Text("No results")
+                        Text(emptyTitle)
                             .font(.caption)
+                            .multilineTextAlignment(.center)
                     }
                     .frame(maxWidth: .infinity)
                 }
             } else {
-                ForEach(days) { day in
-                    Section(day.displayDate) {
-                        ForEach(day.matches) { match in
-                            NavigationLink {
-                                WatchMatchDetailView(match: match)
-                            } label: {
-                                WatchMatchLozenge(match: match)
-                            }
-                            .buttonStyle(.plain)
-                            .listRowBackground(Color.clear)
-                            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+                Section {
+                    ForEach(days) { day in
+                        NavigationLink {
+                            WatchMatchDateView(days: days, initialDayID: day.id)
+                        } label: {
+                            WatchMatchDateRow(day: day)
                         }
                     }
                 }
             }
         }
         .listStyle(.plain)
-        .navigationTitle("Results")
+        .navigationTitle(title)
     }
 }
 
-private enum WatchMatchStatusRules {
+private struct WatchMatchDateRow: View {
+    let day: WatchMatchDay
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(WatchMatchDayLabel.text(for: day))
+                .font(.body)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+
+            Spacer(minLength: 4)
+
+            Text("\(day.matches.count)")
+                .font(.body.monospacedDigit())
+                .foregroundStyle(.secondary)
+
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "\(WatchMatchDayLabel.text(for: day)), \(day.matches.count) \(day.matches.count == 1 ? "match" : "matches")"
+        )
+    }
+}
+
+private struct WatchMatchDateView: View {
+    let days: [WatchMatchDay]
+    @State private var selectedDayID: String
+
+    init(days: [WatchMatchDay], initialDayID: String) {
+        self.days = days
+        _selectedDayID = State(initialValue: initialDayID)
+    }
+
+    private var selectedDay: WatchMatchDay? {
+        days.first { $0.id == selectedDayID } ?? days.first
+    }
+
+    private var competitions: [WatchCompetition] {
+        guard let selectedDay else { return [] }
+        return WatchMatchCollections.competitions(from: selectedDay.matches)
+    }
+
+    var body: some View {
+        List {
+            if competitions.count > 1 {
+                Section("Competitions") {
+                    ForEach(competitions) { competition in
+                        NavigationLink {
+                            WatchCompetitionMatchesView(
+                                competition: competition,
+                                groupIntoTodaySections: false
+                            )
+                        } label: {
+                            WatchCompetitionRow(competition: competition)
+                        }
+                    }
+                }
+            } else if let competition = competitions.first {
+                Section(competition.name) {
+                    WatchMatchRows(matches: competition.matches)
+                }
+            }
+
+            if let selectedDay {
+                Section {
+                    WatchDateNavigationControls(
+                        previousDay: WatchMatchDayNavigation.previousDay(to: selectedDay, in: days),
+                        nextDay: WatchMatchDayNavigation.nextDay(to: selectedDay, in: days),
+                        select: { selectedDayID = $0.id }
+                    )
+                }
+                .listRowBackground(Color.clear)
+            }
+        }
+        .listStyle(.plain)
+        .navigationTitle(selectedDay.map { WatchMatchDayLabel.text(for: $0) } ?? "Matches")
+    }
+}
+
+private struct WatchDateNavigationControls: View {
+    let previousDay: WatchMatchDay?
+    let nextDay: WatchMatchDay?
+    let select: (WatchMatchDay) -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            dateButton(title: "Previous", systemImage: "chevron.left", day: previousDay)
+            dateButton(title: "Next", systemImage: "chevron.right", day: nextDay)
+        }
+    }
+
+    private func dateButton(title: String, systemImage: String, day: WatchMatchDay?) -> some View {
+        Button {
+            if let day {
+                select(day)
+            }
+        } label: {
+            VStack(spacing: 3) {
+                Image(systemName: systemImage)
+                    .font(.caption.weight(.semibold))
+                Text(title)
+                    .font(.caption2)
+                    .lineLimit(1)
+            }
+            .frame(maxWidth: .infinity, minHeight: 38)
+        }
+        .buttonStyle(.bordered)
+        .disabled(day == nil)
+        .accessibilityLabel(
+            day.map { "\(title) date, \(WatchMatchDayLabel.text(for: $0))" } ?? "No \(title.lowercased()) date"
+        )
+    }
+}
+
+private struct WatchMatchRows: View {
+    let matches: [WatchMatch]
+
+    var body: some View {
+        ForEach(matches) { match in
+            NavigationLink {
+                WatchMatchDetailView(match: match)
+            } label: {
+                WatchMatchLozenge(match: match)
+            }
+            .buttonStyle(.plain)
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
+        }
+    }
+}
+
+enum WatchMatchStatusRules {
     static func isFinished(_ match: WatchMatch) -> Bool {
         WatchMatchCollections.isFinished(match)
     }
@@ -633,6 +921,12 @@ private struct WatchMatchDetailView: View {
         )
     }
 
+    private var goalSummaryEntries: [WatchTeamEventEntry] {
+        teamEventEntries(for: activeMatch).filter {
+            $0.event.kind == .goal || $0.event.kind == .ownGoal
+        }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
@@ -731,6 +1025,8 @@ private struct WatchMatchDetailView: View {
                         .fill(Color.gray.opacity(0.18))
                 )
 
+                WatchGoalSummaryCard(entries: goalSummaryEntries)
+                WatchFantasyMatchSection(snapshot: matchesStore.fantasySnapshot, match: activeMatch)
                 WatchKeyEventsCard(match: activeMatch)
                 WatchStartingLineupsSection(match: activeMatch)
 
@@ -862,13 +1158,17 @@ private struct WatchMatchDetailView: View {
             goals: homeGoals,
             assists: homeAssists,
             redCards: homeRedCards
-        ).map { WatchTeamEventEntry(side: .home, event: $0) }
+        ).map { event in
+            WatchTeamEventEntry(side: event.kind == .ownGoal ? .away : .home, event: event)
+        }
 
         let awayEvents = teamTimelineEvents(
             goals: awayGoals,
             assists: awayAssists,
             redCards: awayRedCards
-        ).map { WatchTeamEventEntry(side: .away, event: $0) }
+        ).map { event in
+            WatchTeamEventEntry(side: event.kind == .ownGoal ? .home : .away, event: event)
+        }
 
         return (homeEvents + awayEvents).sorted { lhs, rhs in
             if lhs.event.minute.base != rhs.event.minute.base {
@@ -1105,16 +1405,28 @@ private struct WatchTeamEventEntry {
     let event: WatchTeamTimelineEvent
 }
 
-private struct WatchTeamEventListView: View {
+private struct WatchGoalSummaryCard: View {
     let entries: [WatchTeamEventEntry]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
-                WatchTeamEventLineView(entry: entry)
+        if !entries.isEmpty {
+            VStack(alignment: .leading, spacing: 5) {
+                ForEach(Array(entries.enumerated()), id: \.offset) { _, entry in
+                    WatchTeamEventLineView(entry: entry)
+                }
             }
+            .padding(.vertical, 7)
+            .padding(.horizontal, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.green.opacity(0.10))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color.green.opacity(0.34), lineWidth: 1)
+            )
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1122,34 +1434,46 @@ private struct WatchTeamEventLineView: View {
     let entry: WatchTeamEventEntry
 
     var body: some View {
-        HStack(spacing: 3) {
+        HStack(alignment: .top, spacing: 4) {
             if entry.side == .home {
                 WatchEventIconView(kind: entry.event.kind)
-                Text(entry.event.displayMinute)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
-                Text(entry.event.homePlayerAssistText)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                goalText(alignment: .leading)
                 Spacer(minLength: 0)
             } else {
                 Spacer(minLength: 0)
-                Text(entry.event.awayPlayerAssistText)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
-                Text(entry.event.displayMinute)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .monospacedDigit()
+                goalText(alignment: .trailing)
                 WatchEventIconView(kind: entry.event.kind)
             }
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private func goalText(alignment: HorizontalAlignment) -> some View {
+        VStack(alignment: alignment, spacing: 1) {
+            HStack(spacing: 3) {
+                if entry.side == .away {
+                    Text(entry.event.displayMinute)
+                        .foregroundStyle(.secondary)
+                }
+                Text(entry.event.scorerText)
+                    .fontWeight(.semibold)
+                if entry.side == .home {
+                    Text(entry.event.displayMinute)
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .font(.caption2)
+            .monospacedDigit()
+
+            if let assistText = entry.event.assistText {
+                Text(assistText)
+                    .font(.system(size: 9))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+        }
+        .lineLimit(1)
+        .multilineTextAlignment(entry.side == .home ? .leading : .trailing)
     }
 }
 
@@ -1225,34 +1549,129 @@ private struct WatchTeamTimelineEvent {
     let minute: WatchParsedMinute
     let sequence: Int
 
-    var awayPlayerAssistText: String {
+    var scorerText: String {
         if kind == .ownGoal {
             return "\(playerName) (OG)"
         }
-        if kind == .disallowedGoal {
-            var result = "Goal disallowed for \(playerName)"
-            if minute.isPenalty {
-                result += " (pen)"
-            } else if let assistName, !assistName.isEmpty {
-                result += " (\(assistName))"
-            }
-            return result
-        }
-        guard kind == .goal else {
-            return playerName
-        }
-
-        var result = playerName
         if minute.isPenalty {
-            result += " (pen)"
-        } else if let assistName, !assistName.isEmpty {
-            result += " (\(assistName))"
+            return "\(playerName) (pen)"
         }
-        return result
+        return playerName
     }
 
-    var homePlayerAssistText: String {
-        awayPlayerAssistText
+    var assistText: String? {
+        guard kind == .goal, !minute.isPenalty, let assistName, !assistName.isEmpty else {
+            return nil
+        }
+        return "Assist: \(assistName)"
+    }
+
+}
+
+private struct WatchFantasyMatchSection: View {
+    let snapshot: WatchFantasySnapshot?
+    let match: WatchMatch
+
+    private var players: [WatchFantasyPlayer] {
+        guard let snapshot else { return [] }
+        let teamKeys = Set([
+            Self.teamKey(match.homeTeam),
+            Self.teamKey(match.awayTeam),
+            Self.teamKey(match.displayHomeTeam),
+            Self.teamKey(match.displayAwayTeam)
+        ])
+        return snapshot.players
+            .filter { player in
+                let playerTeamKey = Self.teamKey(player.teamName)
+                return teamKeys.contains(playerTeamKey) || teamKeys.contains { matchTeamKey in
+                    playerTeamKey.count >= 4 &&
+                        (matchTeamKey.contains(playerTeamKey) || playerTeamKey.contains(matchTeamKey))
+                }
+            }
+            .sorted { lhs, rhs in
+                if lhs.points != rhs.points { return lhs.points > rhs.points }
+                if lhs.isStarter != rhs.isStarter { return lhs.isStarter && !rhs.isStarter }
+                return lhs.displayName.localizedCaseInsensitiveCompare(rhs.displayName) == .orderedAscending
+            }
+    }
+
+    var body: some View {
+        if let snapshot, !players.isEmpty {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: 5) {
+                    Image(systemName: "person.2.fill")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(Color(red: 0.67, green: 0.23, blue: 0.91))
+                    Text("FPL")
+                        .font(.footnote.weight(.semibold))
+                    Spacer(minLength: 4)
+                    Text(snapshot.gameweekTitle)
+                        .font(.system(size: 9, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+
+                ForEach(players) { player in
+                    HStack(spacing: 6) {
+                        WatchTeamLogo(name: player.teamName)
+                        Text(playerName(player))
+                            .font(.caption)
+                            .fontWeight(.medium)
+                            .lineLimit(1)
+                        Spacer(minLength: 4)
+                        Text("\(player.points)")
+                            .font(.caption.monospacedDigit().weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.96))
+                            .padding(.horizontal, 7)
+                            .padding(.vertical, 3)
+                            .frame(minWidth: 30)
+                            .background(pointsTint(player.points).opacity(0.31), in: Capsule(style: .continuous))
+                            .overlay {
+                                Capsule(style: .continuous)
+                                    .stroke(pointsTint(player.points).opacity(0.92), lineWidth: 0.8)
+                            }
+                    }
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel("\(player.displayName), \(player.points) points")
+                }
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 8)
+            .background(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color(red: 0.67, green: 0.23, blue: 0.91).opacity(0.10))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(Color(red: 0.67, green: 0.23, blue: 0.91).opacity(0.30), lineWidth: 1)
+            )
+        }
+    }
+
+    private func playerName(_ player: WatchFantasyPlayer) -> String {
+        if player.isCaptain { return "\(player.displayName) (C)" }
+        if player.isViceCaptain { return "\(player.displayName) (V)" }
+        return player.displayName
+    }
+
+    private func pointsTint(_ points: Int) -> Color {
+        switch points {
+        case ...2:
+            return Color(red: 0.92, green: 0.23, blue: 0.20)
+        case 3...5:
+            return Color(red: 0.95, green: 0.62, blue: 0.16)
+        default:
+            return Color(red: 0.24, green: 0.76, blue: 0.30)
+        }
+    }
+
+    private static func teamKey(_ value: String) -> String {
+        value
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .filter { !["fc", "afc", "football", "club"].contains(String($0)) }
+            .joined()
     }
 }
 
@@ -1264,13 +1683,13 @@ private struct WatchKeyEventsCard: View {
     let match: WatchMatch
 
     private var entries: [WatchMatchEventEntry] {
-        WatchMatchEventEntry.entries(for: match)
+        WatchMatchEventEntry.newestFirstEntries(for: match)
     }
 
     var body: some View {
         if !entries.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
-                Text("Key Events")
+                Text("Match Events")
                     .font(.footnote)
                     .fontWeight(.semibold)
 
@@ -1565,7 +1984,7 @@ private struct WatchLineupList: View {
     }
 }
 
-private struct WatchMatchEventEntry: Identifiable {
+struct WatchMatchEventEntry: Identifiable {
     enum Side {
         case home
         case away
@@ -1612,6 +2031,10 @@ private struct WatchMatchEventEntry: Identifiable {
             }
             return lhs.title.localizedCaseInsensitiveCompare(rhs.title) == .orderedAscending
         }
+    }
+
+    static func newestFirstEntries(for match: WatchMatch) -> [WatchMatchEventEntry] {
+        Array(entries(for: match).reversed())
     }
 
     private static func appendGoals(
@@ -1760,10 +2183,11 @@ private struct WatchMatchEventEntry: Identifiable {
 
     private static func sortMinute(_ value: String) -> Int {
         let normalized = normalizedMinute(value)
-        return normalized
+        let components = normalized
             .split { !$0.isNumber }
-            .first
-            .flatMap { Int($0) } ?? Int.max
+            .compactMap { Int($0) }
+        guard let base = components.first else { return Int.max }
+        return (base * 100) + (components.count > 1 ? components[1] : 0)
     }
 }
 

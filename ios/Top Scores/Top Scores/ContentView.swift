@@ -207,7 +207,7 @@ private struct ContentLifecycleCoordinator: View {
             .onChange(of: matchesStore.matches) { _, _ in
                 updateFantasyTabPresentation()
             }
-            .task(id: "\(fantasyManagerEntryID)|\(preferences.apiBaseURL)|\(selectedTab)") {
+            .task(id: "\(fantasyManagerEntryID)|\(preferences.apiBaseURL)") {
                 updateFantasyTabPresentation()
                 await refreshFantasyInBackground()
             }
@@ -255,7 +255,10 @@ private struct ContentLifecycleCoordinator: View {
     }
 
     private func refreshFantasyInBackground() async {
-        guard selectedTab != 0, !trimmedFantasyManagerEntryID.isEmpty else { return }
+        guard fantasyShouldRefreshInBackground(
+            selectedTab: selectedTab,
+            managerEntryID: fantasyManagerEntryID
+        ) else { return }
 
         let defaults = UserDefaults.standard
         let rivals = Self.decodeRivals(defaults.string(forKey: "fantasy.rivalManagersJSON"))
@@ -351,6 +354,13 @@ private struct ContentLifecycleCoordinator: View {
         FantasySyncStore.persist(managerEntryID: managerEntryID, squad: squad)
         await PreferencesSyncService.shared.syncPreferences(preferences.snapshot)
     }
+}
+
+func fantasyShouldRefreshInBackground(
+    selectedTab _: Int,
+    managerEntryID: String
+) -> Bool {
+    !managerEntryID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
 }
 
 func fantasyShouldShowReauthenticationIndicator(

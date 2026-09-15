@@ -12,6 +12,48 @@ struct WatchAPIClient {
         self.session = URLSession(configuration: config)
     }
 
+    func fetchMatches(on date: String) async throws -> [WatchMatch] {
+        var components = URLComponents(
+            url: baseURL.appendingPathComponent("matches"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [
+            URLQueryItem(name: "start", value: date),
+            URLQueryItem(name: "end", value: date),
+            URLQueryItem(name: "time_zone", value: TimeZone.current.identifier),
+            URLQueryItem(name: "page_size", value: "200")
+        ]
+        guard let url = components?.url else {
+            throw WatchAPIClientError.invalidHTTPResponse
+        }
+
+        var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
+        request.setValue("no-cache", forHTTPHeaderField: "Pragma")
+
+        let maxAttempts = 3
+        for attempt in 1...maxAttempts {
+            do {
+                let (data, response) = try await session.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    throw WatchAPIClientError.invalidHTTPResponse
+                }
+                guard (200...299).contains(httpResponse.statusCode) else {
+                    throw WatchAPIClientError.badStatus(statusCode: httpResponse.statusCode)
+                }
+                return try JSONDecoder().decode([WatchMatch].self, from: data)
+            } catch {
+                guard attempt < maxAttempts, isRetryable(error) else {
+                    throw error
+                }
+                try await Task.sleep(nanoseconds: UInt64(1 << (attempt - 1)) * 500_000_000)
+            }
+        }
+
+        throw WatchAPIClientError.invalidHTTPResponse
+    }
+
     func fetchMatchDetails(matchId: String) async throws -> WatchMatchDetailsPayload {
         guard let normalizedID = normalizedMatchDetailsID(matchId) else {
             throw WatchAPIClientError.invalidMatchDetailsID(matchId)
@@ -39,7 +81,7 @@ struct WatchAPIClient {
                 guard attempt < maxAttempts, isRetryable(error) else {
                     throw error
                 }
-                try await Task.sleep(nanoseconds: UInt64(attempt) * 500_000_000)
+                try await Task.sleep(nanoseconds: UInt64(1 << (attempt - 1)) * 500_000_000)
             }
         }
 
@@ -105,7 +147,7 @@ enum WatchAPIClientError: LocalizedError {
     var isRetryable: Bool {
         switch self {
         case let .badStatus(statusCode):
-            return statusCode == 502 || statusCode == 503 || statusCode == 504
+            return statusCode == 429 || statusCode == 502 || statusCode == 503 || statusCode == 504
         case .invalidHTTPResponse, .invalidMatchDetailsID:
             return false
         }
@@ -192,6 +234,40 @@ struct WatchMatchDetailsPayload: Codable {
 }
 
 extension WatchMatch {
+    func mergingLatestSummary(_ latest: WatchMatch) -> WatchMatch {
+        WatchMatch(
+            date: latest.date,
+            time: latest.time,
+            homeTeam: latest.homeTeam,
+            awayTeam: latest.awayTeam,
+            homeShortName: latest.homeShortName ?? homeShortName,
+            awayShortName: latest.awayShortName ?? awayShortName,
+            league: latest.league,
+            leagueSubcategory: latest.leagueSubcategory ?? leagueSubcategory,
+            competitionWeight: latest.competitionWeight ?? competitionWeight,
+            watchabilityIndex: latest.watchabilityIndex ?? watchabilityIndex,
+            matchDetailsIDValue: latest.matchDetailsIDValue ?? matchDetailsIDValue,
+            tvChannels: latest.tvChannels.isEmpty ? tvChannels : latest.tvChannels,
+            homeScore: latest.homeScore,
+            awayScore: latest.awayScore,
+            scoreStatus: latest.scoreStatus,
+            homeGoalScorers: homeGoalScorers,
+            awayGoalScorers: awayGoalScorers,
+            homeAssists: homeAssists,
+            awayAssists: awayAssists,
+            homeYellowCards: homeYellowCards,
+            awayYellowCards: awayYellowCards,
+            homeRedCards: homeRedCards,
+            awayRedCards: awayRedCards,
+            homeVarEvents: homeVarEvents,
+            awayVarEvents: awayVarEvents,
+            teamLineups: teamLineups,
+            penaltyResult: latest.penaltyResult ?? penaltyResult,
+            homeTeamId: latest.homeTeamId ?? homeTeamId,
+            awayTeamId: latest.awayTeamId ?? awayTeamId
+        ) ?? latest
+    }
+
     func withDetails(_ details: WatchMatchDetailsPayload) -> WatchMatch {
         var updatedMatch = self
         updatedMatch = WatchMatch(
@@ -204,6 +280,7 @@ extension WatchMatch {
             league: details.league ?? league,
             leagueSubcategory: leagueSubcategory,
             competitionWeight: competitionWeight,
+            watchabilityIndex: watchabilityIndex,
             matchDetailsIDValue: matchDetailsIDValue,
             tvChannels: tvChannels,
             homeScore: details.homeScore ?? homeScore,
@@ -239,6 +316,7 @@ private extension WatchMatch {
         league: String,
         leagueSubcategory: String?,
         competitionWeight: Double?,
+        watchabilityIndex: WatchMatchWatchabilityIndex?,
         matchDetailsIDValue: String?,
         tvChannels: [String],
         homeScore: Int?,
@@ -321,6 +399,11 @@ private extension WatchMatch {
         }
         if let competitionWeight {
             dict["competition_weight"] = competitionWeight
+        }
+        if let watchabilityIndex,
+           let watchabilityData = try? JSONEncoder().encode(watchabilityIndex),
+           let watchabilityObject = try? JSONSerialization.jsonObject(with: watchabilityData) {
+            dict["watchability_index"] = watchabilityObject
         }
 
         if let matchDetailsIDValue = matchDetailsIDValue {

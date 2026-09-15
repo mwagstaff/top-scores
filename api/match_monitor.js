@@ -1436,6 +1436,7 @@ function buildGoalTimeline(match) {
   });
 
   const signatureCounts = new Map();
+  const identityCounts = new Map();
   events.forEach((event) => {
     const baseKey = [
       event.team || "",
@@ -1446,6 +1447,17 @@ function buildGoalTimeline(match) {
     const nextCount = (signatureCounts.get(baseKey) || 0) + 1;
     signatureCounts.set(baseKey, nextCount);
     event.signature = `${baseKey}|${nextCount}`;
+
+    // Scorer names can be corrected after an incident is first published. Match
+    // timeline occurrences without the player so a correction is not mistaken
+    // for another goal. Own-goal feeds can also move the event between team
+    // lists, so their identity is based on time and occurrence only.
+    const identityBaseKey = event.ownGoal
+      ? [event.goalTime || "", "OG"].join("|")
+      : [event.team || "", event.goalTime || "", "G"].join("|");
+    const nextIdentityCount = (identityCounts.get(identityBaseKey) || 0) + 1;
+    identityCounts.set(identityBaseKey, nextIdentityCount);
+    event.identity = `${identityBaseKey}|${nextIdentityCount}`;
   });
 
   return events;
@@ -1457,14 +1469,14 @@ function diffGoalEvents(oldMatch, newMatch) {
 
   const oldCounts = new Map();
   oldTimeline.forEach((event) => {
-    oldCounts.set(event.signature, (oldCounts.get(event.signature) || 0) + 1);
+    oldCounts.set(event.identity, (oldCounts.get(event.identity) || 0) + 1);
   });
 
   const newEvents = [];
   newTimeline.forEach((event) => {
-    const remaining = oldCounts.get(event.signature) || 0;
+    const remaining = oldCounts.get(event.identity) || 0;
     if (remaining > 0) {
-      oldCounts.set(event.signature, remaining - 1);
+      oldCounts.set(event.identity, remaining - 1);
       return;
     }
     newEvents.push(event);
@@ -1509,6 +1521,86 @@ function reconcileGoalEventScoringTeams(goalEvents, unresolvedHomeGoals, unresol
       ? goal
       : { ...goal, team: scoringTeam, playerTeam: goal.team };
   });
+}
+
+function takeGoalEventsForScoreDeltas(
+  goalTimelineBacklog,
+  unresolvedGoalCount,
+  unresolvedHomeGoalCount,
+  unresolvedAwayGoalCount
+) {
+  const backlog = Array.isArray(goalTimelineBacklog) ? goalTimelineBacklog : [];
+  let remainingHome = Math.max(0, Math.floor(Number(unresolvedHomeGoalCount) || 0));
+  let remainingAway = Math.max(0, Math.floor(Number(unresolvedAwayGoalCount) || 0));
+  const unresolvedTotal = Math.max(
+    Math.max(0, Math.floor(Number(unresolvedGoalCount) || 0)),
+    remainingHome + remainingAway
+  );
+  let remainingUnassigned = Math.max(0, unresolvedTotal - remainingHome - remainingAway);
+  const initialHome = remainingHome;
+  const initialAway = remainingAway;
+  const selectedIndices = new Set();
+
+  // Prefer the latest incident for each scoring side. This preserves the
+  // existing stale-backfill protection without allowing a home incident to
+  // consume an unresolved away score increase (or vice versa).
+  for (let index = backlog.length - 1; index >= 0; index -= 1) {
+    const goal = backlog[index];
+    if (!goal || goal.ownGoal) continue;
+    if (goal.team === "home" && remainingHome > 0) {
+      selectedIndices.add(index);
+      remainingHome -= 1;
+    } else if (goal.team === "away" && remainingAway > 0) {
+      selectedIndices.add(index);
+      remainingAway -= 1;
+    }
+  }
+
+  // Own goals are grouped inconsistently by providers. Allocate them after
+  // ordinary goals, using the same side-resolution rules as notification text.
+  for (let index = backlog.length - 1; index >= 0; index -= 1) {
+    const goal = backlog[index];
+    if (!goal || !goal.ownGoal || selectedIndices.has(index)) continue;
+    if (goal.team === "home" && remainingHome > 0) {
+      selectedIndices.add(index);
+      remainingHome -= 1;
+    } else if (goal.team === "home" && remainingAway > 0) {
+      selectedIndices.add(index);
+      remainingAway -= 1;
+    } else if (goal.team === "away" && remainingAway > 0) {
+      selectedIndices.add(index);
+      remainingAway -= 1;
+    } else if (goal.team === "away" && remainingHome > 0) {
+      selectedIndices.add(index);
+      remainingHome -= 1;
+    }
+  }
+
+  // Retain compatibility with monitor state created before per-side counts
+  // were tracked. Only genuinely unassigned deltas may consume either side.
+  for (let index = backlog.length - 1; index >= 0 && remainingUnassigned > 0; index -= 1) {
+    if (selectedIndices.has(index)) continue;
+    selectedIndices.add(index);
+    remainingUnassigned -= 1;
+  }
+
+  const selectedEvents = [];
+  const retainedEvents = [];
+  backlog.forEach((goal, index) => {
+    if (selectedIndices.has(index)) {
+      selectedEvents.push(goal);
+    } else {
+      retainedEvents.push(goal);
+    }
+  });
+  backlog.splice(0, backlog.length, ...retainedEvents);
+
+  return {
+    events: reconcileGoalEventScoringTeams(selectedEvents, initialHome, initialAway),
+    unresolvedGoalCount: remainingHome + remainingAway + remainingUnassigned,
+    unresolvedHomeGoalCount: remainingHome,
+    unresolvedAwayGoalCount: remainingAway,
+  };
 }
 
 function buildMatchEvents(oldMatch, newMatch, monitorState, nowMs = Date.now(), context = null) {
@@ -1626,26 +1718,16 @@ function buildMatchEvents(oldMatch, newMatch, monitorState, nowMs = Date.now(), 
 
   let newGoalEvents = [];
   if (monitorState.unresolvedGoalCount > 0 && goalTimelineBacklog.length > 0) {
-    const emitCount = Math.min(monitorState.unresolvedGoalCount, goalTimelineBacklog.length);
-    // Use the latest timeline entries so delayed backfills do not replay stale historical goals.
-    newGoalEvents = goalTimelineBacklog.splice(goalTimelineBacklog.length - emitCount, emitCount);
-    newGoalEvents = reconcileGoalEventScoringTeams(
-      newGoalEvents,
+    const reconciled = takeGoalEventsForScoreDeltas(
+      goalTimelineBacklog,
+      monitorState.unresolvedGoalCount,
       monitorState.unresolvedHomeGoalCount,
       monitorState.unresolvedAwayGoalCount
     );
-    newGoalEvents.forEach((goal) => {
-      if (goal && goal.team === "home" && monitorState.unresolvedHomeGoalCount > 0) {
-        monitorState.unresolvedHomeGoalCount -= 1;
-      } else if (goal && goal.team === "away" && monitorState.unresolvedAwayGoalCount > 0) {
-        monitorState.unresolvedAwayGoalCount -= 1;
-      }
-    });
-    monitorState.unresolvedGoalCount = Math.max(0, monitorState.unresolvedGoalCount - emitCount);
-    if (monitorState.unresolvedGoalCount === 0) {
-      monitorState.unresolvedHomeGoalCount = 0;
-      monitorState.unresolvedAwayGoalCount = 0;
-    }
+    newGoalEvents = reconciled.events;
+    monitorState.unresolvedGoalCount = reconciled.unresolvedGoalCount;
+    monitorState.unresolvedHomeGoalCount = reconciled.unresolvedHomeGoalCount;
+    monitorState.unresolvedAwayGoalCount = reconciled.unresolvedAwayGoalCount;
   }
 
   let newHomeGoalsCount = 0;

@@ -18553,6 +18553,13 @@ function getMatchDetailsStatePayload(payload) {
     tv_channels: uniqueChannels(normalizedPayload.tv_channels),
   };
 
+  if (normalizedPayload.home_team_id != null) {
+    statePayload.home_team_id = String(normalizedPayload.home_team_id);
+  }
+  if (normalizedPayload.away_team_id != null) {
+    statePayload.away_team_id = String(normalizedPayload.away_team_id);
+  }
+
   if (normalizedPayload.has_bsd_source === true) {
     statePayload.has_bsd_source = true;
   }

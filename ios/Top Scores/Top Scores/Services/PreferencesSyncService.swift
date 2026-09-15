@@ -209,6 +209,7 @@ enum FantasySyncStore {
 
         guard let parsedManagerEntryID, parsedManagerEntryID > 0 else {
             defaults.removeObject(forKey: userDefaultsKey)
+            SharedMatchesBridge.refreshWatchFantasyState()
             return
         }
 
@@ -218,6 +219,7 @@ enum FantasySyncStore {
         )
         guard let data = try? JSONEncoder().encode(payload) else { return }
         defaults.set(data, forKey: userDefaultsKey)
+        SharedMatchesBridge.refreshWatchFantasyState()
     }
 
     nonisolated static func jsonObject() -> Any? {

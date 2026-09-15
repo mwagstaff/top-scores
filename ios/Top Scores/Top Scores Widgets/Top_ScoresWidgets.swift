@@ -1868,12 +1868,25 @@ private enum SmallLayoutBuilder {
     }
 }
 
+private struct WidgetBSDTeamLogoAssetCatalog: Decodable {
+    let teams: [String: WidgetBSDTeamLogoAssetEntry]
+}
+
+private struct WidgetBSDTeamLogoAssetEntry: Decodable {
+    let assetName: String
+
+    private enum CodingKeys: String, CodingKey {
+        case assetName = "asset_name"
+    }
+}
+
 private final class WidgetTeamLogoResolver {
     static let shared = WidgetTeamLogoResolver()
 
     private let fallbackName = "_noTeamLogo"
     private let lock = NSLock()
     private let bundles: [Bundle]
+    private let assetNameByTeamID: [String: String]
     private var normalizedLookup: [String: URL] = [:]
     private var coreLookup: [String: [URL]] = [:]
     private var originalLookup: [String: URL] = [:]
@@ -1884,7 +1897,9 @@ private final class WidgetTeamLogoResolver {
     private var cache: [String: UIImage] = [:]
 
     private init() {
-        bundles = Self.logoBundles()
+        let logoBundles = Self.logoBundles()
+        bundles = logoBundles
+        assetNameByTeamID = Self.loadBSDAssetNames(from: logoBundles)
         loadLogos()
     }
 
@@ -1895,23 +1910,13 @@ private final class WidgetTeamLogoResolver {
         variant: WidgetLogoAssetVariant = .standard,
         idealPointSize: CGFloat? = nil
     ) -> UIImage? {
-        if let teamId, let badge = widgetBadgeImage(forTeamId: teamId) {
-            return badge
+        let normalizedTeamID = teamId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if let baseAssetName = assetNameByTeamID[normalizedTeamID],
+           let assetName = preferredAssetName(from: baseAssetName, variant: variant),
+           let image = imageFromAssets(named: assetName, idealPointSize: idealPointSize) {
+            return image
         }
         return image(for: teamName, alternateNames: alternateNames, variant: variant, idealPointSize: idealPointSize)
-    }
-
-    private func widgetBadgeImage(forTeamId teamId: String) -> UIImage? {
-        guard let dir = FileManager.default
-            .containerURL(forSecurityApplicationGroupIdentifier: WidgetAppGroupConfig.identifier)?
-            .appendingPathComponent("team-badges", isDirectory: true) else { return nil }
-        let manifestURL = dir.appendingPathComponent("manifest.json")
-        guard let data = try? Data(contentsOf: manifestURL),
-              let manifest = try? JSONDecoder().decode([String: String].self, from: data),
-              let filename = manifest[teamId] else { return nil }
-        let fileURL = dir.appendingPathComponent(filename)
-        guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
-        return UIImage(contentsOfFile: fileURL.path)
     }
 
     func image(
@@ -1939,26 +1944,27 @@ private final class WidgetTeamLogoResolver {
             alternateNames: alternateNames,
             variant: variant,
             idealPointSize: idealPointSize
-        ) ??
-            resolveAssetFallbackImage(variant: variant, idealPointSize: idealPointSize) {
+        ) {
             lock.lock()
             cache[cacheKey] = image
             lock.unlock()
             return image
         }
 
-        let url = resolveURL(for: teamName, alternateNames: alternateNames) ??
-            resolveURL(for: fallbackName)
-        guard let url else { return nil }
-
-        let image = Self.downsampledImage(at: url, idealPointSize: idealPointSize)
-        if let image {
+        if let url = resolveURL(for: teamName, alternateNames: alternateNames),
+           let image = Self.downsampledImage(at: url, idealPointSize: idealPointSize) {
             lock.lock()
             cache[cacheKey] = image
             lock.unlock()
+            return image
         }
 
-        return image
+        // Do not cache a fallback under a team key: a later widget refresh may
+        // have a usable asset catalogue or bundle available.
+        return resolveAssetFallbackImage(variant: variant, idealPointSize: idealPointSize) ??
+            resolveURL(for: fallbackName).flatMap {
+                Self.downsampledImage(at: $0, idealPointSize: idealPointSize)
+            }
     }
 
     func assetName(
@@ -2020,6 +2026,18 @@ private final class WidgetTeamLogoResolver {
         }
 
         return output
+    }
+
+    private static func loadBSDAssetNames(from bundles: [Bundle]) -> [String: String] {
+        for bundle in bundles {
+            guard let url = bundle.url(forResource: "bsd_team_logo_assets", withExtension: "json"),
+                  let data = try? Data(contentsOf: url),
+                  let catalog = try? JSONDecoder().decode(WidgetBSDTeamLogoAssetCatalog.self, from: data) else {
+                continue
+            }
+            return catalog.teams.mapValues(\.assetName)
+        }
+        return [:]
     }
 
     private func loadAssetCatalogLogos() {

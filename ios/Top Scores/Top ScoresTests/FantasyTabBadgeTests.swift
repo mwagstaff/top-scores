@@ -3,6 +3,14 @@ import Testing
 @testable import Top_Scores
 
 struct FantasyTabBadgeTests {
+    @Test func backgroundRefreshRunsWhileScoresTabIsSelected() {
+        #expect(fantasyShouldRefreshInBackground(selectedTab: 0, managerEntryID: "123456"))
+    }
+
+    @Test func backgroundRefreshRequiresALinkedManager() {
+        #expect(!fantasyShouldRefreshInBackground(selectedTab: 0, managerEntryID: "  \n "))
+    }
+
     private let now = Date(timeIntervalSince1970: 1_800_000_000)
 
     @Test func liveMatchShowsScore() {

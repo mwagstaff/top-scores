@@ -808,6 +808,50 @@ function mergedLiveActivityState(existingState = {}, patch = {}) {
   };
 }
 
+// Preference syncs and ActivityKit callbacks arrive independently and can run
+// in different server processes. Merge lifecycle fields inside Redis so a
+// preference write that started earlier cannot erase a newly registered token.
+const SAVE_PREFERENCES_PRESERVING_LIVE_ACTIVITY_SCRIPT = `
+local incoming = cjson.decode(ARGV[1])
+local patch = cjson.decode(ARGV[2])
+local currentRaw = redis.call('GET', KEYS[1])
+local liveActivity = {}
+
+if currentRaw then
+  local current = cjson.decode(currentRaw)
+  if current.liveActivity then
+    liveActivity = current.liveActivity
+  end
+elseif incoming.liveActivity then
+  liveActivity = incoming.liveActivity
+end
+
+for key, value in pairs(patch) do
+  liveActivity[key] = value
+end
+
+incoming.liveActivity = liveActivity
+local encoded = cjson.encode(incoming)
+redis.call('SET', KEYS[1], encoded, 'EX', ARGV[3])
+redis.call('SADD', KEYS[2], ARGV[4])
+return encoded
+`;
+
+function mergePreferenceWriteLiveActivity(incomingState = {}, currentState = {}, patch = {}) {
+  const incoming = incomingState && typeof incomingState === "object" ? incomingState : {};
+  const current = currentState && typeof currentState === "object" ? currentState : {};
+  const currentLiveActivity =
+    current.liveActivity && typeof current.liveActivity === "object"
+      ? current.liveActivity
+      : incoming.liveActivity && typeof incoming.liveActivity === "object"
+        ? incoming.liveActivity
+        : {};
+  return {
+    ...incoming,
+    liveActivity: mergedLiveActivityState(currentLiveActivity, patch),
+  };
+}
+
 function recordUpdatedAtMs(record) {
   const parsed = Date.parse(String(record && record.updatedAt ? record.updatedAt : "").trim());
   return Number.isFinite(parsed) ? parsed : null;
@@ -943,18 +987,29 @@ async function saveUserPreferences(
       }
       data.notificationTeamSubscriptions = subscriptions;
     }
-    const serializedData = JSON.stringify(data);
-    const transaction = redisClient.multi();
-    transaction.set(key, serializedData, { EX: USER_PREFERENCES_TTL_SECONDS });
-    transaction.sAdd(USER_PREFERENCES_INDEX_KEY, normalizedToken);
-    await transaction.exec();
-    await mongoStore.upsertUserPreferences(data).catch((error) => {
+    const serializedData = await redisClient.eval(
+      SAVE_PREFERENCES_PRESERVING_LIVE_ACTIVITY_SCRIPT,
+      {
+        keys: [key, USER_PREFERENCES_INDEX_KEY],
+        arguments: [
+          JSON.stringify(data),
+          JSON.stringify(liveActivityPatch),
+          String(USER_PREFERENCES_TTL_SECONDS),
+          normalizedToken,
+        ],
+      }
+    );
+    const savedData = safeJsonParse(
+      String(serializedData),
+      `atomically saved user preferences ${normalizedToken}`
+    );
+    await mongoStore.upsertUserPreferences(savedData).catch((error) => {
       console.warn("[Mongo] Failed mirroring user preferences:", error.message || error);
     });
     console.log(
       `[Redis] Saved preferences for device: ${normalizedToken.substring(0, 12)}... (APNS: ${resolvedAPNSToken ? "Yes" : "No"}, Dev: ${resolvedIsDevelopmentBuild})`
     );
-    return attachRedisMetricMeta(data, { payloadBytes: utf8ByteLength(serializedData) });
+    return attachRedisMetricMeta(savedData, { payloadBytes: utf8ByteLength(serializedData) });
   } catch (error) {
     console.error("[Redis] Error saving user preferences:", error);
     throw error;
@@ -3521,6 +3576,7 @@ module.exports = {
     readRedisMetricMeta,
     normalizeLiveActivityStatePatch,
     mergedLiveActivityState,
+    mergePreferenceWriteLiveActivity,
     normalizedPreferencesRevision,
     isStalePreferencesRevision,
     buildUserPreferencesKey,

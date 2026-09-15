@@ -185,6 +185,7 @@ final class LiveActivitySyncService {
     private var lastUploadedPushToStartTokenHex: String?
     private var pendingPushToStartTokenData: Data?
     private var lastUploadedActivityPushTokenHexByActivityID: [String: String] = [:]
+    private var registeredActivityPushTokenHexByActivityID: [String: String] = [:]
     private var pendingForegroundStartContentState: TopScoresLiveActivityAttributes.ContentState?
     private var pendingForegroundStartRetryTask: Task<Void, Never>?
     private var foregroundReconcileInFlight = false
@@ -461,6 +462,7 @@ final class LiveActivitySyncService {
         let contentTask = activityContentTasks.removeValue(forKey: activityID)
         let stateTask = activityStateTasks.removeValue(forKey: activityID)
         lastUploadedActivityPushTokenHexByActivityID.removeValue(forKey: activityID)
+        registeredActivityPushTokenHexByActivityID.removeValue(forKey: activityID)
         observedActivityIDs.remove(activityID)
         lock.unlock()
 
@@ -472,9 +474,18 @@ final class LiveActivitySyncService {
     }
 
     private func enqueueActivityPushTokenUpload(activityID: String, tokenData: Data) {
-        Task.detached(priority: .background) { [weak self] in
+        Task(priority: .background) { [weak self] in
             guard let self else { return }
-            await self.uploadActivityPushToken(activityID: activityID, tokenData: tokenData)
+            let registered = await self.uploadActivityPushToken(
+                activityID: activityID,
+                tokenData: tokenData
+            )
+            if registered {
+                let current = Activity<TopScoresLiveActivityAttributes>.activities
+                if current.count > 1 {
+                    _ = await self.enforceSingleActiveActivity(among: current)
+                }
+            }
         }
     }
 
@@ -607,20 +618,19 @@ final class LiveActivitySyncService {
         // This prevents a race where activity-ended (for a duplicate) clears the
         // server state before the survivor's token upload lands, causing the server
         // to fire another push-to-start and creating an infinite loop.
+        var survivorRegistered = false
         if let survivorToken = survivor.pushToken {
-            await uploadActivityPushToken(activityID: survivor.id, tokenData: survivorToken)
+            survivorRegistered = await uploadActivityPushToken(
+                activityID: survivor.id,
+                tokenData: survivorToken
+            )
             diagnosticLog("[LiveActivitySync] Pre-uploaded survivor token before ending duplicates %@", survivor.id)
         }
 
-        guard survivor.pushToken != nil else { return [survivor] }
-        // A server renewal is retired by the server only after token registration
-        // succeeds. Do not remove the old card on a failed/in-flight upload.
-        if survivor.attributes.startedAtEpochSeconds != nil,
-           sortedActivities.dropFirst().contains(where: {
-               $0.attributes.startedAtEpochSeconds != survivor.attributes.startedAtEpochSeconds
-           }) {
-            return [survivor]
-        }
+        // Keep the old activity as a fallback until the replacement's update
+        // token has been accepted. Once accepted, remove every older generation
+        // locally even if the server's APNs end was delayed or dropped.
+        guard survivorRegistered else { return [survivor] }
         for duplicate in sortedActivities.dropFirst() {
             diagnosticLog("[LiveActivitySync] Ending duplicate activity %@", duplicate.id)
             stopObserving(activityID: duplicate.id, cancelStateTask: true)
@@ -670,26 +680,40 @@ final class LiveActivitySyncService {
         await sendJSONRequest(url: endpoint, payload: payload, logContext: "push-to-start")
     }
 
-    private func uploadActivityPushToken(activityID: String, tokenData: Data) async {
+    @discardableResult
+    private func uploadActivityPushToken(activityID: String, tokenData: Data) async -> Bool {
         let tokenHex = Self.hexString(from: tokenData)
         let uploadDecision = lock.withLock {
             if endedActivityIDs.contains(activityID) {
-                return (shouldUpload: false, suppressedEnded: true)
+                return (shouldUpload: false, suppressedEnded: true, alreadyRegistered: false)
             }
+            let alreadyRegistered =
+                registeredActivityPushTokenHexByActivityID[activityID] == tokenHex
             let shouldUpload = lastUploadedActivityPushTokenHexByActivityID[activityID] != tokenHex
             if shouldUpload {
                 lastUploadedActivityPushTokenHexByActivityID[activityID] = tokenHex
             }
-            return (shouldUpload: shouldUpload, suppressedEnded: false)
+            return (
+                shouldUpload: shouldUpload,
+                suppressedEnded: false,
+                alreadyRegistered: alreadyRegistered
+            )
         }
         guard uploadDecision.shouldUpload else {
             if uploadDecision.suppressedEnded {
                 diagnosticLog("[LiveActivitySync] Suppressed activity token upload for ended activity %@", activityID)
             }
-            return
+            return uploadDecision.alreadyRegistered
         }
 
-        guard let endpoint = await endpointURL(path: "live-activity/activity-token") else { return }
+        guard let endpoint = await endpointURL(path: "live-activity/activity-token") else {
+            lock.withLock {
+                if lastUploadedActivityPushTokenHexByActivityID[activityID] == tokenHex {
+                    lastUploadedActivityPushTokenHexByActivityID.removeValue(forKey: activityID)
+                }
+            }
+            return false
+        }
         let activity = Activity<TopScoresLiveActivityAttributes>.activities.first { $0.id == activityID }
         let generatedAtEpochSeconds = Self.currentContentState(for: activityID)?.generatedAtEpochSeconds
         diagnosticLog(
@@ -708,8 +732,15 @@ final class LiveActivitySyncService {
         ]
         for attempt in 0..<3 {
             guard !Task.isCancelled else { break }
-            if await sendJSONRequestReturningData(url: endpoint, payload: payload, logContext: "activity-token") != nil {
-                return
+            if let data = await sendJSONRequestReturningData(
+                url: endpoint,
+                payload: payload,
+                logContext: "activity-token"
+            ), Self.activityTokenRegistrationWasAccepted(data) {
+                lock.withLock {
+                    registeredActivityPushTokenHexByActivityID[activityID] = tokenHex
+                }
+                return true
             }
             do { try await Task.sleep(nanoseconds: UInt64(attempt + 1) * 1_000_000_000) }
             catch { break }
@@ -719,6 +750,15 @@ final class LiveActivitySyncService {
                 lastUploadedActivityPushTokenHexByActivityID.removeValue(forKey: activityID)
             }
         }
+        return false
+    }
+
+    static func activityTokenRegistrationWasAccepted(_ data: Data) -> Bool {
+        guard let response = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              response["success"] as? Bool == true else {
+            return false
+        }
+        return response["ignored"] as? Bool != true
     }
 
     private func uploadActivityStarted(

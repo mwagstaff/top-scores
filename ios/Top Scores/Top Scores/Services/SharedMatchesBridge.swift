@@ -42,6 +42,7 @@ struct WidgetSharedMatchTransfer: Codable, Equatable, Sendable {
     let league: String
     let leagueSubcategory: String?
     let competitionWeight: Double?
+    let watchabilityIndex: MatchWatchabilityIndex?
     let matchDetailsIDValue: String?
     let tvChannels: [String]
     let homeScore: Int?
@@ -65,6 +66,7 @@ struct WidgetSharedMatchTransfer: Codable, Equatable, Sendable {
         league = match.league
         leagueSubcategory = match.leagueSubcategory
         competitionWeight = match.competitionWeight
+        watchabilityIndex = match.watchabilityIndex
         matchDetailsIDValue = match.matchDetailsID
         tvChannels = match.tvChannels.map(\.name)
         homeScore = match.homeScore
@@ -89,6 +91,7 @@ struct WidgetSharedMatchTransfer: Codable, Equatable, Sendable {
         case league
         case leagueSubcategory = "league_subcategory"
         case competitionWeight = "competition_weight"
+        case watchabilityIndex = "watchability_index"
         case matchDetailsIDValue = "match_details_id"
         case tvChannels = "tv_channels"
         case homeScore = "home_score"
@@ -119,8 +122,59 @@ private struct WatchSharedMatchesTransferPayload: Codable, Sendable {
     let snapshot: PreferencesSnapshot
     let matches: [WatchSharedMatchTransfer]
     let unfilteredMatches: [WatchSharedMatchTransfer]
+    let fantasy: WatchSharedFantasySnapshot?
     let lastUpdated: Date?
     let generatedAt: Date
+
+    private enum CodingKeys: String, CodingKey {
+        case snapshot
+        case matches
+        case unfilteredMatches
+        case fantasy
+        case lastUpdated
+        case generatedAt
+    }
+
+    init(
+        snapshot: PreferencesSnapshot,
+        matches: [WatchSharedMatchTransfer],
+        unfilteredMatches: [WatchSharedMatchTransfer],
+        fantasy: WatchSharedFantasySnapshot?,
+        lastUpdated: Date?,
+        generatedAt: Date
+    ) {
+        self.snapshot = snapshot
+        self.matches = matches
+        self.unfilteredMatches = unfilteredMatches
+        self.fantasy = fantasy
+        self.lastUpdated = lastUpdated
+        self.generatedAt = generatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        snapshot = try container.decode(PreferencesSnapshot.self, forKey: .snapshot)
+        matches = try container.decodeIfPresent([WatchSharedMatchTransfer].self, forKey: .matches) ?? []
+        unfilteredMatches = try container.decodeIfPresent([WatchSharedMatchTransfer].self, forKey: .unfilteredMatches) ?? []
+        fantasy = try container.decodeIfPresent(WatchSharedFantasySnapshot.self, forKey: .fantasy)
+        lastUpdated = try container.decodeIfPresent(Date.self, forKey: .lastUpdated)
+        generatedAt = try container.decode(Date.self, forKey: .generatedAt)
+    }
+}
+
+private struct WatchSharedFantasySnapshot: Codable, Sendable {
+    let gameweekTitle: String
+    let players: [WatchSharedFantasyPlayer]
+}
+
+private struct WatchSharedFantasyPlayer: Codable, Sendable {
+    let elementID: Int
+    let displayName: String
+    let teamName: String
+    let points: Int
+    let isCaptain: Bool
+    let isViceCaptain: Bool
+    let isStarter: Bool
 }
 
 private struct WatchSharedMatchTransfer: Codable, Sendable {
@@ -135,6 +189,7 @@ private struct WatchSharedMatchTransfer: Codable, Sendable {
     let league: String
     let leagueSubcategory: String?
     let competitionWeight: Double?
+    let watchabilityIndex: MatchWatchabilityIndex?
     let matchDetailsIDValue: String?
     let tvChannels: [String]
     let homeScore: Int?
@@ -154,6 +209,7 @@ private struct WatchSharedMatchTransfer: Codable, Sendable {
         league = match.league
         leagueSubcategory = match.leagueSubcategory
         competitionWeight = match.competitionWeight
+        watchabilityIndex = match.watchabilityIndex
         matchDetailsIDValue = match.matchDetailsID
         tvChannels = match.tvChannels.map(\.name)
         homeScore = match.homeScore
@@ -174,6 +230,7 @@ private struct WatchSharedMatchTransfer: Codable, Sendable {
         league = match.league
         leagueSubcategory = match.leagueSubcategory
         competitionWeight = match.competitionWeight
+        watchabilityIndex = match.watchabilityIndex
         matchDetailsIDValue = match.matchDetailsIDValue
         tvChannels = match.tvChannels
         homeScore = match.homeScore
@@ -194,6 +251,7 @@ private struct WatchSharedMatchTransfer: Codable, Sendable {
         case league
         case leagueSubcategory = "league_subcategory"
         case competitionWeight = "competition_weight"
+        case watchabilityIndex = "watchability_index"
         case matchDetailsIDValue = "match_details_id"
         case tvChannels = "tv_channels"
         case homeScore = "home_score"
@@ -265,6 +323,7 @@ enum SharedMatchesBridge {
     private static let watchResultHistoryDays = 7
     private static let lock = NSLock()
     private static var lastSyncedAt: Date?
+    private static var pendingSyncScheduled = false
 
     nonisolated static func saveAndSync(matches: [Match], unfilteredMatches: [Match], lastUpdated: Date?, snapshot: PreferencesSnapshot) {
         let generatedAt = Date()
@@ -278,7 +337,9 @@ enum SharedMatchesBridge {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         guard let data = try? encoder.encode(payload) else { return }
-        let shouldPublish = shouldSync(payload)
+        let existingPayload = loadPayload()
+        let shouldPublish = existingPayload != payload
+        let shouldPublishImmediately = existingPayload?.snapshot != payload.snapshot
 
         saveRawData(data)
         if let watchData = makeWatchTransferData(
@@ -295,19 +356,10 @@ enum SharedMatchesBridge {
 
         guard shouldPublish else { return }
 
-        let now = Date()
-        lock.lock()
-        if let last = lastSyncedAt, now.timeIntervalSince(last) < minSyncInterval {
-            lock.unlock()
-            return
-        }
-        lastSyncedAt = now
-        lock.unlock()
-
-        WidgetCenter.shared.reloadAllTimelines()
-        Task { @MainActor in
-            PhoneWatchSyncService.shared.activate()
-            PhoneWatchSyncService.shared.sendLatestPayload(loadWatchTransferData() ?? data)
+        if shouldPublishImmediately {
+            publishLatestSharedData()
+        } else {
+            scheduleSharedDataPublication()
         }
     }
 
@@ -364,11 +416,6 @@ enum SharedMatchesBridge {
         try? data.write(to: url, options: [.atomic])
     }
 
-    private nonisolated static func shouldSync(_ payload: SharedMatchesPayload) -> Bool {
-        guard let existing = loadPayload() else { return true }
-        return existing != payload
-    }
-
     private nonisolated static func loadPayload() -> SharedMatchesPayload? {
         guard let data = loadRawData() else { return nil }
         let decoder = JSONDecoder()
@@ -403,6 +450,108 @@ enum SharedMatchesBridge {
         WidgetCenter.shared.reloadAllTimelines()
     }
 
+    nonisolated static func refreshWatchFantasyState() {
+        guard let existingData = loadWatchTransferData() else { return }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let existing = try? decoder.decode(WatchSharedMatchesTransferPayload.self, from: existingData) else {
+            return
+        }
+
+        let updated = WatchSharedMatchesTransferPayload(
+            snapshot: existing.snapshot,
+            matches: existing.matches,
+            unfilteredMatches: existing.unfilteredMatches,
+            fantasy: currentWatchFantasySnapshot(),
+            lastUpdated: existing.lastUpdated,
+            generatedAt: existing.generatedAt
+        )
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        guard let data = try? encoder.encode(updated) else { return }
+        saveWatchTransferData(data)
+        scheduleSharedDataPublication()
+    }
+
+    private nonisolated static func scheduleSharedDataPublication() {
+        let now = Date()
+        var shouldPublishNow = false
+        var scheduledDelay: TimeInterval?
+
+        lock.lock()
+        if let last = lastSyncedAt {
+            let elapsed = now.timeIntervalSince(last)
+            if elapsed >= minSyncInterval {
+                lastSyncedAt = now
+                shouldPublishNow = true
+            } else if !pendingSyncScheduled {
+                pendingSyncScheduled = true
+                scheduledDelay = max(0.1, minSyncInterval - elapsed)
+            }
+        } else {
+            lastSyncedAt = now
+            shouldPublishNow = true
+        }
+        lock.unlock()
+
+        if shouldPublishNow {
+            publishLatestSharedData()
+        }
+
+        if let scheduledDelay {
+            DispatchQueue.main.asyncAfter(deadline: .now() + scheduledDelay) {
+                lock.lock()
+                pendingSyncScheduled = false
+                lastSyncedAt = Date()
+                lock.unlock()
+                publishLatestSharedData()
+            }
+        }
+    }
+
+    private nonisolated static func publishLatestSharedData() {
+        WidgetCenter.shared.reloadAllTimelines()
+        Task { @MainActor in
+            PhoneWatchSyncService.shared.activate()
+            guard let data = loadWatchTransferData() ?? loadRawData() else { return }
+            PhoneWatchSyncService.shared.sendLatestPayload(data)
+        }
+    }
+
+    private nonisolated static func currentWatchFantasySnapshot() -> WatchSharedFantasySnapshot? {
+        guard let state = FantasySyncStore.jsonObject() as? [String: Any],
+              let squad = state["squad"] as? [String: Any],
+              let rawPlayers = squad["players"] as? [[String: Any]] else {
+            return nil
+        }
+
+        let players = rawPlayers.compactMap { raw -> WatchSharedFantasyPlayer? in
+            guard let elementID = (raw["elementID"] as? NSNumber)?.intValue,
+                  elementID > 0,
+                  let displayName = raw["displayName"] as? String,
+                  !displayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  let teamName = raw["teamName"] as? String,
+                  !teamName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                return nil
+            }
+            return WatchSharedFantasyPlayer(
+                elementID: elementID,
+                displayName: displayName,
+                teamName: teamName,
+                points: (raw["displayPoints"] as? NSNumber)?.intValue ?? 0,
+                isCaptain: (raw["isCaptain"] as? NSNumber)?.boolValue ?? false,
+                isViceCaptain: (raw["isViceCaptain"] as? NSNumber)?.boolValue ?? false,
+                isStarter: (raw["isStarter"] as? NSNumber)?.boolValue ?? false
+            )
+        }
+        guard !players.isEmpty else { return nil }
+
+        return WatchSharedFantasySnapshot(
+            gameweekTitle: (squad["gameweekTitle"] as? String) ?? "FPL",
+            players: players
+        )
+    }
+
     private nonisolated static func makeWatchTransferData(
         matches: [Match],
         unfilteredMatches: [Match],
@@ -416,9 +565,10 @@ enum SharedMatchesBridge {
             matches: watchMatches(from: matches.filter {
                 snapshot.showFACupEarlyRounds || !$0.isFACupEarlyRound
             }),
-            unfilteredMatches: matches.isEmpty ? watchMatches(from: unfilteredMatches.filter {
+            unfilteredMatches: snapshot.showAllMatches ? watchMatches(from: unfilteredMatches.filter {
                 snapshot.showFACupEarlyRounds || !$0.isFACupEarlyRound
             }) : [],
+            fantasy: currentWatchFantasySnapshot(),
             lastUpdated: lastUpdated,
             generatedAt: generatedAt
         )
@@ -433,6 +583,7 @@ enum SharedMatchesBridge {
             snapshot: payload.snapshot,
             matches: payload.matches.map(WatchSharedMatchTransfer.init),
             unfilteredMatches: [],
+            fantasy: currentWatchFantasySnapshot(),
             lastUpdated: payload.lastUpdated,
             generatedAt: payload.generatedAt
         )

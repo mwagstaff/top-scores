@@ -6219,6 +6219,111 @@ test("emits goal when score delta appears before timeline details", () => {
   );
 });
 
+test("keeps score deltas with the correct team when scorer corrections arrive late", () => {
+  const monitorState = newMonitorState();
+  const oneNil = {
+    home_team: "Leeds United",
+    away_team: "Newcastle United",
+    score_status: "33'",
+    home_score: 1,
+    away_score: 0,
+    home_goal_scorers: [],
+    away_goal_scorers: [{ player: "L. Miley", own_goal_times: ["32'"] }],
+    home_assists: [],
+    away_assists: [],
+  };
+  const twoNil = {
+    ...oneNil,
+    score_status: "34'",
+    home_score: 2,
+    home_goal_scorers: [{ player: "D. Calvert-Lewin", goal_times: ["34'"] }],
+  };
+  const threeNil = {
+    ...twoNil,
+    score_status: "45+1'",
+    home_score: 3,
+    home_goal_scorers: [
+      ...twoNil.home_goal_scorers,
+      { player: "D. Calvert-Lewin", goal_times: ["45+1'"] },
+    ],
+  };
+
+  __testHooks.buildMatchEvents(oneNil, twoNil, monitorState, Date.now());
+  __testHooks.buildMatchEvents(twoNil, threeNil, monitorState, Date.now());
+
+  // The provider corrects the 34' scorer while the score changes to 4-0,
+  // before publishing Okafor's incident. The correction must not be treated
+  // as the fourth goal.
+  const fourNilWithoutLatestIncident = {
+    ...threeNil,
+    score_status: "58'",
+    home_score: 4,
+    home_goal_scorers: [
+      { player: "J. Bogle", goal_times: ["34'"] },
+      { player: "D. Calvert-Lewin", goal_times: ["45+1'"] },
+    ],
+  };
+  const correctionEvents = __testHooks
+    .buildMatchEvents(threeNil, fourNilWithoutLatestIncident, monitorState, Date.now())
+    .filter((event) => event.type === "goal");
+
+  assert.deepStrictEqual(correctionEvents, []);
+  assert.equal(monitorState.unresolvedHomeGoalCount, 1);
+  assert.equal(monitorState.unresolvedAwayGoalCount, 0);
+
+  // The away score then increases while the older Okafor incident arrives.
+  // Okafor resolves only the outstanding home delta; the away delta remains.
+  const fourOneWithoutAwayIncident = {
+    ...fourNilWithoutLatestIncident,
+    score_status: "89'",
+    away_score: 1,
+    home_goal_scorers: [
+      ...fourNilWithoutLatestIncident.home_goal_scorers,
+      { player: "N. Okafor", goal_times: ["59'"] },
+    ],
+  };
+  const delayedHomeEvents = __testHooks
+    .buildMatchEvents(
+      fourNilWithoutLatestIncident,
+      fourOneWithoutAwayIncident,
+      monitorState,
+      Date.now()
+    )
+    .filter((event) => event.type === "goal");
+
+  assert.equal(delayedHomeEvents.length, 1);
+  assert.equal(delayedHomeEvents[0].body, "Leeds United 4 - 0 Newcastle United (N. Okafor)");
+  assert.equal(monitorState.unresolvedHomeGoalCount, 0);
+  assert.equal(monitorState.unresolvedAwayGoalCount, 1);
+
+  // Touré's incident can now resolve the retained Newcastle score delta.
+  const fourOneWithAwayIncident = {
+    ...fourOneWithoutAwayIncident,
+    score_status: "FT",
+    away_goal_scorers: [
+      ...fourOneWithoutAwayIncident.away_goal_scorers,
+      { player: "B. Touré", goal_times: ["90'"] },
+    ],
+    away_assists: [{ player: "T. Livramento", assist_times: ["90'"] }],
+  };
+  const awayEvents = __testHooks
+    .buildMatchEvents(
+      fourOneWithoutAwayIncident,
+      fourOneWithAwayIncident,
+      monitorState,
+      Date.now()
+    )
+    .filter((event) => event.type === "goal");
+
+  assert.equal(awayEvents.length, 1);
+  assert.equal(awayEvents[0].title, "Goal 90'");
+  assert.equal(
+    awayEvents[0].body,
+    "Leeds United 4 - 1 Newcastle United (B. Touré, assist: T. Livramento)"
+  );
+  assert.equal(monitorState.unresolvedGoalCount, 0);
+});
+
 test("shows correct scoreline when score jumps 2 but only 1 timeline goal arrives first", () => {
   // Regression: score jumped 0→2 but only one timeline goal was available.
   // First notification must show 1-0, not 2-0.

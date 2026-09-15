@@ -4,11 +4,49 @@ const assert = require("node:assert/strict");
 const {
   __private: {
     mergedLiveActivityState,
+    mergePreferenceWriteLiveActivity,
     normalizeLiveActivityStatePatch,
     normalizedPreferencesRevision,
     isStalePreferencesRevision,
   },
 } = require("./redis_client");
+
+test("preference write preserves lifecycle state registered after the write began", () => {
+  const staleIncoming = {
+    preferences: { showAllMatches: true },
+    liveActivity: {
+      pushToStartToken: "start-token",
+      currentActivityId: null,
+      currentActivityPushToken: null,
+    },
+  };
+  const current = {
+    liveActivity: {
+      pushToStartToken: "start-token",
+      currentActivityId: "activity-1",
+      currentActivityPushToken: "update-token",
+      lastStartAt: "2026-09-14T16:31:52.000Z",
+    },
+  };
+
+  const merged = mergePreferenceWriteLiveActivity(staleIncoming, current);
+
+  assert.deepEqual(merged.preferences, { showAllMatches: true });
+  assert.equal(merged.liveActivity.currentActivityId, "activity-1");
+  assert.equal(merged.liveActivity.currentActivityPushToken, "update-token");
+  assert.equal(merged.liveActivity.lastStartAt, "2026-09-14T16:31:52.000Z");
+});
+
+test("explicit lifecycle patch still applies during an atomic preference write", () => {
+  const merged = mergePreferenceWriteLiveActivity(
+    { preferences: {}, liveActivity: { currentActivityId: null } },
+    { liveActivity: { currentActivityId: "activity-1", pendingStartAt: "old" } },
+    { pendingStartAt: null }
+  );
+
+  assert.equal(merged.liveActivity.currentActivityId, "activity-1");
+  assert.equal(merged.liveActivity.pendingStartAt, null);
+});
 
 test("normalizedPreferencesRevision accepts only non-negative safe integers", () => {
   assert.equal(normalizedPreferencesRevision(0), 0);

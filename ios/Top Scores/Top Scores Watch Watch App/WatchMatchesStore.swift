@@ -23,6 +23,7 @@ final class WatchMatchesStore: NSObject, ObservableObject {
     @Published private(set) var todaysMatchCount: Int = 0
     @Published private(set) var hasData = false
     @Published private(set) var apiBaseURL: String = "https://api.skynolimit.dev/top-scores/api/v1"
+    @Published private(set) var fantasySnapshot: WatchFantasySnapshot?
 
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
@@ -32,6 +33,7 @@ final class WatchMatchesStore: NSObject, ObservableObject {
     private let liveDetailsWarmInterval: TimeInterval = 20
     private var didActivateSession = false
     private var automaticRefreshTimer: Timer?
+    private var todayRefreshTask: Task<Void, Never>?
     private var filteredMatches: [WatchMatch] = []
     private var unfilteredMatches: [WatchMatch] = []
     private var detailsCache: [String: WatchCachedMatchDetails] = [:]
@@ -56,6 +58,7 @@ final class WatchMatchesStore: NSObject, ObservableObject {
 
     deinit {
         automaticRefreshTimer?.invalidate()
+        todayRefreshTask?.cancel()
     }
 
     func refresh(requestPhoneSync: Bool = true) {
@@ -77,8 +80,12 @@ final class WatchMatchesStore: NSObject, ObservableObject {
 
     func cacheDetails(_ match: WatchMatch) {
         guard let matchID = match.matchDetailsIDValue else { return }
+        let didChange = detailsCache[matchID]?.match != match
         detailsCache[matchID] = WatchCachedMatchDetails(match: match, cachedAt: Date())
         saveMatchDetailsCache()
+        if didChange {
+            reloadComplications()
+        }
     }
 
     private func activateSessionIfNeeded() {
@@ -117,36 +124,126 @@ final class WatchMatchesStore: NSObject, ObservableObject {
                 self.generatedAt = nil
                 self.todaysMatchCount = 0
                 self.hasData = false
+                self.fantasySnapshot = nil
             }
             return
         }
 
         let sourceMatches: [WatchMatch]
-        if !payload.unfilteredMatches.isEmpty {
+        if payload.snapshot.showAllMatches, !payload.unfilteredMatches.isEmpty {
             sourceMatches = payload.unfilteredMatches
         } else {
             sourceMatches = payload.matches
         }
 
-        let sorted = WatchMatchGrouping.sortedMatches(sourceMatches)
+        let sourceWithNewerCachedSummaries = sourceMatches.map { match in
+            guard let matchID = match.matchDetailsIDValue,
+                  let cached = detailsCache[matchID],
+                  cached.cachedAt > payload.generatedAt else {
+                return match
+            }
+            return match.mergingLatestSummary(cached.match)
+        }
+        let sorted = WatchMatchGrouping.sortedMatches(sourceWithNewerCachedSummaries)
         let grouped = WatchMatchGrouping.groupedDays(sorted)
         let todaysCount = WatchMatchGrouping.todaysMatchCount(sorted)
 
         DispatchQueue.main.async {
-            self.filteredMatches = sourceMatches
-            self.unfilteredMatches = payload.unfilteredMatches
+            self.filteredMatches = sourceWithNewerCachedSummaries
+            self.unfilteredMatches = payload.snapshot.showAllMatches && !payload.unfilteredMatches.isEmpty
+                ? sourceWithNewerCachedSummaries
+                : []
             self.groupedDays = grouped
             self.lastUpdated = payload.lastUpdated
             self.generatedAt = payload.generatedAt
             self.todaysMatchCount = todaysCount
             self.hasData = true
             self.apiBaseURL = payload.snapshot.apiBaseURL
+            self.fantasySnapshot = payload.fantasy
             self.scheduleAutomaticRefresh()
-            self.preloadLiveMatchDetailsIfNeeded(from: sourceMatches, apiBaseURL: payload.snapshot.apiBaseURL)
+            self.refreshTodayMatchSummaries(
+                from: sourceWithNewerCachedSummaries,
+                apiBaseURL: payload.snapshot.apiBaseURL
+            )
+            self.preloadLiveMatchDetailsIfNeeded(
+                from: sourceWithNewerCachedSummaries,
+                apiBaseURL: payload.snapshot.apiBaseURL
+            )
         }
     }
 
+    private func refreshTodayMatchSummaries(from matches: [WatchMatch], apiBaseURL: String) {
+        let calendar = Calendar.current
+        guard let date = matches.first(where: { match in
+            guard let matchDate = WatchMatchDateParser.shared.parse(date: match.date, time: "00:00") else {
+                return false
+            }
+            return calendar.isDateInToday(matchDate)
+        })?.date,
+        let baseURL = URL(string: apiBaseURL) else {
+            return
+        }
+
+        todayRefreshTask?.cancel()
+        todayRefreshTask = Task {
+            do {
+                let latestMatches = try await WatchAPIClient(baseURL: baseURL).fetchMatches(on: date)
+                guard !Task.isCancelled else { return }
+                await MainActor.run {
+                    self.applyLatestMatchSummaries(latestMatches, apiBaseURL: apiBaseURL)
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                diagnosticLog("[WatchMatchesStore] Failed to refresh today's match summaries: %@", String(describing: error))
+            }
+        }
+    }
+
+    private func applyLatestMatchSummaries(_ latestMatches: [WatchMatch], apiBaseURL: String) {
+        let refreshedFiltered = WatchMatchSummaryMerger.merging(
+            source: filteredMatches,
+            latest: latestMatches
+        )
+        let refreshedUnfiltered = WatchMatchSummaryMerger.merging(
+            source: unfilteredMatches,
+            latest: latestMatches
+        )
+        filteredMatches = refreshedFiltered
+        unfilteredMatches = refreshedUnfiltered
+
+        let sorted = WatchMatchGrouping.sortedMatches(refreshedFiltered)
+        groupedDays = WatchMatchGrouping.groupedDays(sorted)
+        todaysMatchCount = WatchMatchGrouping.todaysMatchCount(sorted)
+        lastUpdated = Date()
+
+        let now = Date()
+        for match in refreshedFiltered {
+            guard let matchID = match.matchDetailsIDValue,
+                  latestMatches.contains(where: { $0.matchDetailsIDValue == matchID }) else {
+                continue
+            }
+            let cacheBase = detailsCache[matchID]?.match ?? match
+            detailsCache[matchID] = WatchCachedMatchDetails(
+                match: cacheBase.mergingLatestSummary(match),
+                cachedAt: now
+            )
+        }
+        saveMatchDetailsCache()
+        scheduleAutomaticRefresh()
+        preloadLiveMatchDetailsIfNeeded(from: refreshedFiltered, apiBaseURL: apiBaseURL)
+        reloadComplications()
+    }
+
     private func handleIncomingPayloadData(_ data: Data) {
+        guard let incoming = try? decoder.decode(WatchSharedMatchesPayload.self, from: data) else {
+            return
+        }
+        if let existingData = loadRawPayloadData(),
+           let existing = try? decoder.decode(WatchSharedMatchesPayload.self, from: existingData),
+           existing.generatedAt > incoming.generatedAt {
+            return
+        }
         saveRawPayloadData(data)
         loadLocalPayload()
         reloadComplications()
@@ -241,6 +338,28 @@ final class WatchMatchesStore: NSObject, ObservableObject {
         FileManager.default
             .containerURL(forSecurityApplicationGroupIdentifier: WatchAppGroupConfig.identifier)?
             .appendingPathComponent(WatchAppGroupConfig.matchDetailsCacheFileName)
+    }
+}
+
+enum WatchMatchSummaryMerger {
+    static func merging(source: [WatchMatch], latest: [WatchMatch]) -> [WatchMatch] {
+        let latestByDetailsID = Dictionary(
+            latest.compactMap { match in
+                match.matchDetailsIDValue.map { ($0, match) }
+            },
+            uniquingKeysWith: { _, newest in newest }
+        )
+        let latestByIdentity = Dictionary(
+            latest.map { ($0.id, $0) },
+            uniquingKeysWith: { _, newest in newest }
+        )
+
+        return source.map { match in
+            let latestMatch = match.matchDetailsIDValue.flatMap { latestByDetailsID[$0] }
+                ?? latestByIdentity[match.id]
+            guard let latestMatch else { return match }
+            return match.mergingLatestSummary(latestMatch)
+        }
     }
 }
 

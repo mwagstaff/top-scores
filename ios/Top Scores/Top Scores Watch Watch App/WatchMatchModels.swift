@@ -187,6 +187,51 @@ struct WatchTeamLineups: Codable, Hashable {
     let away: WatchTeamLineup?
 }
 
+struct WatchMatchWatchabilityComponent: Codable, Hashable {
+    let key: String
+    let score: Int
+}
+
+struct WatchMatchWatchabilityIndex: Codable, Hashable {
+    let score: Int
+    let components: [WatchMatchWatchabilityComponent]
+
+    var teamQualityScore: Int? {
+        components.first { $0.key == "team_quality" }?.score
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case score
+        case components
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        score = try container.decodeIfPresent(Int.self, forKey: .score) ?? 0
+        components = try container.decodeIfPresent(
+            [WatchMatchWatchabilityComponent].self,
+            forKey: .components
+        ) ?? []
+    }
+}
+
+struct WatchFantasyPlayer: Codable, Hashable, Identifiable {
+    let elementID: Int
+    let displayName: String
+    let teamName: String
+    let points: Int
+    let isCaptain: Bool
+    let isViceCaptain: Bool
+    let isStarter: Bool
+
+    var id: Int { elementID }
+}
+
+struct WatchFantasySnapshot: Codable, Hashable {
+    let gameweekTitle: String
+    let players: [WatchFantasyPlayer]
+}
+
 struct WatchPreferencesSnapshot: Codable, Equatable {
     let selectedLeagues: [String]
     let selectedChannels: [String]
@@ -221,6 +266,10 @@ struct WatchPreferencesSnapshot: Codable, Equatable {
     }
 }
 
+private struct WatchTVChannelSummary: Decodable {
+    let name: String
+}
+
 struct WatchMatch: Identifiable, Codable, Hashable {
     let date: String
     let time: String
@@ -231,6 +280,7 @@ struct WatchMatch: Identifiable, Codable, Hashable {
     let league: String
     let leagueSubcategory: String?
     let competitionWeight: Double?
+    let watchabilityIndex: WatchMatchWatchabilityIndex?
     let matchDetailsIDValue: String?
     let tvChannels: [String]
     let homeScore: Int?
@@ -306,8 +356,14 @@ struct WatchMatch: Identifiable, Codable, Hashable {
         league = try container.decode(String.self, forKey: .league)
         leagueSubcategory = try container.decodeIfPresent(String.self, forKey: .leagueSubcategory)
         competitionWeight = try container.decodeIfPresent(Double.self, forKey: .competitionWeight)
+        watchabilityIndex = try container.decodeIfPresent(WatchMatchWatchabilityIndex.self, forKey: .watchabilityIndex)
         matchDetailsIDValue = try container.decodeIfPresent(String.self, forKey: .matchDetailsIDValue)
-        tvChannels = try container.decodeIfPresent([String].self, forKey: .tvChannels) ?? []
+        if let names = try? container.decode([String].self, forKey: .tvChannels) {
+            tvChannels = names
+        } else {
+            tvChannels = (try? container.decode([WatchTVChannelSummary].self, forKey: .tvChannels))?
+                .map(\.name) ?? []
+        }
         homeScore = try container.decodeIfPresent(Int.self, forKey: .homeScore)
         awayScore = try container.decodeIfPresent(Int.self, forKey: .awayScore)
         scoreStatus = try container.decodeIfPresent(String.self, forKey: .scoreStatus)
@@ -337,6 +393,7 @@ struct WatchMatch: Identifiable, Codable, Hashable {
         case league
         case leagueSubcategory = "league_subcategory"
         case competitionWeight = "competition_weight"
+        case watchabilityIndex = "watchability_index"
         case matchDetailsIDValue = "match_details_id"
         case tvChannels = "tv_channels"
         case homeScore = "home_score"
@@ -408,8 +465,79 @@ struct WatchSharedMatchesPayload: Codable {
     let snapshot: WatchPreferencesSnapshot
     let matches: [WatchMatch]
     let unfilteredMatches: [WatchMatch]
+    let fantasy: WatchFantasySnapshot?
     let lastUpdated: Date?
     let generatedAt: Date
+
+    enum CodingKeys: String, CodingKey {
+        case snapshot
+        case matches
+        case unfilteredMatches
+        case fantasy
+        case lastUpdated
+        case generatedAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        snapshot = try container.decode(WatchPreferencesSnapshot.self, forKey: .snapshot)
+        matches = try container.decodeIfPresent([WatchMatch].self, forKey: .matches) ?? []
+        unfilteredMatches = try container.decodeIfPresent([WatchMatch].self, forKey: .unfilteredMatches) ?? []
+        fantasy = try container.decodeIfPresent(WatchFantasySnapshot.self, forKey: .fantasy)
+        lastUpdated = try container.decodeIfPresent(Date.self, forKey: .lastUpdated)
+        generatedAt = try container.decode(Date.self, forKey: .generatedAt)
+    }
+}
+
+enum WatchFeaturedMatchSelector {
+    static func select(from matches: [WatchMatch], at date: Date) -> WatchMatch? {
+        guard !matches.isEmpty else { return nil }
+
+        let live = matches.filter(\.isInProgress)
+        if !live.isEmpty {
+            return ranked(live).first
+        }
+
+        let upcoming = matches.filter { match in
+            guard let kickoff = match.dateTime else { return false }
+            return kickoff > date && !WatchMatchStatusRules.isFinished(match)
+        }
+        if !upcoming.isEmpty {
+            return ranked(upcoming).first
+        }
+
+        return ranked(matches).first
+    }
+
+    private static func ranked(_ matches: [WatchMatch]) -> [WatchMatch] {
+        matches.sorted { lhs, rhs in
+            let leftTeamQuality = lhs.watchabilityIndex?.teamQualityScore ?? Int.min
+            let rightTeamQuality = rhs.watchabilityIndex?.teamQualityScore ?? Int.min
+            if leftTeamQuality != rightTeamQuality {
+                return leftTeamQuality > rightTeamQuality
+            }
+
+            let leftWatchability = lhs.watchabilityIndex?.score ?? Int.min
+            let rightWatchability = rhs.watchabilityIndex?.score ?? Int.min
+            if leftWatchability != rightWatchability {
+                return leftWatchability > rightWatchability
+            }
+
+            let leftWeight = lhs.competitionWeight ?? 0
+            let rightWeight = rhs.competitionWeight ?? 0
+            if leftWeight != rightWeight {
+                return leftWeight > rightWeight
+            }
+
+            let leftKickoff = lhs.dateTime ?? .distantPast
+            let rightKickoff = rhs.dateTime ?? .distantPast
+            if leftKickoff != rightKickoff {
+                return leftKickoff > rightKickoff
+            }
+
+            return lhs.id.localizedCaseInsensitiveCompare(rhs.id) == .orderedAscending
+        }
+    }
 }
 
 struct WatchMatchDay: Identifiable, Hashable {
