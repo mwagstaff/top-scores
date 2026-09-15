@@ -6,12 +6,13 @@
 //
 
 import Foundation
+import OSLog
 import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var matchesStore: WatchMatchesStore
 
-    private let refreshFormatter: DateFormatter = {
+    private static let refreshFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateStyle = .none
         formatter.timeStyle = .short
@@ -19,6 +20,8 @@ struct ContentView: View {
     }()
 
     var body: some View {
+        let home = matchesStore.homeSnapshot
+
         NavigationStack {
             Group {
                 if !matchesStore.hasData {
@@ -29,13 +32,14 @@ struct ContentView: View {
                         Text("Waiting for phone data")
                             .font(.caption)
                             .multilineTextAlignment(.center)
+                        NavigationLink("FPL") { WatchFantasyView() }
                     }
                     .padding()
                 } else {
                     List {
-                        if todayCompetitions.count > 1 {
+                        if home.todayCompetitions.count > 1 {
                             Section("Today") {
-                                ForEach(todayCompetitions) { competition in
+                                ForEach(home.todayCompetitions) { competition in
                                     NavigationLink {
                                         WatchCompetitionMatchesView(competition: competition)
                                     } label: {
@@ -43,7 +47,7 @@ struct ContentView: View {
                                     }
                                 }
                             }
-                        } else if todaySections.isEmpty {
+                        } else if home.todaySections.isEmpty {
                             Section {
                                 VStack(spacing: 8) {
                                     Image(systemName: "calendar.badge.exclamationmark")
@@ -55,7 +59,7 @@ struct ContentView: View {
                                 .frame(maxWidth: .infinity)
                             }
                         } else {
-                            ForEach(todaySections) { section in
+                            ForEach(home.todaySections) { section in
                                 Section(section.title) {
                                     ForEach(section.matches) { match in
                                         NavigationLink {
@@ -73,21 +77,27 @@ struct ContentView: View {
 
                         Section {
                             NavigationLink {
-                                WatchFixturesView(days: fixtureDays)
+                                WatchFixturesView(days: home.fixtureDays)
                             } label: {
                                 Label("Fixtures", systemImage: "calendar")
                             }
 
                             NavigationLink {
-                                WatchResultsView(days: resultDays)
+                                WatchResultsView(days: home.resultDays)
                             } label: {
                                 Label("Results", systemImage: "clock.arrow.circlepath")
+                            }
+
+                            NavigationLink {
+                                WatchFantasyView()
+                            } label: {
+                                Label("FPL", systemImage: "person.3.fill")
                             }
                         }
 
                         if let lastUpdated = matchesStore.lastUpdated {
                             Section {
-                                Text("Updated \(refreshFormatter.string(from: lastUpdated))")
+                                Text("Updated \(Self.refreshFormatter.string(from: lastUpdated))")
                                     .font(.caption2)
                                     .foregroundStyle(.tertiary)
                                     .frame(maxWidth: .infinity, alignment: .center)
@@ -96,37 +106,50 @@ struct ContentView: View {
                         }
                     }
                     .listStyle(.plain)
+                    .onScrollPhaseChange { oldPhase, newPhase in
+                        WatchPerformanceDiagnostics.logger.notice(
+                            "Home scroll phase: \(String(describing: oldPhase), privacy: .public) -> \(String(describing: newPhase), privacy: .public)"
+                        )
+                    }
                 }
             }
             .navigationTitle("Top Scores")
         }
         .onAppear {
+            WatchMainThreadStallMonitor.shared.start()
+            let todayMatchCount = home.todaySections.reduce(0) { $0 + $1.matches.count }
+            WatchPerformanceDiagnostics.logger.notice(
+                "Home appeared: competitions=\(home.todayCompetitions.count, privacy: .public) todayMatches=\(todayMatchCount, privacy: .public) fixtureDays=\(home.fixtureDays.count, privacy: .public) resultDays=\(home.resultDays.count, privacy: .public)"
+            )
             matchesStore.startAutomaticRefresh()
         }
     }
+}
 
-    private var todaySections: [WatchFixtureSection] {
-        WatchMatchCollections.todaySections(from: sourceMatches)
-    }
+struct WatchHomeSnapshot {
+    static let empty = WatchHomeSnapshot(
+        todaySections: [],
+        todayCompetitions: [],
+        resultDays: [],
+        fixtureDays: []
+    )
 
-    private var todayCompetitions: [WatchCompetition] {
-        WatchMatchCollections.todayCompetitions(from: sourceMatches)
-    }
-
-    private var resultDays: [WatchMatchDay] {
-        WatchMatchCollections.resultDays(from: sourceMatches)
-    }
-
-    private var fixtureDays: [WatchMatchDay] {
-        WatchMatchCollections.fixtureDays(from: sourceMatches)
-    }
-
-    private var sourceMatches: [WatchMatch] {
-        matchesStore.groupedDays.flatMap(\.matches)
-    }
+    let todaySections: [WatchFixtureSection]
+    let todayCompetitions: [WatchCompetition]
+    let resultDays: [WatchMatchDay]
+    let fixtureDays: [WatchMatchDay]
 }
 
 enum WatchMatchCollections {
+    static func homeSnapshot(from matches: [WatchMatch], now: Date = Date()) -> WatchHomeSnapshot {
+        WatchHomeSnapshot(
+            todaySections: todaySections(from: matches, now: now),
+            todayCompetitions: todayCompetitions(from: matches, now: now),
+            resultDays: resultDays(from: matches, now: now),
+            fixtureDays: fixtureDays(from: matches, now: now)
+        )
+    }
+
     static func todaySections(from matches: [WatchMatch], now: Date = Date()) -> [WatchFixtureSection] {
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: now)
@@ -255,10 +278,7 @@ enum WatchMatchCollections {
     }
 
     private static func day(for match: WatchMatch, calendar: Calendar) -> Date? {
-        guard let date = WatchMatchDateParser.shared.parse(date: match.date, time: "00:00") else {
-            return nil
-        }
-        return calendar.startOfDay(for: date)
+        match.dateTime.map { calendar.startOfDay(for: $0) }
     }
 
     private static func normalizedCompetitionName(_ value: String) -> String {
@@ -619,6 +639,13 @@ enum WatchMatchStatusRules {
     }
 }
 
+enum WatchFantasyMatchRules {
+    static func isEligible(_ match: WatchMatch) -> Bool {
+        match.league.trimmingCharacters(in: .whitespacesAndNewlines)
+            .localizedCaseInsensitiveCompare("Premier League") == .orderedSame
+    }
+}
+
 private struct WatchMatchLozenge: View {
     let match: WatchMatch
 
@@ -735,44 +762,59 @@ private struct WatchScoreText: View {
 }
 
 private struct WatchMatchStatusIndicatorView: View {
+    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
+
     let text: String
     let isLive: Bool
 
     @State private var isPulsing = false
 
-    private let liveTint = Color(red: 0.32, green: 0.82, blue: 0.51)
+    private let liveTint = Color(red: 0.89, green: 0.024, blue: 0.239)
+
+    private var shouldPulse: Bool {
+        isLive && !accessibilityReduceMotion
+    }
 
     var body: some View {
-        Text(text)
+        HStack(spacing: isLive ? 4 : 0) {
+            if isLive {
+                Circle()
+                    .fill(Color.white)
+                    .frame(width: 5, height: 5)
+                    .opacity(isPulsing ? 0.58 : 1)
+                    .scaleEffect(isPulsing ? 0.86 : 1)
+                    .animation(pulseAnimation, value: isPulsing)
+                    .accessibilityHidden(true)
+            }
+
+            Text(text)
+                .monospacedDigit()
+                .lineLimit(1)
+        }
             .font(.caption2)
-            .fontWeight(isLive ? .semibold : .regular)
-            .foregroundStyle(isLive ? liveTint : Color.secondary)
-            .monospacedDigit()
+            .fontWeight(isLive ? .bold : .regular)
+            .foregroundStyle(isLive ? Color.white : Color.secondary)
             .padding(.horizontal, isLive ? 6 : 0)
             .padding(.vertical, isLive ? 3 : 0)
             .background {
                 if isLive {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(liveTint.opacity(isPulsing ? 0.14 : 0.26))
+                        .fill(liveTint)
                 }
             }
-            .overlay {
-                if isLive {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(liveTint.opacity(isPulsing ? 0.45 : 0.95), lineWidth: 1)
-                        .scaleEffect(isPulsing ? 1.08 : 0.96)
-                }
-            }
-            .animation(
-                isLive ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true) : .default,
-                value: isPulsing
-            )
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(isLive ? "Live, \(text)" : text)
             .onAppear {
-                isPulsing = isLive
+                isPulsing = shouldPulse
             }
-            .onChange(of: isLive) { _, newValue in
+            .onChange(of: shouldPulse) { _, newValue in
                 isPulsing = newValue
             }
+    }
+
+    private var pulseAnimation: Animation? {
+        guard shouldPulse else { return nil }
+        return .easeInOut(duration: 0.9).repeatForever(autoreverses: true)
     }
 }
 
@@ -833,7 +875,7 @@ private struct WatchTeamLogo: View {
             }
         }
         .scaledToFit()
-        .frame(width: 16, height: 16)
+        .frame(width: 23.04, height: 23.04)
         .clipShape(RoundedRectangle(cornerRadius: 3, style: .continuous))
     }
 }
@@ -847,13 +889,13 @@ private struct WatchPrimaryChannelLogo: View {
             Image(uiImage: image)
                 .resizable()
                 .scaledToFit()
-                .frame(height: 12)
-                .frame(minWidth: 18, idealWidth: 22)
+                .frame(height: 14.4)
+                .frame(minWidth: 21.6, idealWidth: 26.4)
         } else {
             Image(systemName: "tv")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
-                .frame(minWidth: 18, idealWidth: 22)
+                .frame(minWidth: 21.6, idealWidth: 26.4)
         }
     }
 
@@ -1360,7 +1402,7 @@ private struct WatchTvInlineLogoRow: View {
                     Image(uiImage: images[index])
                         .resizable()
                         .scaledToFit()
-                        .frame(height: 10)
+                        .frame(height: 12)
                 }
             }
         }
@@ -1376,7 +1418,7 @@ private struct WatchTvChannelRow: View {
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()
-                    .frame(height: 12)
+                    .frame(height: 14.4)
             }
 
             Text(channel)
@@ -1596,7 +1638,7 @@ private struct WatchFantasyMatchSection: View {
     }
 
     var body: some View {
-        if let snapshot, !players.isEmpty {
+        if WatchFantasyMatchRules.isEligible(match), let snapshot, !players.isEmpty {
             VStack(alignment: .leading, spacing: 7) {
                 HStack(spacing: 5) {
                     Image(systemName: "person.2.fill")
@@ -1849,8 +1891,18 @@ private struct WatchStartingLineupsSection: View {
                     .font(.footnote)
                     .fontWeight(.semibold)
 
-                WatchLineupList(teamName: home.team ?? match.displayHomeTeam, teamId: match.homeTeamId, lineup: home)
-                WatchLineupList(teamName: away.team ?? match.displayAwayTeam, teamId: match.awayTeamId, lineup: away)
+                WatchLineupList(
+                    teamName: match.displayHomeTeam,
+                    logoTeamName: match.homeTeam,
+                    teamId: match.homeTeamId,
+                    lineup: home
+                )
+                WatchLineupList(
+                    teamName: match.displayAwayTeam,
+                    logoTeamName: match.awayTeam,
+                    teamId: match.awayTeamId,
+                    lineup: away
+                )
             }
             .padding(.vertical, 8)
             .padding(.horizontal, 8)
@@ -1864,6 +1916,7 @@ private struct WatchStartingLineupsSection: View {
 
 private struct WatchLineupList: View {
     let teamName: String
+    let logoTeamName: String
     let teamId: String?
     let lineup: WatchTeamLineup
 
@@ -1957,7 +2010,7 @@ private struct WatchLineupList: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 
-                WatchTeamLogo(name: teamName, teamId: teamId)
+                WatchTeamLogo(name: logoTeamName, alternateNames: [teamName], teamId: teamId)
             }
 
             ForEach(lineup.startingLineup) { player in

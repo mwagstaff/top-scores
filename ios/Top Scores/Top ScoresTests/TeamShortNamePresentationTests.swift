@@ -35,6 +35,12 @@ struct TeamShortNamePresentationTests {
     @Test func normalizesUnitedSuffixForDisplay() {
         #expect(TeamIdentityStore.displayShortName("Man U", for: "Manchester United") == "Man Utd")
         #expect(TeamIdentityStore.displayShortName("Man Utd", for: "Manchester United") == "Man Utd")
+        #expect(
+            TeamIdentityStore.shared.preferredDisplayShortName(
+                for: "Manchester United",
+                providerShortName: "Man U"
+            ) == "Man Utd"
+        )
     }
 
     @Test func returnsNilWithoutAShorterAlias() {

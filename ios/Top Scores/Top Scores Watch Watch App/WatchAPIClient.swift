@@ -1,15 +1,17 @@
 import Foundation
+import OSLog
 
 struct WatchAPIClient {
     let baseURL: URL
-    private let session: URLSession
-
-    init(baseURL: URL) {
-        self.baseURL = baseURL
+    private static let session: URLSession = {
         let config = URLSessionConfiguration.default
         config.urlCache = nil
         config.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        self.session = URLSession(configuration: config)
+        return URLSession(configuration: config)
+    }()
+
+    init(baseURL: URL) {
+        self.baseURL = baseURL
     }
 
     func fetchMatches(on date: String) async throws -> [WatchMatch] {
@@ -33,20 +35,31 @@ struct WatchAPIClient {
         request.setValue("no-cache", forHTTPHeaderField: "Pragma")
 
         let maxAttempts = 3
+        let requestStart = DispatchTime.now()
         for attempt in 1...maxAttempts {
             do {
-                let (data, response) = try await session.data(for: request)
+                let (data, response) = try await Self.session.data(for: request)
                 guard let httpResponse = response as? HTTPURLResponse else {
                     throw WatchAPIClientError.invalidHTTPResponse
                 }
                 guard (200...299).contains(httpResponse.statusCode) else {
                     throw WatchAPIClientError.badStatus(statusCode: httpResponse.statusCode)
                 }
-                return try JSONDecoder().decode([WatchMatch].self, from: data)
+                let matches = try JSONDecoder().decode([WatchMatch].self, from: data)
+                WatchPerformanceDiagnostics.logger.notice(
+                    "Matches request completed: status=\(httpResponse.statusCode, privacy: .public) bytes=\(data.count, privacy: .public) matches=\(matches.count, privacy: .public) duration=\(WatchPerformanceDiagnostics.milliseconds(since: requestStart), privacy: .public) ms attempts=\(attempt, privacy: .public)"
+                )
+                return matches
             } catch {
                 guard attempt < maxAttempts, isRetryable(error) else {
+                    WatchPerformanceDiagnostics.logger.error(
+                        "Matches request failed: duration=\(WatchPerformanceDiagnostics.milliseconds(since: requestStart), privacy: .public) ms attempt=\(attempt, privacy: .public) error=\(String(describing: error), privacy: .public)"
+                    )
                     throw error
                 }
+                WatchPerformanceDiagnostics.logger.warning(
+                    "Matches request retrying: attempt=\(attempt, privacy: .public) error=\(String(describing: error), privacy: .public)"
+                )
                 try await Task.sleep(nanoseconds: UInt64(1 << (attempt - 1)) * 500_000_000)
             }
         }
@@ -74,13 +87,24 @@ struct WatchAPIClient {
         request.setValue("no-cache", forHTTPHeaderField: "Pragma")
 
         let maxAttempts = 3
+        let requestStart = DispatchTime.now()
         for attempt in 1...maxAttempts {
             do {
-                return try await fetchMatchDetails(request: request)
+                let details = try await fetchMatchDetails(request: request)
+                WatchPerformanceDiagnostics.logger.notice(
+                    "Match details request completed: duration=\(WatchPerformanceDiagnostics.milliseconds(since: requestStart), privacy: .public) ms attempts=\(attempt, privacy: .public)"
+                )
+                return details
             } catch {
                 guard attempt < maxAttempts, isRetryable(error) else {
+                    WatchPerformanceDiagnostics.logger.error(
+                        "Match details request failed: duration=\(WatchPerformanceDiagnostics.milliseconds(since: requestStart), privacy: .public) ms attempt=\(attempt, privacy: .public) error=\(String(describing: error), privacy: .public)"
+                    )
                     throw error
                 }
+                WatchPerformanceDiagnostics.logger.warning(
+                    "Match details request retrying: attempt=\(attempt, privacy: .public) error=\(String(describing: error), privacy: .public)"
+                )
                 try await Task.sleep(nanoseconds: UInt64(1 << (attempt - 1)) * 500_000_000)
             }
         }
@@ -89,7 +113,7 @@ struct WatchAPIClient {
     }
 
     private func fetchMatchDetails(request: URLRequest) async throws -> WatchMatchDetailsPayload {
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await Self.session.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw WatchAPIClientError.invalidHTTPResponse
@@ -240,8 +264,8 @@ extension WatchMatch {
             time: latest.time,
             homeTeam: latest.homeTeam,
             awayTeam: latest.awayTeam,
-            homeShortName: latest.homeShortName ?? homeShortName,
-            awayShortName: latest.awayShortName ?? awayShortName,
+            homeShortName: homeShortName ?? latest.homeShortName,
+            awayShortName: awayShortName ?? latest.awayShortName,
             league: latest.league,
             leagueSubcategory: latest.leagueSubcategory ?? leagueSubcategory,
             competitionWeight: latest.competitionWeight ?? competitionWeight,
@@ -265,18 +289,17 @@ extension WatchMatch {
             penaltyResult: latest.penaltyResult ?? penaltyResult,
             homeTeamId: latest.homeTeamId ?? homeTeamId,
             awayTeamId: latest.awayTeamId ?? awayTeamId
-        ) ?? latest
+        )
     }
 
     func withDetails(_ details: WatchMatchDetailsPayload) -> WatchMatch {
-        var updatedMatch = self
-        updatedMatch = WatchMatch(
+        WatchMatch(
             date: details.date ?? date,
             time: details.time ?? time,
             homeTeam: details.homeTeam ?? homeTeam,
             awayTeam: details.awayTeam ?? awayTeam,
-            homeShortName: details.homeShortName ?? homeShortName,
-            awayShortName: details.awayShortName ?? awayShortName,
+            homeShortName: homeShortName ?? details.homeShortName,
+            awayShortName: awayShortName ?? details.awayShortName,
             league: details.league ?? league,
             leagueSubcategory: leagueSubcategory,
             competitionWeight: competitionWeight,
@@ -300,149 +323,6 @@ extension WatchMatch {
             penaltyResult: details.penaltyResult ?? penaltyResult,
             homeTeamId: homeTeamId,
             awayTeamId: awayTeamId
-        ) ?? self
-        return updatedMatch
-    }
-}
-
-private extension WatchMatch {
-    init?(
-        date: String,
-        time: String,
-        homeTeam: String,
-        awayTeam: String,
-        homeShortName: String?,
-        awayShortName: String?,
-        league: String,
-        leagueSubcategory: String?,
-        competitionWeight: Double?,
-        watchabilityIndex: WatchMatchWatchabilityIndex?,
-        matchDetailsIDValue: String?,
-        tvChannels: [String],
-        homeScore: Int?,
-        awayScore: Int?,
-        scoreStatus: String?,
-        homeGoalScorers: [WatchGoalScorer],
-        awayGoalScorers: [WatchGoalScorer],
-        homeAssists: [WatchAssistProvider],
-        awayAssists: [WatchAssistProvider],
-        homeYellowCards: [WatchYellowCardEvent],
-        awayYellowCards: [WatchYellowCardEvent],
-        homeRedCards: [WatchRedCardEvent],
-        awayRedCards: [WatchRedCardEvent],
-        homeVarEvents: [WatchVarEvent],
-        awayVarEvents: [WatchVarEvent],
-        teamLineups: WatchTeamLineups?,
-        penaltyResult: String?,
-        homeTeamId: String?,
-        awayTeamId: String?
-    ) {
-        var dict: [String: Any] = [
-            "date": date,
-            "time": time,
-            "home_team": homeTeam,
-            "away_team": awayTeam,
-            "league": league,
-            "tv_channels": tvChannels,
-            "home_goal_scorers": homeGoalScorers.map { scorer in
-                [
-                    "player": scorer.player,
-                    "goal_times": scorer.goalTimes,
-                    "own_goal_times": scorer.ownGoalTimes,
-                    "disallowed_goal_times": scorer.disallowedGoalTimes,
-                ]
-            },
-            "away_goal_scorers": awayGoalScorers.map { scorer in
-                [
-                    "player": scorer.player,
-                    "goal_times": scorer.goalTimes,
-                    "own_goal_times": scorer.ownGoalTimes,
-                    "disallowed_goal_times": scorer.disallowedGoalTimes,
-                ]
-            },
-            "home_assists": homeAssists.map { assist in
-                ["player": assist.player, "assist_times": assist.assistTimes]
-            },
-            "away_assists": awayAssists.map { assist in
-                ["player": assist.player, "assist_times": assist.assistTimes]
-            },
-            "home_yellow_cards": homeYellowCards.map { card in
-                ["player": card.player, "yellow_card_times": card.yellowCardTimes]
-            },
-            "away_yellow_cards": awayYellowCards.map { card in
-                ["player": card.player, "yellow_card_times": card.yellowCardTimes]
-            },
-            "home_red_cards": homeRedCards.map { card in
-                ["player": card.player, "red_card_times": card.redCardTimes]
-            },
-            "away_red_cards": awayRedCards.map { card in
-                ["player": card.player, "red_card_times": card.redCardTimes]
-            },
-            "home_var_events": homeVarEvents.map(Self.varEventDictionary),
-            "away_var_events": awayVarEvents.map(Self.varEventDictionary)
-        ]
-
-        if let teamLineups,
-           let lineupsData = try? JSONEncoder().encode(teamLineups),
-           let lineupsObject = try? JSONSerialization.jsonObject(with: lineupsData) {
-            dict["team_lineups"] = lineupsObject
-        }
-
-        if let homeShortName {
-            dict["home_short_name"] = homeShortName
-        }
-        if let awayShortName {
-            dict["away_short_name"] = awayShortName
-        }
-        if let leagueSubcategory {
-            dict["league_subcategory"] = leagueSubcategory
-        }
-        if let competitionWeight {
-            dict["competition_weight"] = competitionWeight
-        }
-        if let watchabilityIndex,
-           let watchabilityData = try? JSONEncoder().encode(watchabilityIndex),
-           let watchabilityObject = try? JSONSerialization.jsonObject(with: watchabilityData) {
-            dict["watchability_index"] = watchabilityObject
-        }
-
-        if let matchDetailsIDValue = matchDetailsIDValue {
-            dict["match_details_id"] = matchDetailsIDValue
-        }
-        if let homeTeamId {
-            dict["home_team_id"] = homeTeamId
-        }
-        if let awayTeamId {
-            dict["away_team_id"] = awayTeamId
-        }
-        if let homeScore = homeScore {
-            dict["home_score"] = homeScore
-        }
-        if let awayScore = awayScore {
-            dict["away_score"] = awayScore
-        }
-        if let scoreStatus = scoreStatus {
-            dict["score_status"] = scoreStatus
-        }
-        if let penaltyResult = penaltyResult {
-            dict["penalty_result"] = penaltyResult
-        }
-
-        guard let data = try? JSONSerialization.data(withJSONObject: dict),
-              let decodedMatch = try? JSONDecoder().decode(WatchMatch.self, from: data) else {
-            return nil
-        }
-        self = decodedMatch
-    }
-
-    static func varEventDictionary(_ event: WatchVarEvent) -> [String: Any] {
-        var dict: [String: Any] = ["detail": event.detail]
-        if let player = event.player {
-            dict["player"] = player
-        }
-        if let minute = event.minute {
-            dict["minute"] = minute
-        }
-        return dict
+        )
     }
 }

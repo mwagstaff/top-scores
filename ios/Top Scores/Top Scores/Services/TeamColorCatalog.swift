@@ -515,6 +515,16 @@ final class TeamIdentityStore: @unchecked Sendable {
         return Self.preferredShortName(fullName: trimmed, candidates: knownNames)
     }
 
+    nonisolated func preferredDisplayShortName(
+        for fullName: String,
+        providerShortName: String?
+    ) -> String? {
+        if let providerName = Self.displayShortName(providerShortName, for: fullName) {
+            return providerName
+        }
+        return preferredShortName(for: fullName)
+    }
+
     nonisolated static func displayShortName(
         _ candidate: String?,
         for fullName: String

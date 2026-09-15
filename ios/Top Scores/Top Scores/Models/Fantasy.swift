@@ -1941,6 +1941,8 @@ struct FantasyDisplayPlayer: Identifiable, Hashable, Sendable {
     let assists: Int
     let yellowCards: Int
     let redCards: Int
+    var surname: String? = nil
+    var gameweekOpponentDisplay: String? = nil
 
     nonisolated var id: Int {
         elementID
@@ -2039,7 +2041,9 @@ struct FantasyDisplayPlayer: Identifiable, Hashable, Sendable {
             goalsScored: goalsScored,
             assists: assists,
             yellowCards: yellowCards,
-            redCards: redCards
+            redCards: redCards,
+            surname: surname,
+            gameweekOpponentDisplay: gameweekOpponentDisplay
         )
     }
 }
@@ -3997,6 +4001,7 @@ enum FantasySquadBuilder {
             now: now
         )
 
+        let orderedGameweekFixtures = fixtures.sorted { ($0.kickoffTime ?? "") < ($1.kickoffTime ?? "") }
         let players = picksResponse.picks.compactMap { pick -> FantasyDisplayPlayer? in
             let element = elementByID[pick.element]
             let officialExpectedPointsForGameweek = element?.expectedPoints(for: gameweek)
@@ -4129,7 +4134,15 @@ enum FantasySquadBuilder {
                 goalsScored: goalsScored,
                 assists: assists,
                 yellowCards: yellowCards,
-                redCards: redCards
+                redCards: redCards,
+                surname: element?.secondName,
+                gameweekOpponentDisplay: orderedGameweekFixtures
+                    .compactMap { fixture -> String? in
+                        guard let teamID = element?.team else { return nil }
+                        if fixture.teamH == teamID { return teamDisplayCode(teamID: fixture.teamA) }
+                        if fixture.teamA == teamID { return teamDisplayCode(teamID: fixture.teamH) }
+                        return nil
+                    }.joined(separator: ", ")
             )
         }
         .sorted { $0.pickPosition < $1.pickPosition }

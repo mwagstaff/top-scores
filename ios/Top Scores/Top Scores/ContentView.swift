@@ -195,6 +195,15 @@ private struct ContentLifecycleCoordinator: View {
             .onChange(of: fantasyViewModel.isSeasonActive) { _, _ in
                 updateFantasyTabPresentation()
             }
+            .onChange(of: fantasyViewModel.rivalSquads) { _, _ in
+                syncWatchFantasyTables()
+            }
+            .onChange(of: fantasyViewModel.trackedLeagueStandings) { _, _ in
+                syncWatchFantasyTables()
+            }
+            .onChange(of: fantasyViewModel.myProfile) { _, _ in
+                syncWatchFantasyTables()
+            }
             .onChange(of: fantasyViewModel.requiresAuthentication) { _, _ in
                 updateFantasyTabPresentation()
             }
@@ -351,8 +360,13 @@ private struct ContentLifecycleCoordinator: View {
         managerEntryID: String,
         squad: FantasySquadDisplayData?
     ) async {
+        syncWatchFantasyTables()
         FantasySyncStore.persist(managerEntryID: managerEntryID, squad: squad)
         await PreferencesSyncService.shared.syncPreferences(preferences.snapshot)
+    }
+
+    private func syncWatchFantasyTables() {
+        WatchFantasyTablesStore.persist(managerEntryID: fantasyManagerEntryID, model: fantasyViewModel)
     }
 }
 

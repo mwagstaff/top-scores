@@ -19,6 +19,10 @@ private struct FantasySyncPlayerPayload: Encodable, Sendable {
     let hasUpcomingFixtureThisGameweek: Bool
     let hasActiveFixtureThisGameweek: Bool
     let minutesPlayed: Int
+    let profileImageURL: URL?
+    let opponent: String?
+    let expectedPoints: Double?
+    let surname: String?
 
     private enum CodingKeys: String, CodingKey {
         case elementID
@@ -38,6 +42,8 @@ private struct FantasySyncPlayerPayload: Encodable, Sendable {
         case hasUpcomingFixtureThisGameweek
         case hasActiveFixtureThisGameweek
         case minutesPlayed
+        case profileImageURL, opponent, expectedPoints
+        case surname
     }
 
     nonisolated init(player: FantasyDisplayPlayer) {
@@ -58,6 +64,10 @@ private struct FantasySyncPlayerPayload: Encodable, Sendable {
         hasUpcomingFixtureThisGameweek = player.hasUpcomingFixtureThisGameweek
         hasActiveFixtureThisGameweek = player.hasActiveFixtureThisGameweek
         minutesPlayed = player.minutesPlayed
+        profileImageURL = player.profileImageURL
+        opponent = player.gameweekOpponentDisplay ?? player.upcomingOpponentDisplay
+        expectedPoints = player.expectedPointsThisGameweek.map { $0 * Double(max(player.multiplier, 1)) }
+        surname = player.surname
     }
 
     nonisolated func encode(to encoder: Encoder) throws {
@@ -79,6 +89,10 @@ private struct FantasySyncPlayerPayload: Encodable, Sendable {
         try container.encode(hasUpcomingFixtureThisGameweek, forKey: .hasUpcomingFixtureThisGameweek)
         try container.encode(hasActiveFixtureThisGameweek, forKey: .hasActiveFixtureThisGameweek)
         try container.encode(minutesPlayed, forKey: .minutesPlayed)
+        try container.encodeIfPresent(profileImageURL, forKey: .profileImageURL)
+        try container.encodeIfPresent(opponent, forKey: .opponent)
+        try container.encodeIfPresent(expectedPoints, forKey: .expectedPoints)
+        try container.encodeIfPresent(surname, forKey: .surname)
     }
 }
 
@@ -128,6 +142,10 @@ private struct FantasySyncSquadPayload: Encodable, Sendable {
     let activeChipCodes: [String]
     let players: [FantasySyncPlayerPayload]
     let effectiveContributions: [FantasySyncContributionPayload]
+    let deadlineTime: String?
+    let deadlineGameweekID: Int?
+    let scorePhase: String
+    let expectedPoints: Double?
 
     private enum CodingKeys: String, CodingKey {
         case managerEntryID
@@ -142,6 +160,7 @@ private struct FantasySyncSquadPayload: Encodable, Sendable {
         case activeChipCodes
         case players
         case effectiveContributions
+        case deadlineTime, deadlineGameweekID, scorePhase, expectedPoints
     }
 
     nonisolated init(managerEntryID: Int, squad: FantasySquadDisplayData, now: Date = Date()) {
@@ -149,6 +168,17 @@ private struct FantasySyncSquadPayload: Encodable, Sendable {
         syncedAt = ISO8601DateFormatter().string(from: now)
         gameweekID = squad.gameweekID
         gameweekTitle = squad.gameweekTitle
+        deadlineTime = squad.deadlineTime
+        deadlineGameweekID = squad.deadlineGameweekID
+        switch squad.scorePhase {
+        case .expected: scorePhase = "expected"
+        case .provisional: scorePhase = "provisional"
+        case .final: scorePhase = "final"
+        }
+        let scoringPlayers = squad.starters + (squad.hasBenchBoostActive ? squad.bench : [])
+        expectedPoints = scoringPlayers.allSatisfy { $0.expectedPointsThisGameweek != nil }
+            ? scoringPlayers.reduce(0) { $0 + ($1.expectedPointsThisGameweek ?? 0) * Double(max($1.multiplier, 1)) }
+            : nil
         totalPoints = squad.totalPoints
         estimatedCurrentScore = squad.estimatedCurrentScore
         resolvedCurrentScore = squad.resolvedCurrentScore
@@ -175,6 +205,10 @@ private struct FantasySyncSquadPayload: Encodable, Sendable {
         try container.encode(activeChipCodes, forKey: .activeChipCodes)
         try container.encode(players, forKey: .players)
         try container.encode(effectiveContributions, forKey: .effectiveContributions)
+        try container.encodeIfPresent(deadlineTime, forKey: .deadlineTime)
+        try container.encodeIfPresent(deadlineGameweekID, forKey: .deadlineGameweekID)
+        try container.encode(scorePhase, forKey: .scorePhase)
+        try container.encodeIfPresent(expectedPoints, forKey: .expectedPoints)
     }
 }
 

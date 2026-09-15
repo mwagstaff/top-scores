@@ -1,6 +1,7 @@
 import ClockKit
 import Combine
 import Foundation
+import OSLog
 import WatchConnectivity
 
 enum WatchAppGroupConfig {
@@ -16,22 +17,43 @@ struct WatchCachedMatchDetails: Codable {
     let cachedAt: Date
 }
 
-final class WatchMatchesStore: NSObject, ObservableObject {
-    @Published private(set) var groupedDays: [WatchMatchDay] = []
-    @Published private(set) var lastUpdated: Date?
-    @Published private(set) var generatedAt: Date?
-    @Published private(set) var todaysMatchCount: Int = 0
-    @Published private(set) var hasData = false
-    @Published private(set) var apiBaseURL: String = "https://api.skynolimit.dev/top-scores/api/v1"
-    @Published private(set) var fantasySnapshot: WatchFantasySnapshot?
+private struct WatchPreparedPayload {
+    let payload: WatchSharedMatchesPayload
+    let filteredMatches: [WatchMatch]
+    let unfilteredMatches: [WatchMatch]
+    let groupedDays: [WatchMatchDay]
+    let todaysMatchCount: Int
+    let homeSnapshot: WatchHomeSnapshot
+}
 
-    private let decoder: JSONDecoder
-    private let encoder: JSONEncoder
+final class WatchMatchesStore: NSObject, ObservableObject {
+    private(set) var groupedDays: [WatchMatchDay] = []
+    private(set) var lastUpdated: Date?
+    private(set) var generatedAt: Date?
+    private(set) var todaysMatchCount: Int = 0
+    private(set) var hasData = false
+    private(set) var apiBaseURL: String = "https://api.skynolimit.dev/top-scores/api/v1"
+    @Published private(set) var fantasySnapshot: WatchFantasySnapshot?
+    @Published private(set) var homeSnapshot: WatchHomeSnapshot = .empty
+
     private let session: WCSession? = WCSession.isSupported() ? WCSession.default : nil
     private let liveRefreshInterval: TimeInterval = 30
     private let standardRefreshInterval: TimeInterval = 5 * 60
-    private let liveDetailsWarmInterval: TimeInterval = 20
+    private let foregroundRefreshCoalescingInterval: TimeInterval = 5
+    private let phoneRequestCoalescingInterval: TimeInterval = 5
+    private let maximumDetailsCacheEntries = 64
+    private let persistenceQueue = DispatchQueue(
+        label: "dev.skynolimit.topscores.watch-persistence",
+        qos: .utility
+    )
     private var didActivateSession = false
+    private var didStartAutomaticRefresh = false
+    private var isSceneActive = false
+    private var hasDeferredComplicationReload = false
+    private var lastRefreshRequestAt: Date?
+    private var lastPhonePayloadRequestAt: Date?
+    private var lastTodaySummaryRefreshAt: Date?
+    private var lastLoadedPayloadData: Data?
     private var automaticRefreshTimer: Timer?
     private var todayRefreshTask: Task<Void, Never>?
     private var filteredMatches: [WatchMatch] = []
@@ -44,16 +66,13 @@ final class WatchMatchesStore: NSObject, ObservableObject {
     }
 
     override init() {
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        self.decoder = decoder
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        self.encoder = encoder
+        let start = DispatchTime.now()
         super.init()
         loadMatchDetailsCache()
-        loadLocalPayload()
         activateSessionIfNeeded()
+        WatchPerformanceDiagnostics.logger.notice(
+            "Store initialized: \(WatchPerformanceDiagnostics.milliseconds(since: start), privacy: .public) ms detailsCache=\(self.detailsCache.count, privacy: .public)"
+        )
     }
 
     deinit {
@@ -62,15 +81,35 @@ final class WatchMatchesStore: NSObject, ObservableObject {
     }
 
     func refresh(requestPhoneSync: Bool = true) {
-        loadLocalPayload()
+        let now = Date()
+        if let lastRefreshRequestAt,
+           now.timeIntervalSince(lastRefreshRequestAt) < foregroundRefreshCoalescingInterval {
+            WatchPerformanceDiagnostics.logger.debug("Refresh coalesced")
+            return
+        }
+        lastRefreshRequestAt = now
+
+        scheduleAutomaticRefresh()
+        refreshTodayMatchSummaries(from: filteredMatches, apiBaseURL: apiBaseURL)
+        WatchPerformanceDiagnostics.logger.info(
+            "Refresh started: matches=\(self.filteredMatches.count, privacy: .public) phoneSync=\(requestPhoneSync, privacy: .public)"
+        )
         if requestPhoneSync {
             requestLatestPayloadFromPhone()
         }
     }
 
     func startAutomaticRefresh() {
+        guard !didStartAutomaticRefresh else { return }
+        didStartAutomaticRefresh = true
         refresh(requestPhoneSync: true)
-        scheduleAutomaticRefresh()
+    }
+
+    func setSceneActive(_ isActive: Bool) {
+        isSceneActive = isActive
+        guard !isActive, hasDeferredComplicationReload else { return }
+        hasDeferredComplicationReload = false
+        reloadComplications()
     }
 
     func cachedDetails(for match: WatchMatch) -> WatchMatch? {
@@ -81,11 +120,10 @@ final class WatchMatchesStore: NSObject, ObservableObject {
     func cacheDetails(_ match: WatchMatch) {
         guard let matchID = match.matchDetailsIDValue else { return }
         let didChange = detailsCache[matchID]?.match != match
+        guard didChange else { return }
         detailsCache[matchID] = WatchCachedMatchDetails(match: match, cachedAt: Date())
+        trimDetailsCacheIfNeeded()
         saveMatchDetailsCache()
-        if didChange {
-            reloadComplications()
-        }
     }
 
     private func activateSessionIfNeeded() {
@@ -99,76 +137,74 @@ final class WatchMatchesStore: NSObject, ObservableObject {
         guard let session else { return }
         guard session.isCompanionAppInstalled else { return }
 
+        let now = Date()
+        if let lastPhonePayloadRequestAt,
+           now.timeIntervalSince(lastPhonePayloadRequestAt) < phoneRequestCoalescingInterval {
+            WatchPerformanceDiagnostics.logger.debug("Phone payload request coalesced")
+            return
+        }
+        lastPhonePayloadRequestAt = now
+
         let request = [WatchAppGroupConfig.requestMatchesSyncMessageKey: true]
 
         if session.activationState == .activated, session.isReachable {
+            WatchPerformanceDiagnostics.logger.info("Requesting latest phone payload")
             session.sendMessage(request) { [weak self] reply in
                 guard let self else { return }
                 guard let data = reply[WatchAppGroupConfig.matchesPayloadContextKey] as? Data else { return }
-                self.handleIncomingPayloadData(data)
+                DispatchQueue.main.async {
+                    self.handleIncomingPayloadData(data)
+                }
             } errorHandler: { _ in }
         } else {
-            session.transferUserInfo(request)
+            WatchPerformanceDiagnostics.logger.debug(
+                "Phone payload request skipped: activation=\(session.activationState.rawValue, privacy: .public) reachable=\(session.isReachable, privacy: .public)"
+            )
         }
     }
 
     private func loadLocalPayload() {
-        guard let data = loadRawPayloadData(),
-              let payload = try? decoder.decode(WatchSharedMatchesPayload.self, from: data)
-        else {
-            DispatchQueue.main.async {
-                self.filteredMatches = []
-                self.unfilteredMatches = []
-                self.groupedDays = []
-                self.lastUpdated = nil
-                self.generatedAt = nil
-                self.todaysMatchCount = 0
-                self.hasData = false
-                self.fantasySnapshot = nil
+        guard let url = sharedFileURL else { return }
+        let detailsCacheSnapshot = detailsCache
+
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let start = DispatchTime.now()
+            let interval = WatchPerformanceDiagnostics.signposter.beginInterval("LoadLocalPayload")
+            defer {
+                WatchPerformanceDiagnostics.signposter.endInterval("LoadLocalPayload", interval)
             }
-            return
-        }
-
-        let sourceMatches: [WatchMatch]
-        if payload.snapshot.showAllMatches, !payload.unfilteredMatches.isEmpty {
-            sourceMatches = payload.unfilteredMatches
-        } else {
-            sourceMatches = payload.matches
-        }
-
-        let sourceWithNewerCachedSummaries = sourceMatches.map { match in
-            guard let matchID = match.matchDetailsIDValue,
-                  let cached = detailsCache[matchID],
-                  cached.cachedAt > payload.generatedAt else {
-                return match
+            guard let data = try? Data(contentsOf: url) else { return }
+            let shouldPrepare = await MainActor.run {
+                guard let self, self.lastLoadedPayloadData != data else { return false }
+                self.lastLoadedPayloadData = data
+                return true
             }
-            return match.mergingLatestSummary(cached.match)
-        }
-        let sorted = WatchMatchGrouping.sortedMatches(sourceWithNewerCachedSummaries)
-        let grouped = WatchMatchGrouping.groupedDays(sorted)
-        let todaysCount = WatchMatchGrouping.todaysMatchCount(sorted)
+            guard shouldPrepare else {
+                WatchPerformanceDiagnostics.logger.debug("Duplicate local payload ignored")
+                return
+            }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            guard let payload = try? decoder.decode(WatchSharedMatchesPayload.self, from: data) else {
+                WatchPerformanceDiagnostics.logger.error(
+                    "Failed to decode local payload: bytes=\(data.count, privacy: .public) duration=\(WatchPerformanceDiagnostics.milliseconds(since: start), privacy: .public) ms"
+                )
+                return
+            }
+            let prepared = Self.prepare(payload: payload, detailsCache: detailsCacheSnapshot)
+            WatchPerformanceDiagnostics.logger.notice(
+                "Loaded local payload: bytes=\(data.count, privacy: .public) matches=\(prepared.filteredMatches.count, privacy: .public) duration=\(WatchPerformanceDiagnostics.milliseconds(since: start), privacy: .public) ms"
+            )
 
-        DispatchQueue.main.async {
-            self.filteredMatches = sourceWithNewerCachedSummaries
-            self.unfilteredMatches = payload.snapshot.showAllMatches && !payload.unfilteredMatches.isEmpty
-                ? sourceWithNewerCachedSummaries
-                : []
-            self.groupedDays = grouped
-            self.lastUpdated = payload.lastUpdated
-            self.generatedAt = payload.generatedAt
-            self.todaysMatchCount = todaysCount
-            self.hasData = true
-            self.apiBaseURL = payload.snapshot.apiBaseURL
-            self.fantasySnapshot = payload.fantasy
-            self.scheduleAutomaticRefresh()
-            self.refreshTodayMatchSummaries(
-                from: sourceWithNewerCachedSummaries,
-                apiBaseURL: payload.snapshot.apiBaseURL
-            )
-            self.preloadLiveMatchDetailsIfNeeded(
-                from: sourceWithNewerCachedSummaries,
-                apiBaseURL: payload.snapshot.apiBaseURL
-            )
+            await MainActor.run {
+                guard let self else { return }
+                if let generatedAt = self.generatedAt,
+                   generatedAt > payload.generatedAt {
+                    WatchPerformanceDiagnostics.logger.debug("Older local payload ignored")
+                    return
+                }
+                self.applyPreparedPayload(prepared)
+            }
         }
     }
 
@@ -184,13 +220,27 @@ final class WatchMatchesStore: NSObject, ObservableObject {
             return
         }
 
+        let now = Date()
+        let minimumInterval = matches.contains(where: \.isInProgress)
+            ? liveRefreshInterval
+            : standardRefreshInterval
+        if let lastTodaySummaryRefreshAt,
+           now.timeIntervalSince(lastTodaySummaryRefreshAt) < minimumInterval {
+            WatchPerformanceDiagnostics.logger.debug("Today summary refresh throttled")
+            return
+        }
+        lastTodaySummaryRefreshAt = now
+        WatchPerformanceDiagnostics.logger.info(
+            "Today summary request started: date=\(date, privacy: .public) live=\(matches.contains(where: \.isInProgress), privacy: .public)"
+        )
+
         todayRefreshTask?.cancel()
         todayRefreshTask = Task {
             do {
                 let latestMatches = try await WatchAPIClient(baseURL: baseURL).fetchMatches(on: date)
                 guard !Task.isCancelled else { return }
                 await MainActor.run {
-                    self.applyLatestMatchSummaries(latestMatches, apiBaseURL: apiBaseURL)
+                    self.applyLatestMatchSummaries(latestMatches)
                 }
             } catch is CancellationError {
                 return
@@ -200,7 +250,12 @@ final class WatchMatchesStore: NSObject, ObservableObject {
         }
     }
 
-    private func applyLatestMatchSummaries(_ latestMatches: [WatchMatch], apiBaseURL: String) {
+    private func applyLatestMatchSummaries(_ latestMatches: [WatchMatch]) {
+        let start = DispatchTime.now()
+        let interval = WatchPerformanceDiagnostics.signposter.beginInterval("ApplyLatestSummaries")
+        defer {
+            WatchPerformanceDiagnostics.signposter.endInterval("ApplyLatestSummaries", interval)
+        }
         let refreshedFiltered = WatchMatchSummaryMerger.merging(
             source: filteredMatches,
             latest: latestMatches
@@ -209,6 +264,14 @@ final class WatchMatchesStore: NSObject, ObservableObject {
             source: unfilteredMatches,
             latest: latestMatches
         )
+        guard refreshedFiltered != filteredMatches || refreshedUnfiltered != unfilteredMatches else {
+            lastUpdated = Date()
+            scheduleAutomaticRefresh()
+            WatchPerformanceDiagnostics.logger.info(
+                "Today summary unchanged: received=\(latestMatches.count, privacy: .public) duration=\(WatchPerformanceDiagnostics.milliseconds(since: start), privacy: .public) ms"
+            )
+            return
+        }
         filteredMatches = refreshedFiltered
         unfilteredMatches = refreshedUnfiltered
 
@@ -216,11 +279,13 @@ final class WatchMatchesStore: NSObject, ObservableObject {
         groupedDays = WatchMatchGrouping.groupedDays(sorted)
         todaysMatchCount = WatchMatchGrouping.todaysMatchCount(sorted)
         lastUpdated = Date()
+        homeSnapshot = WatchMatchCollections.homeSnapshot(from: sorted)
 
         let now = Date()
+        let latestMatchIDs = Set(latestMatches.compactMap(\.matchDetailsIDValue))
         for match in refreshedFiltered {
             guard let matchID = match.matchDetailsIDValue,
-                  latestMatches.contains(where: { $0.matchDetailsIDValue == matchID }) else {
+                  latestMatchIDs.contains(matchID) else {
                 continue
             }
             let cacheBase = detailsCache[matchID]?.match ?? match
@@ -229,27 +294,113 @@ final class WatchMatchesStore: NSObject, ObservableObject {
                 cachedAt: now
             )
         }
+        trimDetailsCacheIfNeeded()
         saveMatchDetailsCache()
         scheduleAutomaticRefresh()
-        preloadLiveMatchDetailsIfNeeded(from: refreshedFiltered, apiBaseURL: apiBaseURL)
         reloadComplications()
+        WatchPerformanceDiagnostics.logger.notice(
+            "Today summary applied: received=\(latestMatches.count, privacy: .public) visible=\(refreshedFiltered.count, privacy: .public) duration=\(WatchPerformanceDiagnostics.milliseconds(since: start), privacy: .public) ms"
+        )
     }
 
     private func handleIncomingPayloadData(_ data: Data) {
-        guard let incoming = try? decoder.decode(WatchSharedMatchesPayload.self, from: data) else {
+        guard data != lastLoadedPayloadData else {
+            WatchPerformanceDiagnostics.logger.debug("Duplicate phone payload ignored")
             return
         }
-        if let existingData = loadRawPayloadData(),
-           let existing = try? decoder.decode(WatchSharedMatchesPayload.self, from: existingData),
-           existing.generatedAt > incoming.generatedAt {
-            return
+        lastLoadedPayloadData = data
+        let detailsCacheSnapshot = detailsCache
+        WatchPerformanceDiagnostics.logger.info(
+            "Phone payload received: bytes=\(data.count, privacy: .public)"
+        )
+
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let start = DispatchTime.now()
+            let interval = WatchPerformanceDiagnostics.signposter.beginInterval("DecodePhonePayload")
+            defer {
+                WatchPerformanceDiagnostics.signposter.endInterval("DecodePhonePayload", interval)
+            }
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            guard let payload = try? decoder.decode(WatchSharedMatchesPayload.self, from: data) else {
+                return
+            }
+            let prepared = Self.prepare(payload: payload, detailsCache: detailsCacheSnapshot)
+            WatchPerformanceDiagnostics.logger.notice(
+                "Phone payload prepared: matches=\(prepared.filteredMatches.count, privacy: .public) duration=\(WatchPerformanceDiagnostics.milliseconds(since: start), privacy: .public) ms"
+            )
+
+            await MainActor.run {
+                guard let self else { return }
+                if let generatedAt = self.generatedAt,
+                   generatedAt >= payload.generatedAt {
+                    WatchPerformanceDiagnostics.logger.debug("Older phone payload ignored")
+                    return
+                }
+                self.saveRawPayloadData(data)
+                self.applyPreparedPayload(prepared)
+                self.reloadComplications()
+            }
         }
-        saveRawPayloadData(data)
-        loadLocalPayload()
-        reloadComplications()
+    }
+
+    private static func prepare(
+        payload: WatchSharedMatchesPayload,
+        detailsCache: [String: WatchCachedMatchDetails]
+    ) -> WatchPreparedPayload {
+        let sourceMatches = payload.snapshot.showAllMatches && !payload.unfilteredMatches.isEmpty
+            ? payload.unfilteredMatches
+            : payload.matches
+        let filteredMatches = sourceMatches.map { match in
+            guard let matchID = match.matchDetailsIDValue,
+                  let cached = detailsCache[matchID],
+                  cached.cachedAt > payload.generatedAt else {
+                return match
+            }
+            return match.mergingLatestSummary(cached.match)
+        }
+        let sorted = WatchMatchGrouping.sortedMatches(filteredMatches)
+
+        return WatchPreparedPayload(
+            payload: payload,
+            filteredMatches: filteredMatches,
+            unfilteredMatches: payload.snapshot.showAllMatches && !payload.unfilteredMatches.isEmpty
+                ? filteredMatches
+                : [],
+            groupedDays: WatchMatchGrouping.groupedDays(sorted),
+            todaysMatchCount: WatchMatchGrouping.todaysMatchCount(sorted),
+            homeSnapshot: WatchMatchCollections.homeSnapshot(from: sorted)
+        )
+    }
+
+    private func applyPreparedPayload(_ prepared: WatchPreparedPayload) {
+        let payload = prepared.payload
+        filteredMatches = prepared.filteredMatches
+        unfilteredMatches = prepared.unfilteredMatches
+        groupedDays = prepared.groupedDays
+        lastUpdated = payload.lastUpdated
+        generatedAt = payload.generatedAt
+        todaysMatchCount = prepared.todaysMatchCount
+        hasData = true
+        apiBaseURL = payload.snapshot.apiBaseURL
+        fantasySnapshot = payload.fantasy
+        homeSnapshot = prepared.homeSnapshot
+        WatchPerformanceDiagnostics.logger.notice(
+            "Published home snapshot: matches=\(prepared.filteredMatches.count, privacy: .public) todaySections=\(prepared.homeSnapshot.todaySections.count, privacy: .public) competitions=\(prepared.homeSnapshot.todayCompetitions.count, privacy: .public)"
+        )
+        scheduleAutomaticRefresh()
+        refreshTodayMatchSummaries(
+            from: prepared.filteredMatches,
+            apiBaseURL: payload.snapshot.apiBaseURL
+        )
     }
 
     private func reloadComplications() {
+        guard !isSceneActive else {
+            hasDeferredComplicationReload = true
+            WatchPerformanceDiagnostics.logger.debug("Complication reload deferred while app is active")
+            return
+        }
         let server = CLKComplicationServer.sharedInstance()
         guard let activeComplications = server.activeComplications else { return }
         for complication in activeComplications {
@@ -257,63 +408,86 @@ final class WatchMatchesStore: NSObject, ObservableObject {
         }
     }
 
-    private func loadRawPayloadData() -> Data? {
-        guard let url = sharedFileURL else { return nil }
-        return try? Data(contentsOf: url)
-    }
-
     private func saveRawPayloadData(_ data: Data) {
         guard let url = sharedFileURL else { return }
-        try? data.write(to: url, options: [.atomic])
+        persistenceQueue.async {
+            do {
+                try data.write(to: url, options: [.atomic])
+            } catch {
+                WatchPerformanceDiagnostics.logger.error("Failed to save watch payload: \(String(describing: error), privacy: .public)")
+            }
+        }
     }
 
     private func loadMatchDetailsCache() {
-        guard let url = matchDetailsCacheFileURL,
-              let data = try? Data(contentsOf: url),
-              let cache = try? decoder.decode([String: WatchCachedMatchDetails].self, from: data)
-        else {
-            detailsCache = [:]
+        guard let url = matchDetailsCacheFileURL else {
+            loadLocalPayload()
             return
         }
-        detailsCache = cache
+
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let start = DispatchTime.now()
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let cache: [String: WatchCachedMatchDetails]
+            if let data = try? Data(contentsOf: url),
+               let decoded = try? decoder.decode([String: WatchCachedMatchDetails].self, from: data) {
+                cache = decoded
+            } else {
+                cache = [:]
+            }
+
+            await MainActor.run {
+                guard let self else { return }
+                for (matchID, cached) in cache {
+                    if let current = self.detailsCache[matchID], current.cachedAt >= cached.cachedAt {
+                        continue
+                    }
+                    self.detailsCache[matchID] = cached
+                }
+                self.trimDetailsCacheIfNeeded()
+                if cache.count > self.maximumDetailsCacheEntries {
+                    WatchPerformanceDiagnostics.logger.notice(
+                        "Details cache pruned: before=\(cache.count, privacy: .public) after=\(self.detailsCache.count, privacy: .public)"
+                    )
+                    self.saveMatchDetailsCache()
+                }
+                WatchPerformanceDiagnostics.logger.notice(
+                    "Details cache loaded: entries=\(self.detailsCache.count, privacy: .public) duration=\(WatchPerformanceDiagnostics.milliseconds(since: start), privacy: .public) ms"
+                )
+                self.loadLocalPayload()
+            }
+        }
     }
 
     private func saveMatchDetailsCache() {
-        guard let url = matchDetailsCacheFileURL,
-              let data = try? encoder.encode(detailsCache)
-        else { return }
-        try? data.write(to: url, options: [.atomic])
+        guard let url = matchDetailsCacheFileURL else { return }
+        let cacheSnapshot = detailsCache
+        persistenceQueue.async {
+            let start = DispatchTime.now()
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            guard let data = try? encoder.encode(cacheSnapshot) else { return }
+            do {
+                try data.write(to: url, options: [.atomic])
+                let duration = WatchPerformanceDiagnostics.milliseconds(since: start)
+                if duration >= 50 {
+                    WatchPerformanceDiagnostics.logger.warning(
+                        "Slow details cache write: entries=\(cacheSnapshot.count, privacy: .public) bytes=\(data.count, privacy: .public) duration=\(duration, privacy: .public) ms"
+                    )
+                }
+            } catch {
+                WatchPerformanceDiagnostics.logger.error("Failed to save details cache: \(String(describing: error), privacy: .public)")
+            }
+        }
     }
 
-    private func preloadLiveMatchDetailsIfNeeded(from matches: [WatchMatch], apiBaseURL: String) {
-        guard let baseURL = URL(string: apiBaseURL) else { return }
-        let now = Date()
-        let liveMatches = matches.filter { match in
-            guard match.isInProgress, match.matchDetailsIDValue != nil else { return false }
-            guard let matchID = match.matchDetailsIDValue,
-                  let cached = detailsCache[matchID] else {
-                return true
-            }
-            return now.timeIntervalSince(cached.cachedAt) >= liveDetailsWarmInterval
-        }
-        guard !liveMatches.isEmpty else { return }
-
-        Task {
-            let client = WatchAPIClient(baseURL: baseURL)
-            for match in liveMatches {
-                guard !Task.isCancelled,
-                      let matchID = match.matchDetailsIDValue else { continue }
-                do {
-                    let details = try await client.fetchMatchDetails(matchId: matchID)
-                    let updated = match.withDetails(details)
-                    await MainActor.run {
-                        self.cacheDetails(updated)
-                    }
-                } catch {
-                    diagnosticLog("[WatchMatchesStore] Failed to warm live match details for %@: %@", matchID, String(describing: error))
-                }
-            }
-        }
+    private func trimDetailsCacheIfNeeded() {
+        guard detailsCache.count > maximumDetailsCacheEntries else { return }
+        let newestEntries = detailsCache
+            .sorted { $0.value.cachedAt > $1.value.cachedAt }
+            .prefix(maximumDetailsCacheEntries)
+        detailsCache = Dictionary(uniqueKeysWithValues: newestEntries.map { ($0.key, $0.value) })
     }
 
     private func scheduleAutomaticRefresh() {
@@ -323,7 +497,7 @@ final class WatchMatchesStore: NSObject, ObservableObject {
                 ? self.liveRefreshInterval
                 : self.standardRefreshInterval
             self.automaticRefreshTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: false) { [weak self] _ in
-                self?.refresh(requestPhoneSync: true)
+                self?.refresh(requestPhoneSync: false)
             }
         }
     }

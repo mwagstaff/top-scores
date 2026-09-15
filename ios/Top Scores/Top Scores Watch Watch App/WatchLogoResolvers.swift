@@ -1,7 +1,10 @@
 import Foundation
+import OSLog
 import UIKit
 
 enum WatchCompetitionLogoResolver {
+    private static let imageCache = NSCache<NSString, UIImage>()
+
     private static let assetNamesByCompetitionName: [String: String] = [
         "bundesliga": "CompetitionLogo5",
         "champions league": "CompetitionLogo7",
@@ -47,14 +50,59 @@ enum WatchCompetitionLogoResolver {
     ]
 
     static func image(for competitionName: String) -> UIImage? {
-        guard let assetName = assetName(for: competitionName),
-              let image = UIImage(named: assetName) else {
+        guard let assetName = assetName(for: competitionName) else {
             return nil
         }
-        if assetName == "CompetitionLogo7" {
-            return image.withRenderingMode(.alwaysTemplate)
+        if let cached = imageCache.object(forKey: assetName as NSString) {
+            return cached
         }
-        return image
+        let start = DispatchTime.now()
+        guard let image = UIImage(named: assetName) else { return nil }
+        let rendered = compactCompetitionMark(from: image, assetName: assetName)
+        let resolved = assetName == "CompetitionLogo7"
+            ? rendered.withRenderingMode(.alwaysTemplate)
+            : rendered
+        imageCache.setObject(resolved, forKey: assetName as NSString)
+        let duration = WatchPerformanceDiagnostics.milliseconds(since: start)
+        if duration >= 16 {
+            WatchPerformanceDiagnostics.logger.warning(
+                "Slow competition logo load: asset=\(assetName, privacy: .public) duration=\(duration, privacy: .public) ms"
+            )
+        }
+        return resolved
+    }
+
+    private static func compactCompetitionMark(from image: UIImage, assetName: String) -> UIImage {
+        let normalizedCrop: CGRect
+        switch assetName {
+        case "CompetitionLogo13":
+            // The source SPFL artwork is a wide sponsor lockup. Keep the lion mark
+            // legible at the watch row's small square size.
+            normalizedCrop = CGRect(x: 0, y: 0, width: 0.53, height: 1)
+        case "CompetitionLogo91":
+            // The National League source includes two lines of sponsor text. The
+            // league's red emblem is the recognizable compact mark.
+            normalizedCrop = CGRect(x: 0.07, y: 0.43, width: 0.35, height: 0.50)
+        default:
+            return image
+        }
+
+        guard let source = image.cgImage else { return image }
+        let sourceWidth = CGFloat(source.width)
+        let sourceHeight = CGFloat(source.height)
+        let cropRect = CGRect(
+            x: normalizedCrop.minX * sourceWidth,
+            y: normalizedCrop.minY * sourceHeight,
+            width: normalizedCrop.width * sourceWidth,
+            height: normalizedCrop.height * sourceHeight
+        ).integral
+        guard let cropped = source.cropping(to: cropRect) else { return image }
+
+        let outputSize = CGSize(width: 48, height: 48)
+        UIGraphicsBeginImageContextWithOptions(outputSize, false, 2)
+        defer { UIGraphicsEndImageContext() }
+        UIImage(cgImage: cropped).draw(in: CGRect(origin: .zero, size: outputSize))
+        return UIGraphicsGetImageFromCurrentImageContext() ?? image
     }
 
     static func assetName(for competitionName: String) -> String? {
@@ -88,25 +136,38 @@ final class WatchTeamLogoResolver {
 
     private let fallbackName = "_noTeamLogo"
     private let lock = NSLock()
-    private let bundlesToSearch: [Bundle]
     private let assetNameByTeamID: [String: String]
-    private var normalizedLookup: [String: URL] = [:]
-    private var coreLookup: [String: [URL]] = [:]
-    private var originalLookup: [String: URL] = [:]
     private var cache: [String: UIImage] = [:]
 
     private init() {
         let bundles = Self.buildBundlesToSearch()
-        bundlesToSearch = bundles
         assetNameByTeamID = Self.loadBSDAssetNames(from: bundles)
-        loadLogos()
     }
 
     func image(for teamName: String, teamId: String?, alternateNames: [String] = []) -> UIImage? {
         let normalizedTeamID = teamId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if let assetName = assetNameByTeamID[normalizedTeamID],
-           let image = imageFromAssets(named: assetName) {
-            return image
+        if let assetName = assetNameByTeamID[normalizedTeamID] {
+            let cacheKey = "id:\(normalizedTeamID)"
+            lock.lock()
+            if let cached = cache[cacheKey] {
+                lock.unlock()
+                return cached
+            }
+            lock.unlock()
+
+            let start = DispatchTime.now()
+            if let image = imageFromAssets(named: assetName) {
+                lock.lock()
+                cache[cacheKey] = image
+                lock.unlock()
+                let duration = WatchPerformanceDiagnostics.milliseconds(since: start)
+                if duration >= 16 {
+                    WatchPerformanceDiagnostics.logger.warning(
+                        "Slow team logo load: asset=\(assetName, privacy: .public) duration=\(duration, privacy: .public) ms"
+                    )
+                }
+                return image
+            }
         }
         return image(for: teamName, alternateNames: alternateNames)
     }
@@ -128,38 +189,16 @@ final class WatchTeamLogoResolver {
             return assetImage
         }
 
-        if let url = resolveURL(for: teamName, alternateNames: alternateNames),
-           let image = UIImage(contentsOfFile: url.path) {
+        let fallback = resolveAssetFallbackImage()
+        if let fallback {
             lock.lock()
-            cache[cacheKey] = image
+            cache[cacheKey] = fallback
             lock.unlock()
-            return image
+            WatchPerformanceDiagnostics.logger.info(
+                "Team logo fallback used: team=\(teamName, privacy: .public)"
+            )
         }
-
-        // A fallback must not poison this team's cache. If a resource lookup is
-        // temporarily unavailable, the next complication refresh can recover.
-        return resolveAssetFallbackImage() ??
-            resolveURL(for: fallbackName).flatMap { UIImage(contentsOfFile: $0.path) }
-    }
-
-    private func loadLogos() {
-        for bundle in bundlesToSearch {
-            var urls = bundle.urls(forResourcesWithExtension: "png", subdirectory: "team-logos") ?? []
-            if urls.isEmpty {
-                urls = bundle.urls(forResourcesWithExtension: "png", subdirectory: nil) ?? []
-            }
-
-            for url in urls {
-                let fileName = url.deletingPathExtension().lastPathComponent
-                let normalized = Self.normalizedKey(fileName)
-                normalizedLookup[normalized] = normalizedLookup[normalized] ?? url
-                let core = Self.normalizedCoreKey(fileName)
-                if !core.isEmpty {
-                    coreLookup[core, default: []].append(url)
-                }
-                originalLookup[fileName.lowercased()] = originalLookup[fileName.lowercased()] ?? url
-            }
-        }
+        return fallback
     }
 
     private static func buildBundlesToSearch() -> [Bundle] {
@@ -270,84 +309,11 @@ final class WatchTeamLogoResolver {
             .joined(separator: " ")
     }
 
-    private func resolveURL(for teamName: String, alternateNames: [String] = []) -> URL? {
-        var fuzzyCandidates: [String] = []
-
-        for candidate in Self.lookupCandidates(for: teamName, alternateNames: alternateNames) {
-            let lower = candidate.lowercased()
-            if let direct = originalLookup[lower] {
-                return direct
-            }
-
-            for alias in Self.aliases(for: candidate) {
-                let aliasKey = Self.normalizedKey(alias)
-                if let match = normalizedLookup[aliasKey] {
-                    return match
-                }
-            }
-
-            let normalized = Self.normalizedKey(candidate)
-            if let match = normalizedLookup[normalized] {
-                return match
-            }
-
-            let core = Self.normalizedCoreKey(candidate)
-            if let uniqueCoreMatch = uniqueCoreMatch(for: core) {
-                return uniqueCoreMatch
-            }
-
-            fuzzyCandidates.append(normalized)
-        }
-
-        for normalized in fuzzyCandidates {
-            if let match = fuzzyMatch(normalizedTeam: normalized) {
-                return match
-            }
-        }
-
-        return nil
-    }
-
-    private func uniqueCoreMatch(for coreKey: String) -> URL? {
-        guard !coreKey.isEmpty else { return nil }
-        guard let candidates = coreLookup[coreKey], !candidates.isEmpty else { return nil }
-
-        var seenPaths = Set<String>()
-        let unique = candidates.filter { seenPaths.insert($0.path).inserted }
-        guard unique.count == 1 else { return nil }
-        return unique[0]
-    }
-
-    private func fuzzyMatch(normalizedTeam: String) -> URL? {
-        guard !normalizedTeam.isEmpty else { return nil }
-
-        var bestKey: String?
-        var bestScore = 0.0
-
-        for key in normalizedLookup.keys {
-            let score = Self.similarity(normalizedTeam, key)
-            if score > bestScore {
-                bestScore = score
-                bestKey = key
-            }
-        }
-
-        if let bestKey, bestScore >= 0.78 {
-            return normalizedLookup[bestKey]
-        }
-
-        return nil
-    }
-
     private nonisolated static func normalizedKey(_ value: String) -> String {
         normalizedTokens(value).joined()
     }
 
-    private nonisolated static func normalizedCoreKey(_ value: String) -> String {
-        normalizedTokens(value, stripClubAffixes: true).joined()
-    }
-
-    private nonisolated static func normalizedTokens(_ value: String, stripClubAffixes: Bool = false) -> [String] {
+    private nonisolated static func normalizedTokens(_ value: String) -> [String] {
         let lowered = value
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
             .replacingOccurrences(of: "&", with: " and ")
@@ -360,22 +326,8 @@ final class WatchTeamLogoResolver {
             .split { !$0.isLetter && !$0.isNumber }
             .map { String($0) }
             .filter { token in
-                if stopWords.contains(token) {
-                    return false
-                }
-                if stripClubAffixes, clubAffixWords.contains(token) {
-                    return false
-                }
-                return true
+                !stopWords.contains(token)
             }
-    }
-
-    private static func aliases(for name: String) -> [String] {
-        let lowered = name.lowercased()
-        if let alias = aliasMap[lowered] {
-            return [alias, lowered]
-        }
-        return [lowered]
     }
 
     private static func lookupCandidates(for teamName: String, alternateNames: [String]) -> [String] {
@@ -401,44 +353,9 @@ final class WatchTeamLogoResolver {
             .joined(separator: "|")
     }
 
-    private static func similarity(_ lhs: String, _ rhs: String) -> Double {
-        let distance = levenshtein(lhs, rhs)
-        let maxLength = max(lhs.count, rhs.count)
-        guard maxLength > 0 else { return 1 }
-        return 1 - (Double(distance) / Double(maxLength))
-    }
-
-    private static func levenshtein(_ lhs: String, _ rhs: String) -> Int {
-        let lhsChars = Array(lhs)
-        let rhsChars = Array(rhs)
-
-        var previous = Array(0...rhsChars.count)
-        var current = Array(repeating: 0, count: rhsChars.count + 1)
-
-        for (i, lhsChar) in lhsChars.enumerated() {
-            current[0] = i + 1
-            for (j, rhsChar) in rhsChars.enumerated() {
-                let cost = lhsChar == rhsChar ? 0 : 1
-                current[j + 1] = min(
-                    previous[j + 1] + 1,
-                    current[j] + 1,
-                    previous[j] + cost
-                )
-            }
-            previous = current
-        }
-
-        return previous[rhsChars.count]
-    }
-
     private nonisolated static let stopWords: Set<String> = [
         "fc", "cf", "sc", "afc", "ac", "sv", "fk", "bk", "bc", "ks", "nk",
         "club", "de", "the", "and", "atletico", "athletic", "sporting"
-    ]
-
-    private nonisolated static let clubAffixWords: Set<String> = [
-        "city", "town", "united", "rovers", "county", "albion", "wanderers",
-        "hotspur", "saint", "st", "calcio"
     ]
 
     private static let aliasMap: [String: String] = [
@@ -467,23 +384,20 @@ final class WatchTvLogoResolver {
     static let shared = WatchTvLogoResolver()
 
     private let fallbackName = "_noLogo"
-    private let bundlesToSearch: [Bundle]
-    private var normalizedLookup: [String: URL] = [:]
     private var resolvedCache: [String: UIImage] = [:]
 
-    private init() {
-        bundlesToSearch = Self.buildBundlesToSearch()
-        loadLogos()
-    }
+    private init() {}
 
     func image(for channelName: String) -> UIImage? {
         if let resolved = imageIfAvailable(for: channelName) {
             return resolved
         }
 
-        return resolveAssetFallbackImage() ?? resolveURL(for: fallbackName).flatMap {
-            UIImage(contentsOfFile: $0.path)
+        let fallback = resolveAssetFallbackImage()
+        if let fallback {
+            resolvedCache[channelName] = fallback
         }
+        return fallback
     }
 
     func imageIfAvailable(for channelName: String) -> UIImage? {
@@ -491,15 +405,16 @@ final class WatchTvLogoResolver {
             return cached
         }
 
+        let start = DispatchTime.now()
         if let assetImage = resolveAssetImage(for: channelName) {
             resolvedCache[channelName] = assetImage
+            let duration = WatchPerformanceDiagnostics.milliseconds(since: start)
+            if duration >= 16 {
+                WatchPerformanceDiagnostics.logger.warning(
+                    "Slow TV logo load: channel=\(channelName, privacy: .public) duration=\(duration, privacy: .public) ms"
+                )
+            }
             return assetImage
-        }
-
-        if let url = resolveURL(for: channelName),
-           let image = UIImage(contentsOfFile: url.path) {
-            resolvedCache[channelName] = image
-            return image
         }
 
         return nil
@@ -534,35 +449,6 @@ final class WatchTvLogoResolver {
         return output
     }
 
-    private func loadLogos() {
-        for bundle in bundlesToSearch {
-            var urls = bundle.urls(forResourcesWithExtension: "png", subdirectory: "tv-logos") ?? []
-            if urls.isEmpty {
-                urls = bundle.urls(forResourcesWithExtension: "png", subdirectory: nil) ?? []
-            }
-
-            for url in urls {
-                let fileName = url.deletingPathExtension().lastPathComponent
-                let normalized = Self.normalizedKey(fileName)
-                normalizedLookup[normalized] = normalizedLookup[normalized] ?? url
-            }
-        }
-    }
-
-    private static func buildBundlesToSearch() -> [Bundle] {
-        var output: [Bundle] = []
-        var seenURLs = Set<URL>()
-
-        for bundle in [Bundle.main] + Bundle.allBundles + Bundle.allFrameworks {
-            let url = bundle.bundleURL
-            guard !seenURLs.contains(url) else { continue }
-            seenURLs.insert(url)
-            output.append(bundle)
-        }
-
-        return output
-    }
-
     private func resolveAssetImage(for channelName: String) -> UIImage? {
         for candidate in assetNameCandidates(for: channelName) {
             if let image = UIImage(named: candidate) {
@@ -573,7 +459,7 @@ final class WatchTvLogoResolver {
     }
 
     private func resolveAssetFallbackImage() -> UIImage? {
-        for candidate in [fallbackName, "\(fallbackName) 1"] {
+        for candidate in ["TVLogoFallback", fallbackName, "\(fallbackName) 1"] {
             if let image = UIImage(named: candidate) {
                 return image
             }
@@ -607,44 +493,6 @@ final class WatchTvLogoResolver {
         return candidates
     }
 
-    private func resolveURL(for channelName: String) -> URL? {
-        let normalized = Self.normalizedKey(channelName)
-        guard !normalized.isEmpty else { return nil }
-
-        if let direct = normalizedLookup[normalized] {
-            return direct
-        }
-
-        for (keyword, logoKey) in aliasKeywords {
-            if normalized.contains(keyword), let url = normalizedLookup[logoKey] {
-                return url
-            }
-        }
-
-        return fuzzyMatch(normalizedChannel: normalized)
-    }
-
-    private func fuzzyMatch(normalizedChannel: String) -> URL? {
-        guard !normalizedChannel.isEmpty else { return nil }
-
-        var bestKey: String?
-        var bestScore = 0.0
-
-        for key in normalizedLookup.keys {
-            let score = Self.similarity(normalizedChannel, key)
-            if score > bestScore {
-                bestScore = score
-                bestKey = key
-            }
-        }
-
-        if let bestKey, bestScore >= 0.72 {
-            return normalizedLookup[bestKey]
-        }
-
-        return nil
-    }
-
     private static func normalizedKey(_ value: String) -> String {
         let lowered = value
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
@@ -656,36 +504,6 @@ final class WatchTvLogoResolver {
             .map { String($0) }
 
         return tokens.joined()
-    }
-
-    private static func similarity(_ lhs: String, _ rhs: String) -> Double {
-        let distance = levenshtein(lhs, rhs)
-        let maxLength = max(lhs.count, rhs.count)
-        guard maxLength > 0 else { return 1 }
-        return 1 - (Double(distance) / Double(maxLength))
-    }
-
-    private static func levenshtein(_ lhs: String, _ rhs: String) -> Int {
-        let lhsChars = Array(lhs)
-        let rhsChars = Array(rhs)
-
-        var previous = Array(0...rhsChars.count)
-        var current = Array(repeating: 0, count: rhsChars.count + 1)
-
-        for (i, lhsChar) in lhsChars.enumerated() {
-            current[0] = i + 1
-            for (j, rhsChar) in rhsChars.enumerated() {
-                let cost = lhsChar == rhsChar ? 0 : 1
-                current[j + 1] = min(
-                    previous[j + 1] + 1,
-                    current[j] + 1,
-                    previous[j] + cost
-                )
-            }
-            previous = current
-        }
-
-        return previous[rhsChars.count]
     }
 
     private let aliasKeywords: [(String, String)] = [

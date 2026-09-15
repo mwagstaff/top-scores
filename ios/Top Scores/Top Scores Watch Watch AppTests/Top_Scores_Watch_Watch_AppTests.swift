@@ -112,6 +112,76 @@ struct Top_Scores_Watch_Watch_AppTests {
         #expect(sections.map(\.title) == ["Played Today"])
     }
 
+    @Test func liveRefreshPreservesPhoneResolvedTeamShortNames() throws {
+        let synced = try makeMatch(
+            id: "man-utd-synced",
+            league: "Premier League",
+            weight: 100,
+            time: "20:00",
+            homeTeam: "Manchester United",
+            homeShortName: "Man Utd"
+        )
+        let latest = try makeMatch(
+            id: "man-utd-synced",
+            league: "Premier League",
+            weight: 100,
+            time: "20:00",
+            homeTeam: "Manchester United",
+            homeShortName: "Manchester United",
+            homeScore: 1,
+            awayScore: 0,
+            scoreStatus: "32'"
+        )
+
+        let refreshed = synced.mergingLatestSummary(latest)
+
+        #expect(refreshed.displayHomeTeam == "Man Utd")
+    }
+
+    @Test func bundledPhoneCatalogResolvesShortNamesFromExistingWatchPayloads() throws {
+        let match = try makeMatch(
+            id: "efl-cup",
+            league: "EFL Cup",
+            weight: 80,
+            time: "20:00",
+            homeTeam: "Manchester United",
+            awayTeam: "Brighton & Hove Albion",
+            homeShortName: "Manchester United",
+            awayShortName: "Brighton & Hove Albion"
+        )
+
+        #expect(match.displayHomeTeam == "Man Utd")
+        #expect(match.displayAwayTeam == "Brighton")
+    }
+
+    @Test func liveMinuteStatusesAreRecognizedWithoutRegularExpressions() throws {
+        let regularTime = try makeMatch(
+            id: "regular-time",
+            league: "Premier League",
+            weight: 100,
+            time: "20:00",
+            scoreStatus: "45+6'"
+        )
+        let extraTime = try makeMatch(
+            id: "extra-time",
+            league: "FA Cup",
+            weight: 80,
+            time: "20:00",
+            scoreStatus: "ET 105+1'"
+        )
+        let finished = try makeMatch(
+            id: "finished",
+            league: "Premier League",
+            weight: 100,
+            time: "20:00",
+            scoreStatus: "FT"
+        )
+
+        #expect(regularTime.isInProgress)
+        #expect(extraTime.isInProgress)
+        #expect(!finished.isInProgress)
+    }
+
     @Test func directMatchListChannelObjectsDecodeToNames() throws {
         let object: [String: Any] = [
             "date": "2026-09-14",
@@ -199,6 +269,24 @@ struct Top_Scores_Watch_Watch_AppTests {
         #expect(payload.fantasy?.players.first?.points == 8)
     }
 
+    @Test func fantasyMatchDetailsAreLimitedToPremierLeagueFixtures() throws {
+        let premierLeagueMatch = try makeMatch(
+            id: "ipswich-arsenal-league",
+            league: " Premier League ",
+            weight: 100,
+            time: "15:00"
+        )
+        let cupMatch = try makeMatch(
+            id: "ipswich-arsenal-cup",
+            league: "FA Cup",
+            weight: 80,
+            time: "15:00"
+        )
+
+        #expect(WatchFantasyMatchRules.isEligible(premierLeagueMatch))
+        #expect(!WatchFantasyMatchRules.isEligible(cupMatch))
+    }
+
     @Test func primaryBroadcastKeepsApiOrderAndUsesBrandedAsset() throws {
         let primary = try #require(
             WatchTvLogoResolver.shared.primaryResolvedLogo(
@@ -207,6 +295,18 @@ struct Top_Scores_Watch_Watch_AppTests {
         )
 
         #expect(primary.channel == "Sky Sports Main Event")
+    }
+
+    @Test func wideCompetitionLogosUseCompactSquareWatchMarks() throws {
+        let scottishPremiership = try #require(
+            WatchCompetitionLogoResolver.image(for: "Scottish Premiership")
+        )
+        let nationalLeague = try #require(
+            WatchCompetitionLogoResolver.image(for: "National League")
+        )
+
+        #expect(scottishPremiership.size == CGSize(width: 48, height: 48))
+        #expect(nationalLeague.size == CGSize(width: 48, height: 48))
     }
 
     @Test func tottenhamCrestResolvesByBSDIDInsteadOfTheFallback() throws {
@@ -244,6 +344,10 @@ struct Top_Scores_Watch_Watch_AppTests {
         weight: Double,
         date: String = "2026-09-14",
         time: String,
+        homeTeam: String? = nil,
+        awayTeam: String? = nil,
+        homeShortName: String? = nil,
+        awayShortName: String? = nil,
         homeScore: Int? = nil,
         awayScore: Int? = nil,
         scoreStatus: String? = nil,
@@ -253,12 +357,14 @@ struct Top_Scores_Watch_Watch_AppTests {
         var object: [String: Any] = [
             "date": date,
             "time": time,
-            "home_team": "Home \(id)",
-            "away_team": "Away \(id)",
+            "home_team": homeTeam ?? "Home \(id)",
+            "away_team": awayTeam ?? "Away \(id)",
             "league": league,
             "competition_weight": weight,
             "match_details_id": id
         ]
+        if let homeShortName { object["home_short_name"] = homeShortName }
+        if let awayShortName { object["away_short_name"] = awayShortName }
         if let homeScore { object["home_score"] = homeScore }
         if let awayScore { object["away_score"] = awayScore }
         if let scoreStatus { object["score_status"] = scoreStatus }

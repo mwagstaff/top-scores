@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import OSLog
 
 @main
 struct Top_Scores_Watch_Watch_AppApp: App {
@@ -19,7 +20,14 @@ struct Top_Scores_Watch_Watch_AppApp: App {
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
+                matchesStore.setSceneActive(true)
+                WatchPerformanceDiagnostics.logger.notice("Scene became active")
+                WatchMainThreadStallMonitor.shared.start()
                 matchesStore.refresh(requestPhoneSync: true)
+            } else {
+                matchesStore.setSceneActive(false)
+                WatchPerformanceDiagnostics.logger.notice("Scene left active state")
+                WatchMainThreadStallMonitor.shared.stop()
             }
         }
     }

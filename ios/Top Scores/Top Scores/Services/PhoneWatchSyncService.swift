@@ -29,7 +29,6 @@ final class PhoneWatchSyncService: NSObject {
             diagnosticLog("Watch sync context update failed: \(error)")
         }
 
-        session.transferUserInfo(payload)
         if session.isReachable {
             session.sendMessageData(data, replyHandler: nil) { error in
                 diagnosticLog("Watch sync message failed: \(error)")

@@ -426,10 +426,10 @@ struct MatchRow: View {
         guard prefersShortTeamNames else { return fullName }
 
         let providerName = isHome ? match.homeShortName : match.awayShortName
-        if let providerName = TeamIdentityStore.displayShortName(providerName, for: fullName) {
-            return providerName
-        }
-        return TeamIdentityStore.shared.preferredShortName(for: fullName) ?? fullName
+        return TeamIdentityStore.shared.preferredDisplayShortName(
+            for: fullName,
+            providerShortName: providerName
+        ) ?? fullName
     }
 
     private func teamAccessibilityLabel(isHome: Bool, summary: MatchRowTeamSummary?) -> String {

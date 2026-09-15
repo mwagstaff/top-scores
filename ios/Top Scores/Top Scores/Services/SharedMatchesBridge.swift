@@ -165,6 +165,13 @@ private struct WatchSharedMatchesTransferPayload: Codable, Sendable {
 private struct WatchSharedFantasySnapshot: Codable, Sendable {
     let gameweekTitle: String
     let players: [WatchSharedFantasyPlayer]
+    var deadlineTime: String? = nil
+    var deadlineGameweekID: Int? = nil
+    var scorePhase: String? = nil
+    var totalPoints: Int? = nil
+    var expectedPoints: Double? = nil
+    var syncedAt: String? = nil
+    var leagues: [WatchFantasyLeagueTransfer]? = nil
 }
 
 private struct WatchSharedFantasyPlayer: Codable, Sendable {
@@ -175,6 +182,10 @@ private struct WatchSharedFantasyPlayer: Codable, Sendable {
     let isCaptain: Bool
     let isViceCaptain: Bool
     let isStarter: Bool
+    var profileImageURL: String? = nil
+    var opponent: String? = nil
+    var expectedPoints: Double? = nil
+    var surname: String? = nil
 }
 
 private struct WatchSharedMatchTransfer: Codable, Sendable {
@@ -204,8 +215,14 @@ private struct WatchSharedMatchTransfer: Codable, Sendable {
         awayTeam = match.awayTeam
         homeTeamId = match.homeTeamId
         awayTeamId = match.awayTeamId
-        homeShortName = match.homeShortName
-        awayShortName = match.awayShortName
+        homeShortName = TeamIdentityStore.shared.preferredDisplayShortName(
+            for: match.homeTeam,
+            providerShortName: match.homeShortName
+        )
+        awayShortName = TeamIdentityStore.shared.preferredDisplayShortName(
+            for: match.awayTeam,
+            providerShortName: match.awayShortName
+        )
         league = match.league
         leagueSubcategory = match.leagueSubcategory
         competitionWeight = match.competitionWeight
@@ -225,8 +242,14 @@ private struct WatchSharedMatchTransfer: Codable, Sendable {
         awayTeam = match.awayTeam
         homeTeamId = match.homeTeamId
         awayTeamId = match.awayTeamId
-        homeShortName = match.homeShortName
-        awayShortName = match.awayShortName
+        homeShortName = TeamIdentityStore.shared.preferredDisplayShortName(
+            for: match.homeTeam,
+            providerShortName: match.homeShortName
+        )
+        awayShortName = TeamIdentityStore.shared.preferredDisplayShortName(
+            for: match.awayTeam,
+            providerShortName: match.awayShortName
+        )
         league = match.league
         leagueSubcategory = match.leagueSubcategory
         competitionWeight = match.competitionWeight
@@ -541,14 +564,25 @@ enum SharedMatchesBridge {
                 points: (raw["displayPoints"] as? NSNumber)?.intValue ?? 0,
                 isCaptain: (raw["isCaptain"] as? NSNumber)?.boolValue ?? false,
                 isViceCaptain: (raw["isViceCaptain"] as? NSNumber)?.boolValue ?? false,
-                isStarter: (raw["isStarter"] as? NSNumber)?.boolValue ?? false
+                isStarter: (raw["isStarter"] as? NSNumber)?.boolValue ?? false,
+                profileImageURL: raw["profileImageURL"] as? String,
+                opponent: raw["opponent"] as? String,
+                expectedPoints: (raw["expectedPoints"] as? NSNumber)?.doubleValue,
+                surname: raw["surname"] as? String
             )
         }
         guard !players.isEmpty else { return nil }
 
         return WatchSharedFantasySnapshot(
             gameweekTitle: (squad["gameweekTitle"] as? String) ?? "FPL",
-            players: players
+            players: players,
+            deadlineTime: squad["deadlineTime"] as? String,
+            deadlineGameweekID: (squad["deadlineGameweekID"] as? NSNumber)?.intValue,
+            scorePhase: squad["scorePhase"] as? String,
+            totalPoints: (squad["resolvedCurrentScore"] as? NSNumber)?.intValue,
+            expectedPoints: (squad["expectedPoints"] as? NSNumber)?.doubleValue,
+            syncedAt: squad["syncedAt"] as? String,
+            leagues: WatchFantasyTablesStore.load(managerEntryID: (squad["managerEntryID"] as? NSNumber)?.intValue)
         )
     }
 

@@ -223,6 +223,10 @@ struct WatchFantasyPlayer: Codable, Hashable, Identifiable {
     let isCaptain: Bool
     let isViceCaptain: Bool
     let isStarter: Bool
+    var profileImageURL: String? = nil
+    var opponent: String? = nil
+    var expectedPoints: Double? = nil
+    var surname: String? = nil
 
     var id: Int { elementID }
 }
@@ -230,6 +234,13 @@ struct WatchFantasyPlayer: Codable, Hashable, Identifiable {
 struct WatchFantasySnapshot: Codable, Hashable {
     let gameweekTitle: String
     let players: [WatchFantasyPlayer]
+    var deadlineTime: String? = nil
+    var deadlineGameweekID: Int? = nil
+    var scorePhase: String? = nil
+    var totalPoints: Int? = nil
+    var expectedPoints: Double? = nil
+    var syncedAt: String? = nil
+    var leagues: [WatchFantasyLeague]? = nil
 }
 
 struct WatchPreferencesSnapshot: Codable, Equatable {
@@ -271,6 +282,8 @@ private struct WatchTVChannelSummary: Decodable {
 }
 
 struct WatchMatch: Identifiable, Codable, Hashable {
+    let id: String
+    let dateTime: Date?
     let date: String
     let time: String
     let homeTeam: String
@@ -301,27 +314,23 @@ struct WatchMatch: Identifiable, Codable, Hashable {
     let homeTeamId: String?
     let awayTeamId: String?
 
-    var id: String {
-        "\(date)|\(time)|\(league)|\(homeTeam)|\(awayTeam)"
-    }
-
-    var dateTime: Date? {
-        WatchMatchDateParser.shared.parse(date: date, time: time)
-    }
-
     var scoreLine: String? {
         guard let homeScore, let awayScore else { return nil }
         return "\(homeScore)-\(awayScore)"
     }
 
     var displayHomeTeam: String {
-        let trimmed = homeShortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? homeTeam : trimmed
+        WatchTeamNameResolver.shared.displayName(
+            for: homeTeam,
+            providerShortName: homeShortName
+        )
     }
 
     var displayAwayTeam: String {
-        let trimmed = awayShortName?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmed.isEmpty ? awayTeam : trimmed
+        WatchTeamNameResolver.shared.displayName(
+            for: awayTeam,
+            providerShortName: awayShortName
+        )
     }
 
     var hasScore: Bool {
@@ -345,15 +354,84 @@ struct WatchMatch: Identifiable, Codable, Hashable {
         return league
     }
 
+    init(
+        date: String,
+        time: String,
+        homeTeam: String,
+        awayTeam: String,
+        homeShortName: String?,
+        awayShortName: String?,
+        league: String,
+        leagueSubcategory: String?,
+        competitionWeight: Double?,
+        watchabilityIndex: WatchMatchWatchabilityIndex?,
+        matchDetailsIDValue: String?,
+        tvChannels: [String],
+        homeScore: Int?,
+        awayScore: Int?,
+        scoreStatus: String?,
+        homeGoalScorers: [WatchGoalScorer],
+        awayGoalScorers: [WatchGoalScorer],
+        homeAssists: [WatchAssistProvider],
+        awayAssists: [WatchAssistProvider],
+        homeYellowCards: [WatchYellowCardEvent],
+        awayYellowCards: [WatchYellowCardEvent],
+        homeRedCards: [WatchRedCardEvent],
+        awayRedCards: [WatchRedCardEvent],
+        homeVarEvents: [WatchVarEvent],
+        awayVarEvents: [WatchVarEvent],
+        teamLineups: WatchTeamLineups?,
+        penaltyResult: String?,
+        homeTeamId: String?,
+        awayTeamId: String?
+    ) {
+        self.id = Self.makeID(date: date, time: time, league: league, homeTeam: homeTeam, awayTeam: awayTeam)
+        self.dateTime = WatchMatchDateParser.shared.parse(date: date, time: time)
+        self.date = date
+        self.time = time
+        self.homeTeam = homeTeam
+        self.awayTeam = awayTeam
+        self.homeShortName = homeShortName
+        self.awayShortName = awayShortName
+        self.league = league
+        self.leagueSubcategory = leagueSubcategory
+        self.competitionWeight = competitionWeight
+        self.watchabilityIndex = watchabilityIndex
+        self.matchDetailsIDValue = matchDetailsIDValue
+        self.tvChannels = tvChannels
+        self.homeScore = homeScore
+        self.awayScore = awayScore
+        self.scoreStatus = scoreStatus
+        self.homeGoalScorers = homeGoalScorers
+        self.awayGoalScorers = awayGoalScorers
+        self.homeAssists = homeAssists
+        self.awayAssists = awayAssists
+        self.homeYellowCards = homeYellowCards
+        self.awayYellowCards = awayYellowCards
+        self.homeRedCards = homeRedCards
+        self.awayRedCards = awayRedCards
+        self.homeVarEvents = homeVarEvents
+        self.awayVarEvents = awayVarEvents
+        self.teamLineups = teamLineups
+        self.penaltyResult = penaltyResult
+        self.homeTeamId = homeTeamId
+        self.awayTeamId = awayTeamId
+    }
+
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        date = try container.decode(String.self, forKey: .date)
-        time = try container.decode(String.self, forKey: .time)
-        homeTeam = try container.decode(String.self, forKey: .homeTeam)
-        awayTeam = try container.decode(String.self, forKey: .awayTeam)
+        let decodedDate = try container.decode(String.self, forKey: .date)
+        let decodedTime = try container.decode(String.self, forKey: .time)
+        let decodedHomeTeam = try container.decode(String.self, forKey: .homeTeam)
+        let decodedAwayTeam = try container.decode(String.self, forKey: .awayTeam)
+        let decodedLeague = try container.decode(String.self, forKey: .league)
+        date = decodedDate
+        time = decodedTime
+        homeTeam = decodedHomeTeam
+        awayTeam = decodedAwayTeam
         homeShortName = try container.decodeIfPresent(String.self, forKey: .homeShortName)
         awayShortName = try container.decodeIfPresent(String.self, forKey: .awayShortName)
-        league = try container.decode(String.self, forKey: .league)
+        league = decodedLeague
         leagueSubcategory = try container.decodeIfPresent(String.self, forKey: .leagueSubcategory)
         competitionWeight = try container.decodeIfPresent(Double.self, forKey: .competitionWeight)
         watchabilityIndex = try container.decodeIfPresent(WatchMatchWatchabilityIndex.self, forKey: .watchabilityIndex)
@@ -381,6 +459,24 @@ struct WatchMatch: Identifiable, Codable, Hashable {
         penaltyResult = try container.decodeIfPresent(String.self, forKey: .penaltyResult)
         homeTeamId = try container.decodeIfPresent(String.self, forKey: .homeTeamId)
         awayTeamId = try container.decodeIfPresent(String.self, forKey: .awayTeamId)
+        id = Self.makeID(
+            date: decodedDate,
+            time: decodedTime,
+            league: decodedLeague,
+            homeTeam: decodedHomeTeam,
+            awayTeam: decodedAwayTeam
+        )
+        dateTime = WatchMatchDateParser.shared.parse(date: decodedDate, time: decodedTime)
+    }
+
+    private static func makeID(
+        date: String,
+        time: String,
+        league: String,
+        homeTeam: String,
+        awayTeam: String
+    ) -> String {
+        "\(date)|\(time)|\(league)|\(homeTeam)|\(awayTeam)"
     }
 
     enum CodingKeys: String, CodingKey {
@@ -419,8 +515,6 @@ struct WatchMatch: Identifiable, Codable, Hashable {
 private enum WatchMatchStatusFormatter {
     private static let inProgressTokens: Set<String> = ["HT", "ET", "LIVE", "PENS", "PEN", "PEN."]
     private static let completeTokens: Set<String> = ["FT", "AET"]
-    private static let minutePattern = #"^\d{1,3}(?:\+\d{1,2})?'?$"#
-    private static let extraTimeMinutePattern = #"^ET\s+\d{1,3}(?:\+\d{1,2})?'?$"#
 
     static func displayValue(for rawStatus: String) -> String {
         let status = normalized(rawStatus)
@@ -453,11 +547,31 @@ private enum WatchMatchStatusFormatter {
     }
 
     private static func isMinuteStatus(_ status: String) -> Bool {
-        status.range(of: minutePattern, options: .regularExpression) != nil
+        var value = status[...]
+        if value.last == "'" {
+            value = value.dropLast()
+        }
+        let components = value.split(separator: "+", omittingEmptySubsequences: false)
+        guard (1...2).contains(components.count),
+              isASCIIInteger(components[0], maximumDigits: 3) else {
+            return false
+        }
+        return components.count == 1 || isASCIIInteger(components[1], maximumDigits: 2)
     }
 
     private static func isExtraTimeMinuteStatus(_ status: String) -> Bool {
-        status.range(of: extraTimeMinutePattern, options: [.regularExpression, .caseInsensitive]) != nil
+        guard status.count > 3,
+              status.prefix(3).uppercased() == "ET " else {
+            return false
+        }
+        return isMinuteStatus(String(status.dropFirst(3)))
+    }
+
+    private static func isASCIIInteger(_ value: Substring, maximumDigits: Int) -> Bool {
+        guard !value.isEmpty, value.count <= maximumDigits else { return false }
+        return value.utf8.allSatisfy { byte in
+            byte >= 48 && byte <= 57
+        }
     }
 }
 
@@ -630,7 +744,7 @@ enum WatchMatchGrouping {
     static func todaysMatchCount(_ matches: [WatchMatch]) -> Int {
         let calendar = Calendar.current
         return matches.reduce(into: 0) { count, match in
-            guard let matchDate = WatchMatchDateParser.shared.parse(date: match.date, time: "00:00") else { return }
+            guard let matchDate = match.dateTime else { return }
             if calendar.isDateInToday(matchDate) {
                 count += 1
             }
