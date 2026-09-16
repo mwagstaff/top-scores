@@ -241,6 +241,7 @@ struct WatchFantasySnapshot: Codable, Hashable {
     var expectedPoints: Double? = nil
     var syncedAt: String? = nil
     var leagues: [WatchFantasyLeague]? = nil
+    var managerEntryID: Int? = nil
 }
 
 struct WatchPreferencesSnapshot: Codable, Equatable {

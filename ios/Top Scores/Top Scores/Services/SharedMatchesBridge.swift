@@ -172,6 +172,7 @@ private struct WatchSharedFantasySnapshot: Codable, Sendable {
     var expectedPoints: Double? = nil
     var syncedAt: String? = nil
     var leagues: [WatchFantasyLeagueTransfer]? = nil
+    var managerEntryID: Int? = nil
 }
 
 private struct WatchSharedFantasyPlayer: Codable, Sendable {
@@ -582,7 +583,8 @@ enum SharedMatchesBridge {
             totalPoints: (squad["resolvedCurrentScore"] as? NSNumber)?.intValue,
             expectedPoints: (squad["expectedPoints"] as? NSNumber)?.doubleValue,
             syncedAt: squad["syncedAt"] as? String,
-            leagues: WatchFantasyTablesStore.load(managerEntryID: (squad["managerEntryID"] as? NSNumber)?.intValue)
+            leagues: WatchFantasyTablesStore.load(managerEntryID: (squad["managerEntryID"] as? NSNumber)?.intValue),
+            managerEntryID: (squad["managerEntryID"] as? NSNumber)?.intValue
         )
     }
 

@@ -128,18 +128,23 @@ private struct WatchFantasyImage: View {
     let url: String?
     let initials: String
     var isPlayer = false
+    @State private var loader = WatchFantasyImageLoader()
 
     var body: some View {
-        AsyncImage(url: url.flatMap(URL.init(string:))) { image in
-            image.resizable().scaledToFit()
-        } placeholder: {
-            if isPlayer {
+        Group {
+            if let image = loader.image {
+                Image(uiImage: image).resizable().scaledToFit()
+            } else if isPlayer {
                 Image(systemName: "person.fill").foregroundStyle(.secondary)
             } else {
-                Text(initials).font(.system(size: 9, weight: .bold)).minimumScaleFactor(0.7)
+                Text(initials)
+                    .font(.system(size: 9, weight: .bold)).minimumScaleFactor(0.7)
+                    .frame(width: 26, height: 26)
+                    .background(Color.accentColor.opacity(0.3), in: Circle())
             }
         }
         .frame(width: 26, height: 30)
+        .task(id: url) { await loader.load(urlString: url) }
         .accessibilityHidden(true)
     }
 }
@@ -192,7 +197,12 @@ private struct WatchFantasyLeagueView: View {
         List {
             Section("Season points") {
                 ForEach(rows) { row in
-                    WatchFantasyStandingRow(row: row)
+                    WatchFantasyStandingRow(
+                        row: row,
+                        isCurrentUser: row.entry == matchesStore.fantasySnapshot?.managerEntryID,
+                        badgeURL: WatchFantasyImageLoader.normalizedURL(row.clubBadgeSrc) != nil
+                            ? row.clubBadgeSrc : knownBadge(for: row.entry)
+                    )
                 }
                 if rows.isEmpty && !store.isLoading && store.errorMessage == nil {
                     Text("No standings available yet.").font(.caption)
@@ -223,19 +233,29 @@ private struct WatchFantasyLeagueView: View {
         loadTask?.cancel()
         loadTask = Task { await store.loadNextPage(leagueID: league.id) }
     }
+
+    private func knownBadge(for entryID: Int) -> String? {
+        matchesStore.fantasySnapshot?.leagues?.lazy.flatMap(\.entries)
+            .first { $0.entry == entryID && WatchFantasyImageLoader.normalizedURL($0.clubBadgeSrc) != nil }?.clubBadgeSrc
+    }
 }
 
 private struct WatchFantasyStandingRow: View {
     let row: WatchFantasyStanding
+    let isCurrentUser: Bool
+    let badgeURL: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(alignment: .top, spacing: 5) {
                 Text("\(row.rank)").font(.caption2.monospacedDigit())
-                WatchFantasyImage(url: row.clubBadgeSrc, initials: WatchFantasyPresentation.initials(row.entryName))
+                WatchFantasyImage(url: badgeURL, initials: WatchFantasyPresentation.initials(row.entryName))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(row.entryName).font(.caption.weight(.semibold))
                     Text(row.playerName).font(.caption2).foregroundStyle(.secondary)
+                    if isCurrentUser {
+                        Text("You").font(.caption2.bold()).foregroundStyle(Color.accentColor)
+                    }
                 }
                 .fixedSize(horizontal: false, vertical: true)
             }
@@ -249,8 +269,16 @@ private struct WatchFantasyStandingRow: View {
             }
         }
         .listRowInsets(EdgeInsets(top: 6, leading: 5, bottom: 6, trailing: 5))
+        .listRowBackground(
+            RoundedRectangle(cornerRadius: 10)
+                .fill(isCurrentUser ? Color.accentColor.opacity(0.22) : Color(white: 0.13))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(isCurrentUser ? Color.accentColor.opacity(0.75) : Color.clear, lineWidth: 1)
+                }
+        )
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Position \(row.rank), \(row.entryName), \(row.playerName), \(row.total.map(String.init) ?? "unavailable") points, \(row.trendDescription)")
+        .accessibilityLabel("\(isCurrentUser ? "Your team, " : "")Position \(row.rank), \(row.entryName), \(row.playerName), \(row.total.map(String.init) ?? "unavailable") points, \(row.trendDescription)")
     }
 }
 

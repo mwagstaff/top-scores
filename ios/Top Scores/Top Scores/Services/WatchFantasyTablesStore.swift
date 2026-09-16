@@ -79,9 +79,7 @@ enum WatchFantasyTablesStore {
         }
         var leagues = [WatchFantasyLeagueTransfer(id: 0, name: "Rivals", entries: rankedRivals)]
         let tracked = Dictionary(uniqueKeysWithValues: model.trackedLeagueStandings.map { ($0.leagueID, $0) })
-        leagues += (profile.leagues?.classic ?? []).sorted {
-            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
-        }.map { league in
+        leagues += playerLeagues(from: profile).map { league in
             WatchFantasyLeagueTransfer(id: league.id, name: league.name, entries: (tracked[league.id]?.standings ?? []).map {
                 WatchFantasyStandingTransfer(
                     entry: $0.entry, rank: $0.rank, lastRank: $0.lastRank, entryName: $0.entryName,
@@ -92,5 +90,11 @@ enum WatchFantasyTablesStore {
         guard let data = try? JSONEncoder().encode(Payload(managerEntryID: entryID, leagues: leagues)) else { return }
         UserDefaults.standard.set(data, forKey: key)
         SharedMatchesBridge.refreshWatchFantasyState()
+    }
+
+    static func playerLeagues(from profile: FantasyEntryProfile) -> [FantasyEntryClassicLeague] {
+        (profile.leagues?.classic ?? []).filter(\.isPlayerCreated).sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
     }
 }

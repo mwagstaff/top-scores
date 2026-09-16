@@ -17,6 +17,13 @@ struct WatchFantasyStanding: Codable, Hashable, Identifiable {
     let clubBadgeSrc: String?
 
     var id: Int { entry }
+
+    func preservingBadge(from previous: WatchFantasyStanding?) -> WatchFantasyStanding {
+        guard WatchFantasyImageLoader.normalizedURL(clubBadgeSrc) == nil,
+              let badge = previous?.clubBadgeSrc else { return self }
+        return WatchFantasyStanding(entry: entry, rank: rank, lastRank: lastRank, entryName: entryName,
+                                    playerName: playerName, total: total, clubBadgeSrc: badge)
+    }
     var trend: String {
         guard let lastRank, lastRank > 0, rank > 0 else { return "minus" }
         if rank < lastRank { return "arrow.up" }
@@ -113,7 +120,8 @@ final class WatchFantasyLeagueStore {
         do {
             let response = try await fetch(leagueID: leagueID, page: page + 1)
             try Task.checkCancellation()
-            let rows = response.standings.results
+            let knownEntries = Dictionary(entries.map { ($0.entry, $0) }, uniquingKeysWith: { first, _ in first })
+            let rows = response.standings.results.map { $0.preservingBadge(from: knownEntries[$0.entry]) }
             if page == 0 { entries = rows }
             else {
                 let existing = Set(entries.map(\.id))
