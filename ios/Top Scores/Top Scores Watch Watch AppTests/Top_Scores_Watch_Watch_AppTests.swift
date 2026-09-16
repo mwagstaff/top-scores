@@ -112,6 +112,21 @@ struct Top_Scores_Watch_Watch_AppTests {
         #expect(sections.map(\.title) == ["Played Today"])
     }
 
+    @Test func todaySectionsKeepMatchesWithAnUnresolvedStatusAfterKickoff() throws {
+        let now = try #require(WatchMatchDateParser.shared.parse(date: "2026-09-14", time: "21:00"))
+        let match = try makeMatch(
+            id: "championship",
+            league: "Championship",
+            weight: 60,
+            time: "20:00"
+        )
+
+        let sections = WatchMatchCollections.todaySections(from: [match], now: now)
+
+        #expect(sections.map(\.title) == ["Today"])
+        #expect(sections.first?.matches.map(\.matchDetailsIDValue) == ["championship"])
+    }
+
     @Test func liveRefreshPreservesPhoneResolvedTeamShortNames() throws {
         let synced = try makeMatch(
             id: "man-utd-synced",

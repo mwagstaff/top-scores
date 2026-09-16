@@ -177,9 +177,18 @@ enum WatchMatchCollections {
             }
             .sorted(by: ascendingMatchDate)
 
+        let unresolvedToday = matches
+            .filter { match in
+                guard isSameDay(match, as: today, calendar: calendar) else { return false }
+                return !match.isInProgress && !isFinished(match)
+                    && (match.dateTime ?? WatchMatchDateParser.shared.parse(date: match.date, time: "00:00") ?? .distantFuture) < now
+            }
+            .sorted(by: ascendingMatchDate)
+
         return [
             WatchFixtureSection(id: "live", title: "Live", matches: live),
             WatchFixtureSection(id: "upcoming", title: "Upcoming", matches: upcoming),
+            WatchFixtureSection(id: "today", title: "Today", matches: unresolvedToday),
             WatchFixtureSection(id: "playedToday", title: "Played Today", matches: playedToday)
         ].filter { !$0.matches.isEmpty }
     }
