@@ -605,23 +605,58 @@ struct WatchSharedMatchesPayload: Codable {
 }
 
 enum WatchFeaturedMatchSelector {
-    static func select(from matches: [WatchMatch], at date: Date) -> WatchMatch? {
-        guard !matches.isEmpty else { return nil }
+    static let previewInterval: TimeInterval = 15 * 60
 
-        let live = matches.filter(\.isInProgress)
-        if !live.isEmpty {
-            return ranked(live).first
+    static func select(
+        from matches: [WatchMatch],
+        at date: Date,
+        selectedMatchID: String? = nil
+    ) -> WatchMatch? {
+        let today = matches.filter {
+            guard let kickoff = $0.dateTime else { return false }
+            return Calendar.current.isDate(kickoff, inSameDayAs: date)
+        }
+        let selected = today.first { $0.id == selectedMatchID }
+        // A time estimate must never end a live match, including extra time or penalties.
+        if let selected, !hasCompleted(selected) {
+            return selected
         }
 
-        let upcoming = matches.filter { match in
-            guard let kickoff = match.dateTime else { return false }
-            return kickoff > date && !WatchMatchStatusRules.isFinished(match)
+        let groups = Dictionary(grouping: today) { $0.dateTime! }
+        let kickoffs = groups.keys.sorted()
+        let eligible = kickoffs.filter { kickoff in
+            kickoff.addingTimeInterval(-previewInterval) <= date &&
+                (selected?.dateTime.map { kickoff > $0 } ?? true)
         }
-        if !upcoming.isEmpty {
-            return ranked(upcoming).first
+        let featured = eligible.compactMap { ranked(groups[$0] ?? []).first }
+        // Recover the current crop when there is no saved selection, and keep an
+        // unfinished earlier crop on screen even when later kick-offs overlap.
+        if let unfinished = featured.first(where: { !hasCompleted($0) }) {
+            return unfinished
         }
+        if let result = featured.last {
+            return result
+        }
+        if let selected { return selected }
+        guard let firstKickoff = kickoffs.first else { return nil }
+        return ranked(groups[firstKickoff] ?? []).first
+    }
 
-        return ranked(matches).first
+    static func transitionDates(from matches: [WatchMatch], after date: Date) -> [Date] {
+        let calendar = Calendar.current
+        guard let midnight = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: date)) else {
+            return []
+        }
+        let previews = matches.compactMap { match -> Date? in
+            guard let kickoff = match.dateTime,
+                  calendar.isDate(kickoff, inSameDayAs: date) else { return nil }
+            return kickoff.addingTimeInterval(-previewInterval)
+        }
+        return Array(Set(previews + [midnight])).filter { $0 > date }.sorted()
+    }
+
+    private static func hasCompleted(_ match: WatchMatch) -> Bool {
+        WatchMatchStatusRules.isFinished(match) && !match.isInProgress
     }
 
     private static func ranked(_ matches: [WatchMatch]) -> [WatchMatch] {

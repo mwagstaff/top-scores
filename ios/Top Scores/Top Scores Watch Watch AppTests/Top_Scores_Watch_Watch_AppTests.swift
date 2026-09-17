@@ -217,17 +217,85 @@ struct Top_Scores_Watch_Watch_AppTests {
         #expect(match.tvChannels == ["Sky Sports Main Event", "Sky Sports Premier League"])
     }
 
-    @Test func featuredMatchUsesClubEloQualityBeforeKickoffTime() throws {
+    @Test func featuredMatchUsesClubEloQualityWithinKickoffCrop() throws {
         let now = try #require(WatchMatchDateParser.shared.parse(date: "2026-09-14", time: "23:22"))
         let matches = try [
-            makeMatch(id: "como-parma", league: "Serie A", weight: 45, time: "17:30", homeScore: 2, awayScore: 1, scoreStatus: "FT", teamQuality: 46, watchability: 46),
-            makeMatch(id: "inter-udinese", league: "Serie A", weight: 45, time: "19:45", homeScore: 5, awayScore: 3, scoreStatus: "FT", teamQuality: 58, watchability: 45),
-            makeMatch(id: "leeds-newcastle", league: "Premier League", weight: 100, time: "20:00", homeScore: 4, awayScore: 1, scoreStatus: "FT", teamQuality: 67, watchability: 76)
+            makeMatch(id: "como-parma", league: "Serie A", weight: 45, time: "20:00", homeScore: 2, awayScore: 1, scoreStatus: "FT", teamQuality: 46, watchability: 90),
+            makeMatch(id: "inter-udinese", league: "Serie A", weight: 45, time: "20:00", homeScore: 5, awayScore: 3, scoreStatus: "FT", teamQuality: 58, watchability: 90),
+            makeMatch(id: "leeds-newcastle", league: "Premier League", weight: 10, time: "20:00", homeScore: 4, awayScore: 1, scoreStatus: "FT", teamQuality: 67, watchability: 76)
         ]
 
         let featured = WatchFeaturedMatchSelector.select(from: matches, at: now)
 
         #expect(featured?.matchDetailsIDValue == "leeds-newcastle")
+    }
+
+    @Test func featuredMatchFollowsKickoffCropsAndPreviewBoundaries() throws {
+        let matches = try [
+            makeMatch(id: "early-small", league: "League", weight: 100, time: "12:00", scoreStatus: "FT", teamQuality: 40, watchability: 99),
+            makeMatch(id: "early-big", league: "League", weight: 10, time: "12:00", scoreStatus: "FT", teamQuality: 60, watchability: 50),
+            makeMatch(id: "afternoon-small", league: "League", weight: 100, time: "15:00", scoreStatus: "FT", teamQuality: 50, watchability: 99),
+            makeMatch(id: "afternoon-big", league: "League", weight: 10, time: "15:00", scoreStatus: "FT", teamQuality: 90, watchability: 50),
+            makeMatch(id: "evening", league: "League", weight: 10, time: "17:30", scoreStatus: "FT", teamQuality: 70, watchability: 50)
+        ]
+        for (time, expectedID) in [
+            ("00:00", "early-big"), ("14:44", "early-big"),
+            ("14:45", "afternoon-big"), ("17:14", "afternoon-big"),
+            ("17:15", "evening"), ("23:59", "evening")
+        ] {
+            let now = try #require(WatchMatchDateParser.shared.parse(date: "2026-09-14", time: time))
+            #expect(WatchFeaturedMatchSelector.select(from: matches, at: now)?.matchDetailsIDValue == expectedID)
+        }
+    }
+
+    @Test func featuredMatchKeepsSelectedMatchUntilConfirmedCompletion() throws {
+        let now = try #require(WatchMatchDateParser.shared.parse(date: "2026-09-14", time: "17:15"))
+        for status in ["HT", "90+8", "ET 110", "PENS", ""] {
+            let selected = try makeMatch(id: "selected", league: "League", weight: 10, time: "15:00", scoreStatus: status, teamQuality: 60, watchability: 50)
+            let rival = try makeMatch(id: "rival", league: "League", weight: 100, time: "15:00", scoreStatus: "75", teamQuality: 99, watchability: 99)
+            let next = try makeMatch(id: "next", league: "League", weight: 100, time: "17:30", teamQuality: 95, watchability: 99)
+            let featured = WatchFeaturedMatchSelector.select(from: [selected, rival, next], at: now, selectedMatchID: selected.id)
+            #expect(featured?.id == selected.id)
+        }
+        let finished = try makeMatch(id: "selected", league: "League", weight: 10, time: "15:00", scoreStatus: "AET")
+        let next = try makeMatch(id: "next", league: "League", weight: 100, time: "17:30")
+        #expect(WatchFeaturedMatchSelector.select(from: [finished, next], at: now, selectedMatchID: finished.id)?.id == next.id)
+    }
+
+    @Test func featuredMatchRecoversOverlappingLiveCropWithoutSavedSelection() throws {
+        let now = try #require(WatchMatchDateParser.shared.parse(date: "2026-09-14", time: "14:45"))
+        let live = try makeMatch(id: "live", league: "League", weight: 10, time: "12:00", scoreStatus: "ET 115", teamQuality: 60, watchability: 50)
+        let next = try makeMatch(id: "next", league: "League", weight: 100, time: "15:00", teamQuality: 99, watchability: 99)
+        #expect(WatchFeaturedMatchSelector.select(from: [live, next], at: now)?.id == live.id)
+    }
+
+    @Test func featuredMatchKeepsResultUntilNextCropAndResetsAtMidnight() throws {
+        let result = try makeMatch(id: "result", league: "League", weight: 10, time: "15:00", homeScore: 2, awayScore: 1, scoreStatus: "FT")
+        let next = try makeMatch(id: "next", league: "League", weight: 100, time: "17:30")
+        let tomorrow = try makeMatch(id: "tomorrow", league: "League", weight: 10, date: "2026-09-15", time: "12:00")
+        let beforePreview = try #require(WatchMatchDateParser.shared.parse(date: "2026-09-14", time: "17:14"))
+        #expect(WatchFeaturedMatchSelector.select(from: [result, next, tomorrow], at: beforePreview, selectedMatchID: result.id)?.id == result.id)
+        let late = try #require(WatchMatchDateParser.shared.parse(date: "2026-09-14", time: "23:59"))
+        #expect(WatchFeaturedMatchSelector.select(from: [result, tomorrow], at: late, selectedMatchID: result.id)?.id == result.id)
+        let midnight = try #require(WatchMatchDateParser.shared.parse(date: "2026-09-15", time: "00:00"))
+        #expect(WatchFeaturedMatchSelector.select(from: [result, tomorrow], at: midnight, selectedMatchID: result.id)?.id == tomorrow.id)
+        #expect(WatchFeaturedMatchSelector.select(from: [result], at: midnight, selectedMatchID: result.id) == nil)
+    }
+
+    @Test func featuredMatchTimelineUsesPreviewsAndMidnightWithoutEstimatedFullTime() throws {
+        let matches = try [
+            makeMatch(id: "early", league: "League", weight: 10, time: "12:00"),
+            makeMatch(id: "afternoon", league: "League", weight: 10, time: "15:00"),
+            makeMatch(id: "afternoon-other", league: "League", weight: 10, time: "15:00"),
+            makeMatch(id: "evening", league: "League", weight: 10, time: "17:30")
+        ]
+        let now = try #require(WatchMatchDateParser.shared.parse(date: "2026-09-14", time: "12:00"))
+        let expected = try [
+            #require(WatchMatchDateParser.shared.parse(date: "2026-09-14", time: "14:45")),
+            #require(WatchMatchDateParser.shared.parse(date: "2026-09-14", time: "17:15")),
+            #require(WatchMatchDateParser.shared.parse(date: "2026-09-15", time: "00:00"))
+        ]
+        #expect(WatchFeaturedMatchSelector.transitionDates(from: matches, after: now) == expected)
     }
 
     @Test func matchEventsAreNewestFirstIncludingAddedTime() throws {

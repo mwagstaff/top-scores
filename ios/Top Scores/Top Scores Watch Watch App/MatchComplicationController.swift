@@ -14,6 +14,11 @@ final class MatchComplicationController: NSObject, CLKComplicationDataSource {
     private let colorfulOpenGaugeDescriptorIdentifier = "today-matches-open-color"
     private let rectangularDescriptorIdentifier = "today-matches-rectangular"
     private let matchRectangularDescriptorIdentifier = "today-match-rectangular"
+    private let selectionsKey = "complication.featuredMatchSelections"
+    private struct Selection: Codable {
+        let date: Date
+        let matchID: String?
+    }
     private let fallbackRectangularSize = CGSize(width: 300, height: 140)
     private let matchTimeFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -89,23 +94,9 @@ final class MatchComplicationController: NSObject, CLKComplicationDataSource {
             return
         }
 
-        let calendar = Calendar.current
-        let todaysMatches = todaysMatches(in: loadMatches(), on: date)
-        var transitionDates = todaysMatches.flatMap { match -> [Date] in
-            guard let kickoff = match.dateTime else { return [] }
-            return [kickoff, kickoff.addingTimeInterval(2 * 60 * 60)]
-        }
-        if let nextMidnight = calendar.nextDate(
-            after: date,
-            matching: DateComponents(hour: 0, minute: 0, second: 0),
-            matchingPolicy: .nextTime
-        ) {
-            transitionDates.append(nextMidnight)
-        }
+        let transitionDates = WatchFeaturedMatchSelector.transitionDates(from: loadMatches(), after: date)
 
-        let entries = Array(Set(transitionDates))
-            .filter { $0 > date }
-            .sorted()
+        let entries = transitionDates
             .prefix(limit)
             .compactMap { makeEntry(for: $0, complication: complication) }
         handler(entries.isEmpty ? nil : entries)
@@ -122,7 +113,8 @@ final class MatchComplicationController: NSObject, CLKComplicationDataSource {
         } else {
             interval = 30 * 60
         }
-        handler(now.addingTimeInterval(interval))
+        let nextTransition = WatchFeaturedMatchSelector.transitionDates(from: today, after: now).first
+        handler(min(now.addingTimeInterval(interval), nextTransition ?? .distantFuture))
     }
 
     func requestedUpdateDidBegin() {
@@ -139,7 +131,7 @@ final class MatchComplicationController: NSObject, CLKComplicationDataSource {
             ))
             return
         }
-        handler(makeTemplate(for: complication, count: 4, todaysMatches: [], date: Date()))
+        handler(makeTemplate(for: complication, count: 4, featuredMatch: nil))
     }
 
     func getPrivacyBehavior(
@@ -149,24 +141,51 @@ final class MatchComplicationController: NSObject, CLKComplicationDataSource {
         handler(.showOnLockScreen)
     }
 
-    private func makeEntry(for date: Date, complication: CLKComplication) -> CLKComplicationTimelineEntry? {
+    private func makeEntry(
+        for date: Date,
+        complication: CLKComplication
+    ) -> CLKComplicationTimelineEntry? {
         let matches = loadMatches()
         let todaysMatches = todaysMatches(in: matches, on: date)
         let count = todaysMatches.count
+        let selections = loadSelections()
+        let selectedMatchID = selections.last(where: { $0.date <= date })?.matchID
+        let featuredMatch = WatchFeaturedMatchSelector.select(
+            from: todaysMatches,
+            at: date,
+            selectedMatchID: selectedMatchID
+        )
         guard let template = makeTemplate(
             for: complication,
             count: count,
-            todaysMatches: todaysMatches,
-            date: date
+            featuredMatch: featuredMatch
         ) else { return nil }
+        if complication.family == .graphicRectangular {
+            // Future entries may become visible without a current-entry callback.
+            // Save their selection with its effective date, so planning tomorrow
+            // never changes today's lock and refreshes preserve the visible match.
+            let startOfToday = Calendar.current.startOfDay(for: Date())
+            var updated = selections.filter { $0.date >= startOfToday && $0.date < date }
+            updated.append(Selection(date: date, matchID: featuredMatch?.id))
+            if let data = try? JSONEncoder().encode(updated) {
+                UserDefaults.standard.set(data, forKey: selectionsKey)
+            }
+        }
         return CLKComplicationTimelineEntry(date: date, complicationTemplate: template)
+    }
+
+    private func loadSelections() -> [Selection] {
+        guard let data = UserDefaults.standard.data(forKey: selectionsKey),
+              let selections = try? JSONDecoder().decode([Selection].self, from: data) else {
+            return []
+        }
+        return selections.sorted { $0.date < $1.date }
     }
 
     private func makeTemplate(
         for complication: CLKComplication,
         count: Int,
-        todaysMatches: [WatchMatch],
-        date: Date
+        featuredMatch: WatchMatch?
     ) -> CLKComplicationTemplate? {
         switch complication.family {
         case .graphicCircular:
@@ -180,10 +199,10 @@ final class MatchComplicationController: NSObject, CLKComplicationDataSource {
         case .graphicRectangular:
             if complication.identifier == matchRectangularDescriptorIdentifier {
                 return CLKComplicationTemplateGraphicRectangularFullView(
-                    MatchRectangularComplicationView(match: featuredMatch(for: date, todaysMatches: todaysMatches))
+                    MatchRectangularComplicationView(match: featuredMatch)
                 )
             }
-            return makeRectangularTemplate(count: count, todaysMatches: todaysMatches, date: date)
+            return makeRectangularTemplate(count: count, featuredMatch: featuredMatch)
         default:
             return nil
         }
@@ -242,10 +261,8 @@ final class MatchComplicationController: NSObject, CLKComplicationDataSource {
 
     private func makeRectangularTemplate(
         count: Int,
-        todaysMatches: [WatchMatch],
-        date: Date
+        featuredMatch: WatchMatch?
     ) -> CLKComplicationTemplateGraphicRectangularFullImage {
-        let featuredMatch = featuredMatch(for: date, todaysMatches: todaysMatches)
         let image = makeRectangularComplicationImage(
             count: count,
             featuredMatch: featuredMatch
@@ -287,10 +304,6 @@ final class MatchComplicationController: NSObject, CLKComplicationDataSource {
             }
             return calendar.isDate(matchDate, inSameDayAs: date)
         }
-    }
-
-    private func featuredMatch(for date: Date, todaysMatches: [WatchMatch]) -> WatchMatch? {
-        WatchFeaturedMatchSelector.select(from: todaysMatches, at: date)
     }
 
     private func makeRectangularComplicationImage(
