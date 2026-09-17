@@ -923,6 +923,59 @@ struct Top_ScoresTests {
         #expect(resolvedSubstitute.cutoutURL == substitutePortraitURL)
     }
 
+    @Test func lineupBench_includesUnusedPlayersAndMatchesIncomingPlayerByID() throws {
+        let payload = """
+        {
+          "starting_lineup": [],
+          "substitutes": [
+            { "name": "Ismaïla Sarr", "number": 7, "id_player": "1787" },
+            { "name": "Eddie Nketiah", "number": 9, "id_player": "434" }
+          ],
+          "substitutions": [
+            {
+              "minute": "64'",
+              "player_off": { "name": "Y. Pino" },
+              "player_on": { "name": "I. Sarr", "id_player": "1787" }
+            }
+          ]
+        }
+        """
+        let lineup = try JSONDecoder().decode(MatchTeamLineup.self, from: Data(payload.utf8))
+        let bench = matchLineupBenchPlayers(in: lineup)
+        #expect(bench.map(\.name) == ["Ismaïla Sarr", "Eddie Nketiah"])
+        #expect(matchLineupSubstitutionOn(for: bench[0], in: lineup)?.minute == "64'")
+        #expect(matchLineupSubstitutionOn(for: bench[1], in: lineup) == nil)
+    }
+
+    @Test func lineupBench_showsPlayersBeforeAnySubstitutionAndPreservesIncidentOnlyPlayers() throws {
+        let payload = """
+        {
+          "starting_lineup": [],
+          "substitutes": [{ "name": "Eddie Nketiah", "id_player": "434" }],
+          "substitutions": []
+        }
+        """
+        let lineup = try JSONDecoder().decode(MatchTeamLineup.self, from: Data(payload.utf8))
+        #expect(matchLineupBenchPlayers(in: lineup) == lineup.substitutes)
+
+        let incidentOnlyPayload = """
+        {
+          "starting_lineup": [],
+          "substitutes": [],
+          "substitutions": [{
+            "minute": "64'",
+            "player_off": { "name": "Y. Pino" },
+            "player_on": { "name": "I. Sarr", "id_player": "1787" }
+          }]
+        }
+        """
+        let incidentOnly = try JSONDecoder().decode(MatchTeamLineup.self, from: Data(incidentOnlyPayload.utf8))
+        let bench = matchLineupBenchPlayers(in: incidentOnly)
+        #expect(bench.count == 1)
+        #expect(bench[0].idPlayer == "1787")
+        #expect(matchLineupSubstitutionOn(for: bench[0], in: incidentOnly)?.minute == "64'")
+    }
+
     @Test func matchEventPlayerResolver_usesPlayerIDAcrossBothLineupsForOwnGoals() throws {
         let portraitURL = "https://sports.bzzoiro.com/img/player/12537/"
         let oksanen = MatchLineupPlayer(

@@ -3323,7 +3323,7 @@ private struct MatchLineupTeamPanelsView: View {
                     side: .away
                 )
 
-                if !homeLineup.substitutions.isEmpty {
+                if !matchLineupBenchPlayers(in: homeLineup).isEmpty {
                     substitutes(
                         lineup: homeLineup,
                         teamName: homeTeamName,
@@ -3332,7 +3332,7 @@ private struct MatchLineupTeamPanelsView: View {
                     )
                 }
 
-                if !awayLineup.substitutions.isEmpty {
+                if !matchLineupBenchPlayers(in: awayLineup).isEmpty {
                     substitutes(
                         lineup: awayLineup,
                         teamName: awayTeamName,
@@ -3404,7 +3404,7 @@ private struct MatchLineupTeamPanelsView: View {
         teamColors: TeamLineupNumberColors
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("\(teamName.uppercased()) SUBSTITUTES USED")
+            Text("\(teamName.uppercased()) SUBSTITUTES")
                 .font(.caption2.weight(.bold))
                 .tracking(0.5)
                 .foregroundStyle(.secondary)
@@ -3414,11 +3414,8 @@ private struct MatchLineupTeamPanelsView: View {
                 alignment: .leading,
                 spacing: 10
             ) {
-                ForEach(lineup.substitutions) { substitution in
-                    let playerOn = preferredLineupPlayer(
-                        matching: substitution.playerOn,
-                        in: lineup
-                    )
+                ForEach(matchLineupBenchPlayers(in: lineup)) { playerOn in
+                    let substitution = matchLineupSubstitutionOn(for: playerOn, in: lineup)
                     Button {
                         if playerOn.idPlayer != nil {
                             selectedPlayer = playerOn
@@ -3439,7 +3436,9 @@ private struct MatchLineupTeamPanelsView: View {
                                 .minimumScaleFactor(0.78)
 
                             MatchLineupBadgeFlowLayout(spacing: 2) {
-                                MatchLineupInlineMarker(kind: .subIn, minute: substitution.minute)
+                                if let substitution {
+                                    MatchLineupInlineMarker(kind: .subIn, minute: substitution.minute)
+                                }
                                 ForEach(lookup.markers(for: playerOn)) { marker in
                                     MatchLineupInlineMarker(kind: marker.kind, minute: marker.minute)
                                 }
@@ -4945,6 +4944,26 @@ func preferredLineupPlayer(
     let portraitMatches = matches.filter { hasLineupPortrait($0.player) }
     let preferredMatches = portraitMatches.isEmpty ? matches : portraitMatches
     return preferredMatches.max { $0.score < $1.score }?.player
+}
+
+func matchLineupBenchPlayers(in lineup: MatchTeamLineup) -> [MatchLineupPlayer] {
+    var players = lineup.substitutes
+    for substitution in lineup.substitutions {
+        let player = preferredLineupPlayer(matching: substitution.playerOn, in: lineup)
+        if !players.contains(player) {
+            players.append(player)
+        }
+    }
+    return players
+}
+
+func matchLineupSubstitutionOn(
+    for player: MatchLineupPlayer,
+    in lineup: MatchTeamLineup
+) -> MatchLineupSubstitution? {
+    lineup.substitutions.first {
+        preferredLineupPlayer(matching: $0.playerOn, in: lineup) == player
+    }
 }
 
 private func lineupPlayerCandidates(from lineup: MatchTeamLineup) -> [MatchLineupPlayer] {

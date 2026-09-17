@@ -514,7 +514,7 @@ actor PreferencesSyncService {
         String(token.prefix(12))
     }
 
-    private func preferencesPayload(_ snapshot: PreferencesSnapshot) -> [String: Any] {
+    nonisolated func preferencesPayload(_ snapshot: PreferencesSnapshot) -> [String: Any] {
         [
             "selectedLeagues": snapshot.selectedLeagues,
             "selectedFixtureViewOptionIDs": snapshot.selectedFixtureViewOptionIDs,
@@ -536,6 +536,7 @@ actor PreferencesSyncService {
             "refreshIntervalMinutes": snapshot.refreshIntervalMinutes,
             "showAllMatches": snapshot.showAllMatches,
             "matchGroupSortOrder": snapshot.matchGroupSortOrder.rawValue,
+            "premierLeagueMatchesFirst": snapshot.premierLeagueMatchesFirst,
             "notificationsEnabled": snapshot.notificationsEnabled,
             "notificationDelayMinutes": snapshot.notificationDelayMinutes,
             "notificationEventTypes": Array(snapshot.notificationEventTypes),
@@ -699,6 +700,7 @@ actor PreferencesSyncService {
                 showFantasyFixtureLogos: preferences["showFantasyFixtureLogos"] as? Bool ?? legacyShowFantasyMatchPills,
                 showFantasyExpectedPoints: preferences["showFantasyExpectedPoints"] as? Bool ?? legacyShowFantasyMatchPills,
                 showFantasyRealTimePoints: preferences["showFantasyRealTimePoints"] as? Bool ?? legacyShowFantasyMatchPills,
+                premierLeagueMatchesFirst: preferences["premierLeagueMatchesFirst"] as? Bool ?? PreferencesStore.defaultPremierLeagueMatchesFirst,
                 showFACupEarlyRounds: preferences["showFACupEarlyRounds"] as? Bool ?? PreferencesStore.defaultShowFACupEarlyRounds
             )
 

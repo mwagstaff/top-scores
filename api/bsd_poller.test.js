@@ -11,6 +11,7 @@ const {
   diffSettledEventIds,
   mapWithConcurrency,
   selectPrematchLineupEventIds,
+  selectIncompleteFinishedEventIds,
   millisecondsUntilNextLondonTime,
   buildMetricsText,
 } = __private;
@@ -106,6 +107,106 @@ test("millisecondsUntilNextLondonTime: returns a positive delay within 24h", () 
   const delayMs = millisecondsUntilNextLondonTime(0, 15);
   assert.ok(delayMs > 0);
   assert.ok(delayMs <= 24 * 60 * 60 * 1000);
+});
+
+test("finished incidents repair finds missing, empty, unnamed and stale pre-match incidents", () => {
+  const nowMs = Date.parse("2026-09-17T20:00:00Z");
+  const events = ["missing", "empty", "no-subs", "unnamed", "healthy", "fresh", "pre-match", "no-bench"]
+    .map((_id) => ({ _id, status: "finished", event_date: "2026-09-15T19:00:00Z" }));
+  const incidentDocs = [
+    { _id: "empty", payload: { incidents: [] } },
+    { _id: "no-subs", payload: { incidents: [{ type: "goal" }] } },
+    { _id: "unnamed", payload: { incidents: [{ type: "substitution", player_in: "", player_out: "A" }] } },
+    { _id: "healthy", payload: { incidents: [{ type: "substitution", player_in: "B", player_out: "A" }] } },
+    { _id: "fresh", updated_at: "2026-09-17T19:00:00Z", payload: { incidents: [] } },
+    { _id: "pre-match", updated_at: "2026-09-17T16:00:00Z", payload: { incidents: [] } },
+    { _id: "no-bench", payload: { incidents: [{ type: "goal" }] } },
+  ];
+  events.find((event) => event._id === "pre-match").event_date = "2026-09-17T16:30:00Z";
+  // A stale pre-match snapshot must be eligible even when fetched within 24h.
+  const lineupDocs = events.filter((event) => event._id !== "no-bench").map(({ _id }) => ({
+    _id, payload: { lineups: { home: { substitutes: [{ id: 1 }] } } },
+  }));
+  assert.deepEqual(selectIncompleteFinishedEventIds(events, incidentDocs, lineupDocs, nowMs),
+    ["missing", "empty", "no-subs", "unnamed", "pre-match"]);
+});
+
+test("finished incidents repair excludes live, old and just-finished matches and bounds each batch", () => {
+  const nowMs = Date.parse("2026-09-17T20:00:00Z");
+  const events = [
+    { _id: "live", status: "inprogress", event_date: "2026-09-17T16:00:00Z" },
+    { _id: "old", status: "finished", event_date: "2026-07-01T16:00:00Z" },
+    { _id: "recent", status: "finished", event_date: "2026-09-17T19:00:00Z" },
+    ...Array.from({ length: 25 }, (_, i) => ({
+      _id: String(i), status: "finished", event_date: "2026-09-15T19:00:00Z",
+    })),
+  ];
+  const ids = selectIncompleteFinishedEventIds(events, [], [], nowMs);
+  assert.deepEqual(ids, Array.from({ length: 20 }, (_, i) => String(i)));
+  const freshlyRetried = ids.map((_id) => ({ _id, updated_at: "2026-09-17T19:00:00Z", payload: { incidents: [] } }));
+  assert.deepEqual(selectIncompleteFinishedEventIds(events, freshlyRetried, [], nowMs),
+    ["20", "21", "22", "23", "24"]);
+  const failedAttempts = new Map(ids.map((id) => [id, nowMs]));
+  assert.deepEqual(selectIncompleteFinishedEventIds(events, [], [], nowMs, failedAttempts),
+    ["20", "21", "22", "23", "24"]);
+  assert.equal(selectIncompleteFinishedEventIds(events.slice(3), [], [], nowMs + 24 * 60 * 60 * 1000, failedAttempts)[0], "0");
+});
+
+test("finished incidents repair saves recovered events and continues after individual failures", async () => {
+  const vm = require("node:vm");
+  const fs = require("node:fs");
+  const saved = [];
+  const calls = [];
+  const publications = [];
+  const events = ["recovered", "failed", "malformed"].map((_id) => ({
+    _id, status: "finished", event_date: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+  }));
+  const recoveredPayload = { event_id: "recovered", incidents: [
+    { type: "substitution", player_in: "B", player_out: "A", minute: 64 },
+  ] };
+  const overrides = {
+    "./fetch_bsd_events": { refreshIncrementalEvents: async () => {} },
+    "./live_football_tv_listings": { reconcileActiveLiveFootballTvListings: async () => {} },
+    "./bsd_current_matches": {
+      publishBsdCurrentMatchesProjection: async (reason) => {
+        publications.push(reason);
+        return { changed: false, payload_hash: "repaired" };
+      },
+    },
+    "./mongo_client": {
+      getBsdRecords: async (collection, filter) => {
+        if (collection === "bsd_events") {
+          assert.equal(filter.status, "finished");
+          assert.ok(filter.league_id.$in.includes("8"));
+          return events;
+        }
+        return [];
+      },
+      upsertBsdRecord: async (...args) => saved.push(args),
+    },
+    "./bsd_client": {
+      setRequestObserver() {},
+      async getIncidents(id, options) {
+        calls.push([id, options.trigger]);
+        if (id === "failed") throw new Error("upstream unavailable");
+        return id === "malformed" ? {} : recoveredPayload;
+      },
+    },
+  };
+  const pollerModule = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(require.resolve("./bsd_poller"), "utf8"), {
+    require: (name) => overrides[name] || require(name), module: pollerModule,
+    process, AbortController, console: { error() {}, log() {}, warn() {} },
+  });
+  await pollerModule.exports.refreshEvents();
+  assert.deepEqual(calls.map(([id]) => id), ["recovered", "failed", "malformed"]);
+  assert.ok(calls.every(([, trigger]) => trigger === "finished_incidents_repair"));
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0][0], "bsd_incidents");
+  assert.equal(saved[0][1], "recovered");
+  assert.equal(saved[0][2], recoveredPayload);
+  assert.equal(saved[0][3].event_id, "recovered");
+  assert.deepEqual(publications, ["events_refresh"]);
 });
 
 test("millisecondsUntilNextLondonTime: clamps out-of-range hour/minute", () => {

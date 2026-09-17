@@ -1150,7 +1150,8 @@ async function ensureLiveActivityTeamRatingCache(nowMs = Date.now()) {
     try {
       const [settings, teams] = await Promise.all([
         fetchJsonWithTimeout(`${apiBaseURL}/teams/config`),
-        fetchJsonWithTimeout(`${apiBaseURL}/teams?source=merged`),
+        // Match the Scores screen's club catalogue and configured ranking source.
+        fetchJsonWithTimeout(`${apiBaseURL}/teams?type=club`),
       ]);
       const defaultElo = Number(settings && settings.default_elo);
       liveActivityTeamRatingDefaultElo = Number.isFinite(defaultElo) ? defaultElo : 1000;
@@ -4114,7 +4115,8 @@ function liveActivityUpcomingSortOrderFromPreferences(prefs) {
 
 function liveActivityUpcomingMatchesWithinCompetition(matches, prefs = {}) {
   const sortOrder = liveActivityUpcomingSortOrderFromPreferences(prefs);
-  const premierLeagueMatchesFirst = prefs && prefs.premierLeagueMatchesFirst === true;
+  // Older clients did not upload this setting; mirror the Scores default.
+  const premierLeagueMatchesFirst = prefs.premierLeagueMatchesFirst !== false;
 
   return [...(Array.isArray(matches) ? matches : [])].sort((lhs, rhs) => {
     switch (sortOrder) {
@@ -4781,7 +4783,7 @@ async function loadRedisDelayedSnapshotsByMatchId(matchIds, delayMinutes, nowMs 
   return getLiveActivityMatchTimelineSnapshotsAt(normalizedMatchIds, targetMs);
 }
 
-function compareLiveActivityMatches(lhs, rhs) {
+function compareLiveActivityMatches(lhs, rhs, prefs = {}) {
   // Matches still in progress always lead the list, ahead of finished ones —
   // otherwise an earlier-kickoff finished match (or one in a higher-weighted
   // competition) could bump a currently-live match further down.
@@ -4796,6 +4798,14 @@ function compareLiveActivityMatches(lhs, rhs) {
   const leftKickoff = Number(parseMatchDateTimeMs(lhs) || 0);
   const rightKickoff = Number(parseMatchDateTimeMs(rhs) || 0);
   if (leftKickoff !== rightKickoff) return leftKickoff - rightKickoff;
+
+  if (prefs.premierLeagueMatchesFirst !== false) {
+    const lhsEpl = isEnglishPremierLeagueTeam(lhs && lhs.home_team) ||
+      isEnglishPremierLeagueTeam(lhs && lhs.away_team);
+    const rhsEpl = isEnglishPremierLeagueTeam(rhs && rhs.home_team) ||
+      isEnglishPremierLeagueTeam(rhs && rhs.away_team);
+    if (lhsEpl !== rhsEpl) return lhsEpl ? -1 : 1;
+  }
 
   const lhsTeamScore = liveActivityTeamScoreTotal(lhs);
   const rhsTeamScore = liveActivityTeamScoreTotal(rhs);
@@ -7339,12 +7349,12 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now(),
 
   const sortedLive = liveMatches
     .map(annotateMatchWithLiveActivityTeamRatings)
-    .sort(compareLiveActivityMatches);
+    .sort((lhs, rhs) => compareLiveActivityMatches(lhs, rhs, prefs));
   const sortedFinished = finishedMatches
     .map(annotateMatchWithLiveActivityTeamRatings)
-    .sort(compareLiveActivityMatches);
+    .sort((lhs, rhs) => compareLiveActivityMatches(lhs, rhs, prefs));
   const sortedLiveAndFinished = [...sortedLive, ...sortedFinished]
-    .sort(compareLiveActivityMatches)
+    .sort((lhs, rhs) => compareLiveActivityMatches(lhs, rhs, prefs))
     .slice(0, LIVE_ACTIVITY_MAX_MATCHES);
   const sortedRecentKickoff = sortUpcomingMatchesForLiveActivity(
     recentKickoffMatches.map(annotateMatchWithLiveActivityTeamRatings),
@@ -8327,6 +8337,7 @@ module.exports = {
     compareLiveActivityMatches,
     compareUpcomingLiveActivityMatches,
     sortUpcomingMatchesForLiveActivity,
+    ensureLiveActivityTeamRatingCache,
     buildLiveActivityEntriesForUser,
     buildLiveActivityOperationalMatches,
     canonicalLiveActivityMatchesFromDetailsRecords,

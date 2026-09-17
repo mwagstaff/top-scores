@@ -14,6 +14,8 @@
 //   - incidents poll for in-progress events             every 10s
 //   - lineups poll for live and soon-to-start events on an adaptive cadence
 //   - post-match event/incidents/lineups reconciliation at 0m, 2m and 15m
+//   - incomplete incidents for finished matches in the last 60 days retried
+//     daily, in batches of at most 20 during the events refresh
 //   - standings (tables): 30s poll while an allowlisted league has a match
 //     in progress, a one-off settle-flush the moment it stops, otherwise once
 //     daily at midnight London time (+ on start)
@@ -113,6 +115,10 @@ let liveEventsPayloadHash = null;
 const incidentPayloadHashes = new Map();
 const settlementTimers = new Map();
 const lastSuccessfulPollAt = new Map();
+const FINISHED_INCIDENTS_WINDOW_MS = 60 * 24 * 60 * 60 * 1000;
+const FINISHED_INCIDENTS_RETRY_MS = 24 * 60 * 60 * 1000;
+const FINISHED_INCIDENTS_BATCH_SIZE = 20;
+const finishedIncidentRepairAttempts = new Map();
 
 bsd.setRequestObserver(bsdHttpMetrics.trackRequestMetric);
 
@@ -370,6 +376,80 @@ function scheduleSettledEventReconciliation(eventIds) {
     settlementTimers.set(timer, timer);
     if (timer && typeof timer.unref === "function") timer.unref();
   });
+}
+
+function selectIncompleteFinishedEventIds(events, incidentDocs, lineupDocs, nowMs = Date.now(), repairAttempts = new Map()) {
+  const incidentsById = new Map(incidentDocs.map((doc) => [String(doc._id), doc]));
+  const lineupsById = new Map(lineupDocs.map((doc) => [String(doc._id), doc]));
+  return events.filter((event) => {
+    const kickoffMs = Date.parse(event.event_date);
+    if (event.status !== "finished" || !Number.isFinite(kickoffMs) ||
+        kickoffMs < nowMs - FINISHED_INCIDENTS_WINDOW_MS || kickoffMs > nowMs - 3 * 60 * 60 * 1000) {
+      return false;
+    }
+    const id = String(event._id);
+    const doc = incidentsById.get(id);
+    const updatedMs = Math.max(Date.parse((doc && doc.updated_at) || "") || 0, repairAttempts.get(id) || 0);
+    if (Number.isFinite(updatedMs) && updatedMs >= kickoffMs && nowMs - updatedMs < FINISHED_INCIDENTS_RETRY_MS) {
+      return false;
+    }
+    const incidents = doc && doc.payload && doc.payload.incidents;
+    if (!Array.isArray(incidents) || incidents.length === 0) return true;
+    const substitutions = incidents.filter((incident) => incident && incident.type === "substitution");
+    if (substitutions.some((incident) => !String(incident.player_in || "").trim() ||
+        !String(incident.player_out || "").trim())) return true;
+    const lineups = lineupsById.get(id)?.payload?.lineups;
+    const hasBench = ["home", "away"].some((side) =>
+      Array.isArray(lineups?.[side]?.substitutes) && lineups[side].substitutes.length > 0
+    );
+    return hasBench && substitutions.length === 0;
+  }).sort((a, b) => {
+    const updatedMs = (event) => Date.parse(incidentsById.get(String(event._id))?.updated_at || "") || 0;
+    return updatedMs(a) - updatedMs(b);
+  }).slice(0, FINISHED_INCIDENTS_BATCH_SIZE).map((event) => String(event._id));
+}
+
+async function reconcileIncompleteFinishedIncidents() {
+  const nowMs = Date.now();
+  const events = await getBsdRecords("bsd_events", {
+    status: "finished",
+    league_id: { $in: BSD_LEAGUE_ALLOWLIST.flatMap((id) => [id, Number(id)]) },
+    event_date: {
+      $gte: new Date(nowMs - FINISHED_INCIDENTS_WINDOW_MS).toISOString(),
+      $lte: new Date(nowMs - 3 * 60 * 60 * 1000).toISOString(),
+    },
+  }, { projection: { _id: 1, status: 1, event_date: 1 } });
+  if (events.length === 0) return;
+  const ids = events.map((event) => String(event._id));
+  const [incidentDocs, lineupDocs] = await Promise.all([
+    getBsdRecords("bsd_incidents", { _id: { $in: ids } }, {
+      projection: { updated_at: 1, "payload.incidents.type": 1,
+        "payload.incidents.player_in": 1, "payload.incidents.player_out": 1 },
+    }),
+    getBsdRecords("bsd_lineups", { _id: { $in: ids } }, {
+      projection: { "payload.lineups.home.substitutes": 1, "payload.lineups.away.substitutes": 1 },
+    }),
+  ]);
+  const incompleteIds = selectIncompleteFinishedEventIds(events, incidentDocs, lineupDocs, nowMs, finishedIncidentRepairAttempts);
+  await mapWithConcurrency(incompleteIds, DETAIL_FETCH_CONCURRENCY, async (id) => {
+    finishedIncidentRepairAttempts.set(id, nowMs);
+    try {
+      const incidents = await bsd.getIncidents(id, {
+        initiator: "bsd_runtime", trigger: "finished_incidents_repair",
+      });
+      if (!incidents || !Array.isArray(incidents.incidents)) {
+        throw new Error("BSD incidents response is missing incidents");
+      }
+      await upsertBsdRecord("bsd_incidents", id, incidents, {
+        event_id: incidents.event_id != null ? incidents.event_id : id,
+      });
+    } catch (error) {
+      console.error(`[bsd-runtime] finished incidents event ${id} repair failed: ${error.message || error}`);
+    }
+  });
+  if (incompleteIds.length > 0) {
+    console.log(`[bsd-runtime] finished incidents repair checked ${incompleteIds.length} events`);
+  }
 }
 
 // Standings for every league currently flagged live — the "poll every minute
@@ -693,6 +773,9 @@ async function refreshEvents() {
   eventsRefreshInFlight = true;
   try {
     await refreshIncrementalEvents();
+    await reconcileIncompleteFinishedIncidents().catch((error) => {
+      console.warn(`[bsd-runtime] finished incidents repair failed: ${error.message || error}`);
+    });
     markPollSuccess("events");
     await reconcileActiveLiveFootballTvListings().catch((error) => {
       console.warn(`[bsd-runtime] supplementary TV reconciliation failed: ${error.message || error}`);
@@ -831,6 +914,7 @@ module.exports = {
   reconcileSettledEvent,
   reconcileSettledEvents,
   scheduleSettledEventReconciliation,
+  reconcileIncompleteFinishedIncidents,
   scheduleStandingsDailyRefresh,
   refreshReference,
   refreshLeagues,
@@ -849,6 +933,7 @@ module.exports = {
     diffSettledEventIds,
     mapWithConcurrency,
     selectPrematchLineupEventIds,
+    selectIncompleteFinishedEventIds,
     millisecondsUntilNextLondonTime,
     buildMetricsText,
   },
