@@ -11,6 +11,9 @@ The push notification system monitors live football matches and sends notificati
 - **Full-time**: At the end of the match (e.g., "FT: Watford 2 - 5 Liverpool" or "AET: Watford 0 - 0 Liverpool (Liverpool win 4-2 on penalties)")
 - **Goals**: When a goal is scored (e.g., "Goal: Watford 2 - 4 Liverpool (F. Wirtz, assist: C. Gakpo)")
 - **Red cards**: When a player receives a red card (e.g., "Red card: Watford (T. Deeney)")
+- **FPL squad availability**: Four hours before the next gameweek deadline, warn if any players in the latest synced squad (including substitutes) have a non-available FPL status or a next-round playing chance below 100%. For example: "⚠️ 3 players in your FPL squad may be unavailable. Gameweek deadline in 4 hours."
+
+The FPL availability check uses a fresh bootstrap fetch shared across all due users, respects both the master notification switch and the FPL deadline-reminder switch, and keeps the existing 24-hour deadline reminder. Healthy squads are checked silently once per gameweek. Temporary availability-data failures retry on the next minute's evaluation; delayed warnings show the actual time remaining, and no warning is sent after the deadline. Separate persistent reminder IDs prevent duplicate availability warnings across evaluations or monitor restarts.
 
 ## Architecture
 

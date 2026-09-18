@@ -117,6 +117,9 @@ const LIVE_ACTIVITY_TEAM_LOGO_ASSETS_PATHS = [
   ),
 ].filter(Boolean);
 const FANTASY_DEADLINE_REMINDER_LOOKAHEAD_MS = 24 * 60 * 60 * 1000;
+const FANTASY_AVAILABILITY_WARNING_LOOKAHEAD_MS = 4 * 60 * 60 * 1000;
+const FPL_BOOTSTRAP_SOURCE_URL =
+  process.env.FPL_BOOTSTRAP_SOURCE_URL || "https://fantasy.premierleague.com/api/bootstrap-static/";
 const FANTASY_DEADLINE_REMINDER_DEFAULT_TIMEZONE = "Europe/London";
 const LIVE_ACTIVITY_TEAM_RATING_STOP_WORDS = new Set([
   "fc",
@@ -4234,6 +4237,12 @@ function liveActivityUpcomingMatchesWithinCompetition(matches, prefs = {}) {
 }
 
 function sortUpcomingMatchesForLiveActivity(matches, prefs = {}) {
+  const sortOrder = liveActivityUpcomingSortOrderFromPreferences(prefs);
+  if (sortOrder === "kickoffThenAlphabetical" || sortOrder === "kickoffThenTeamScore") {
+    // The Live Activity is one flat list, so kickoff ordering must span leagues.
+    return liveActivityUpcomingMatchesWithinCompetition(matches, prefs);
+  }
+
   const grouped = new Map();
   for (const match of Array.isArray(matches) ? matches : []) {
     const groupName = liveActivityCompetitionDisplayName(match && match.league) || String(match && match.league || "").trim();
@@ -4255,20 +4264,13 @@ function sortUpcomingMatchesForLiveActivity(matches, prefs = {}) {
         groupName: group.groupName,
         matches: sortedMatches,
         weight: liveActivityCompetitionWeight(leadingMatch),
-        leadingKickoff: Number(parseMatchDateTimeMs(leadingMatch) || 0),
         leadingTeamScore: liveActivityTeamScoreTotal(leadingMatch),
       };
     })
     .sort((lhs, rhs) => {
       if (lhs.weight !== rhs.weight) return rhs.weight - lhs.weight;
 
-      const sortOrder = liveActivityUpcomingSortOrderFromPreferences(prefs);
-      if (sortOrder === "kickoffThenAlphabetical" || sortOrder === "kickoffThenTeamScore") {
-        if (lhs.leadingKickoff !== rhs.leadingKickoff) return lhs.leadingKickoff - rhs.leadingKickoff;
-        if (sortOrder === "kickoffThenTeamScore" && lhs.leadingTeamScore !== rhs.leadingTeamScore) {
-          return rhs.leadingTeamScore - lhs.leadingTeamScore;
-        }
-      } else if (lhs.leadingTeamScore !== rhs.leadingTeamScore) {
+      if (lhs.leadingTeamScore !== rhs.leadingTeamScore) {
         return rhs.leadingTeamScore - lhs.leadingTeamScore;
       }
 
@@ -4785,15 +4787,11 @@ async function loadRedisDelayedSnapshotsByMatchId(matchIds, delayMinutes, nowMs 
 
 function compareLiveActivityMatches(lhs, rhs, prefs = {}) {
   // Matches still in progress always lead the list, ahead of finished ones —
-  // otherwise an earlier-kickoff finished match (or one in a higher-weighted
-  // competition) could bump a currently-live match further down.
+  // otherwise an earlier-kickoff finished match could bump a currently-live
+  // match further down.
   const lhsLive = isLiveMatchStatus(lhs && lhs.score_status);
   const rhsLive = isLiveMatchStatus(rhs && rhs.score_status);
   if (lhsLive !== rhsLive) return lhsLive ? -1 : 1;
-
-  const lhsWeight = liveActivityCompetitionWeight(lhs);
-  const rhsWeight = liveActivityCompetitionWeight(rhs);
-  if (lhsWeight !== rhsWeight) return rhsWeight - lhsWeight;
 
   const leftKickoff = Number(parseMatchDateTimeMs(lhs) || 0);
   const rightKickoff = Number(parseMatchDateTimeMs(rhs) || 0);
@@ -5452,6 +5450,9 @@ function buildFantasyDeadlineReminderBody(deadlineTimeMs, user, nowMs = Date.now
 }
 
 function buildFantasyDeadlineReminderBodyFromRecord(record, nowMs = Date.now()) {
+  if (record && record.kind === "fantasy_availability") {
+    return buildFantasyAvailabilityWarningBody(record.unavailable_player_count, record.deadline_time_ms, nowMs);
+  }
   const deadlineTimeMs = Number(record && record.deadline_time_ms);
   if (!Number.isFinite(deadlineTimeMs)) {
     return String(
@@ -5590,6 +5591,77 @@ function dedupeFantasyDeadlineReminderUsers(users, nextGameweek, nowMs = Date.no
     ...entry,
     record: buildFantasyDeadlineReminderRecord(entry.user, nextGameweek, nowMs, entry.decision),
   }));
+}
+
+function fantasyUnavailablePlayerIDs(fantasy, elements) {
+  const players = fantasy && fantasy.squad && fantasy.squad.players;
+  if (!Array.isArray(players) || players.length === 0) {
+    throw new Error("No synced FPL squad players available for availability check");
+  }
+  if (!Array.isArray(elements) || elements.length === 0) {
+    throw new Error("FPL player availability data is unavailable");
+  }
+  const elementsByID = new Map(elements.map((element) => [Number(element.id), element]));
+  const unavailableIDs = new Set();
+  for (const player of players) {
+    const elementID = Number(player.elementID);
+    const element = elementsByID.get(elementID);
+    if (!element) {
+      throw new Error(`FPL availability data missing for squad player ${elementID}`);
+    }
+    const status = String(element.status || "").trim().toLowerCase();
+    const rawChance = element.chance_of_playing_next_round;
+    const chance = rawChance !== null && rawChance !== undefined && rawChance !== ""
+      ? Number(rawChance)
+      : null;
+    if ((status && status !== "a") || (chance !== null && Number.isFinite(chance) && chance < 100)) {
+      unavailableIDs.add(elementID);
+    }
+  }
+  return Array.from(unavailableIDs);
+}
+
+async function fetchFantasyAvailabilityElements() {
+  const bootstrap = await fetchJsonWithTimeout(FPL_BOOTSTRAP_SOURCE_URL);
+  if (!bootstrap || !Array.isArray(bootstrap.elements) || bootstrap.elements.length === 0) {
+    throw new Error("FPL player availability data is unavailable");
+  }
+  return bootstrap.elements;
+}
+
+function buildFantasyAvailabilityWarningBody(count, deadlineTimeMs, nowMs = Date.now()) {
+  const minutesRemaining = Math.max(1, Math.ceil((Number(deadlineTimeMs) - nowMs) / 60000));
+  const hours = Math.floor(minutesRemaining / 60);
+  const minutes = minutesRemaining % 60;
+  const remaining = [
+    hours ? `${hours} hour${hours === 1 ? "" : "s"}` : null,
+    minutes ? `${minutes} minute${minutes === 1 ? "" : "s"}` : null,
+  ].filter(Boolean).join(" ");
+  return `⚠️ ${count} player${count === 1 ? "" : "s"} in your FPL squad may be unavailable. Gameweek deadline in ${remaining}.`;
+}
+
+function buildFantasyAvailabilityWarningRecord(user, nextGameweek, nowMs = Date.now()) {
+  const record = buildFantasyDeadlineReminderRecord(user, nextGameweek, nowMs);
+  const players = user && user.fantasy && user.fantasy.squad && user.fantasy.squad.players;
+  if (!record || !Array.isArray(players) || players.length === 0) return null;
+  const reminderId = record.reminder_id.replace("fantasy_deadline:", "fantasy_availability:");
+  const scheduledForMs = record.deadline_time_ms - FANTASY_AVAILABILITY_WARNING_LOOKAHEAD_MS;
+  return {
+    ...record,
+    reminder_id: reminderId,
+    kind: "fantasy_availability",
+    source: "fantasy_availability_warning",
+    scheduled_for_ms: scheduledForMs,
+    title: "FPL squad availability",
+    body: "FPL squad availability check pending",
+    payload: {
+      ...record.payload,
+      reminderId,
+      type: "fantasy_availability_warning",
+      source: "fantasy_availability_warning",
+      scheduledFor: new Date(scheduledForMs).toISOString(),
+    },
+  };
 }
 
 function fantasyReminderStatus(record) {
@@ -7558,6 +7630,40 @@ async function sendFantasyDeadlineReminderRecord(record, options = {}) {
 
   const sendNowMs =
     options && Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const isTest = options && options.isTest === true;
+  if (record.kind === "fantasy_availability") {
+    const [user, elements] = await Promise.all([
+      getUserPreferences(record.device_token),
+      options.elements || fetchFantasyAvailabilityElements(),
+    ]);
+    const decision = evaluateFantasyDeadlineReminderDecision(user, {
+      deadline_time: new Date(record.deadline_time_ms).toISOString(),
+    }, sendNowMs);
+    if (!decision.shouldSchedule || decision.targetKey !== record.target_key) {
+      if (!isTest) {
+        await saveFantasyReminderRecord({ reminder_id: reminderId, status: "superseded" }, { mergeExisting: true });
+      }
+      return { success: false, skipped: true, reason: "user_no_longer_eligible" };
+    }
+    const unavailableIDs = fantasyUnavailablePlayerIDs(user.fantasy, elements);
+    if (!isTest) {
+      await saveFantasyReminderRecord({
+        reminder_id: reminderId,
+        unavailable_player_count: unavailableIDs.length,
+        availability_checked_at: new Date(sendNowMs).toISOString(),
+        ...(unavailableIDs.length === 0 ? { status: "skipped" } : {}),
+      }, { mergeExisting: true });
+    }
+    if (unavailableIDs.length === 0) {
+      return { success: false, skipped: true, reason: "squad_available" };
+    }
+    record = {
+      ...record,
+      is_development_build: Boolean(user.isDevelopmentBuild),
+      unavailable_player_count: unavailableIDs.length,
+      payload: { ...record.payload, unavailablePlayerCount: unavailableIDs.length, unavailablePlayerIDs: unavailableIDs },
+    };
+  }
   const title = String(record && record.title ? record.title : "Fantasy Football deadline");
   const body = buildFantasyDeadlineReminderBodyFromRecord(record, sendNowMs);
   const apnsToken = String(record && record.apns_token ? record.apns_token : "").trim();
@@ -7565,7 +7671,6 @@ async function sendFantasyDeadlineReminderRecord(record, options = {}) {
     throw new Error("Missing APNS token for fantasy deadline reminder");
   }
 
-  const isTest = options && options.isTest === true;
   let idempotency = { claimed: true, source: "disabled" };
   if (!isTest) {
     idempotency = await claimFantasyReminderSendIdempotency(reminderId, {
@@ -7589,7 +7694,7 @@ async function sendFantasyDeadlineReminderRecord(record, options = {}) {
   const payload = {
     ...(record && record.payload && typeof record.payload === "object" ? record.payload : {}),
     reminderId,
-    source: isTest ? "fantasy_deadline_reminder_test" : "fantasy_deadline_reminder",
+    source: isTest ? `${record.source || "fantasy_deadline_reminder"}_test` : record.source || "fantasy_deadline_reminder",
     requestedAt: new Date(sendNowMs).toISOString(),
     test: isTest,
   };
@@ -7632,6 +7737,7 @@ async function sendFantasyDeadlineReminderRecord(record, options = {}) {
     : {
         reminder_id: reminderId,
         body,
+        ...(record.kind === "fantasy_availability" ? { payload: record.payload } : {}),
         status: result && result.success ? "sent" : "failed",
         sent_at: nowIso,
         sent_at_ms: Date.parse(nowIso),
@@ -7701,9 +7807,9 @@ async function evaluateFantasyDeadlineReminders(options = {}) {
       getAllUserPreferences(),
       getFantasyReminderRecords({ order: "desc" }),
     ]);
-    const dedupedTargets = dedupeFantasyDeadlineReminderUsers(allUsers, nextGameweek, nowMs);
+    const dedupedTargets = dedupeFantasyDeadlineReminderUsers(dedupePushNotificationUsers(allUsers), nextGameweek, nowMs);
     const eligibleRecords = dedupedTargets
-      .map((entry) => entry.record)
+      .flatMap((entry) => [entry.record, buildFantasyAvailabilityWarningRecord(entry.user, nextGameweek, nowMs)])
       .filter((record) => record && typeof record === "object");
     const eligibleReminderIds = new Set(
       eligibleRecords.map((record) => String(record.reminder_id || "").trim()).filter(Boolean)
@@ -7764,7 +7870,7 @@ async function evaluateFantasyDeadlineReminders(options = {}) {
     for (const record of eligibleRecords) {
       const existingRecord = await getFantasyReminderRecord(record.reminder_id);
       const existingStatus = fantasyReminderStatus(existingRecord);
-      if (existingRecord && (existingStatus === "sent" || existingStatus === "failed")) {
+      if (existingRecord && (existingStatus === "sent" || existingStatus === "failed" || existingStatus === "skipped")) {
         continue;
       }
 
@@ -7793,12 +7899,22 @@ async function evaluateFantasyDeadlineReminders(options = {}) {
     }
 
     let sentCount = 0;
+    // Share one current bootstrap lookup across all due squad checks.
+    const availabilityElements = dueRecords.some((record) => record.kind === "fantasy_availability")
+      ? await fetchFantasyAvailabilityElements().catch((error) => {
+          console.warn("[MatchMonitor] FPL availability lookup failed:", error.message);
+          return null;
+        })
+      : null;
     for (const dueRecord of dueRecords) {
+      if (dueRecord.kind === "fantasy_availability" && !availabilityElements) continue;
       try {
         // eslint-disable-next-line no-await-in-loop
         const result = await sendFantasyDeadlineReminderRecord(dueRecord, {
           isTest: false,
           reason: String(options && options.reason ? options.reason : "scheduled_poll"),
+          nowMs: options.nowMs,
+          elements: availabilityElements,
         });
         if (result && result.success) {
           sentCount += 1;
@@ -7812,7 +7928,8 @@ async function evaluateFantasyDeadlineReminders(options = {}) {
         await saveFantasyReminderRecord(
           {
             reminder_id: dueRecord.reminder_id,
-            status: "failed",
+            // Availability lookup failures can recover on the next evaluation.
+            status: dueRecord.kind === "fantasy_availability" ? "scheduled" : "failed",
             sent_at: nowIso,
             sent_at_ms: nowMs,
             last_delivery_at: nowIso,
@@ -8304,6 +8421,9 @@ module.exports = {
   runFantasyDeadlineReminderEvaluationNow,
   sendFantasyDeadlineReminderNow,
   __testHooks: {
+    fantasyUnavailablePlayerIDs,
+    buildFantasyAvailabilityWarningBody,
+    buildFantasyAvailabilityWarningRecord,
     annotateMatchWithLiveActivityTeamRatings,
     parseMatchDateTimeMs,
     buildMatchEvents,

@@ -4987,7 +4987,7 @@ test("buildLiveActivityPresentationForUser sorts upcoming matches within a compe
   assert.equal(presentation.matches[1].match_details_id, "c05vqzv88jnt");
 });
 
-test("buildLiveActivityPresentationForUser orders upcoming matches by competition weight before later lower-weight kickoffs", () => {
+test("buildLiveActivityPresentationForUser interleaves competitions by kickoff time", () => {
   const nowMs = Date.now();
   const laLigaEarly = formatLocalDateTimeParts(nowMs + 2 * 60 * 60 * 1000);
   const laLigaMid = formatLocalDateTimeParts(nowMs + 3 * 60 * 60 * 1000);
@@ -5064,7 +5064,7 @@ test("buildLiveActivityPresentationForUser orders upcoming matches by competitio
   assert.equal(presentation.mode, "multi_upcoming");
   assert.deepEqual(
     presentation.matches.map((match) => match.match_details_id),
-    ["la-liga-early", "la-liga-mid", "la-liga-late", "league-two"]
+    ["la-liga-early", "la-liga-mid", "league-two", "la-liga-late"]
   );
 });
 
