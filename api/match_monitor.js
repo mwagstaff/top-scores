@@ -1761,17 +1761,24 @@ function buildMatchEvents(oldMatch, newMatch, monitorState, nowMs = Date.now(), 
   const oldGoalTimeline = buildGoalTimeline(oldMatch || {});
   const oldTimelineHomeScore = oldGoalTimeline.filter((goal) => goal.team === "home").length;
   const oldTimelineAwayScore = oldGoalTimeline.filter((goal) => goal.team === "away").length;
-  const scoreRegressedFromObserved =
+  const homeScoreRegressedFromObserved =
     previousHighestSnapshot &&
-    (Number(previousHighestSnapshot.home_score) > currentSnapshot.home_score ||
-      Number(previousHighestSnapshot.away_score) > currentSnapshot.away_score);
+    Number(previousHighestSnapshot.home_score) > currentSnapshot.home_score;
+  const awayScoreRegressedFromObserved =
+    previousHighestSnapshot &&
+    Number(previousHighestSnapshot.away_score) > currentSnapshot.away_score;
   if (
-    scoreRegressedFromObserved &&
+    homeScoreRegressedFromObserved &&
     oldGoalTimeline.length > 0 &&
-    (oldTimelineHomeScore + newHomeGoalsCount > currentSnapshot.home_score ||
-      oldTimelineAwayScore + newAwayGoalsCount > currentSnapshot.away_score)
+    oldTimelineHomeScore + newHomeGoalsCount > currentSnapshot.home_score
   ) {
     runningHomeScore = oldTimelineHomeScore;
+  }
+  if (
+    awayScoreRegressedFromObserved &&
+    oldGoalTimeline.length > 0 &&
+    oldTimelineAwayScore + newAwayGoalsCount > currentSnapshot.away_score
+  ) {
     runningAwayScore = oldTimelineAwayScore;
   }
   if (

@@ -6175,6 +6175,59 @@ test("emits goal when timeline appears before score delta", () => {
   );
 });
 
+test("does not inflate the away score after a home VAR regression", () => {
+  const monitorState = newMonitorState({
+    highestObservedScoreSnapshot: {
+      home_score: 1,
+      away_score: 2,
+      score_status: "67'",
+    },
+  });
+  const twoNil = {
+    home_team: "Tottenham Hotspur",
+    away_team: "Aston Villa",
+    score_status: "77'",
+    home_score: 0,
+    away_score: 2,
+    home_goal_scorers: [],
+    away_goal_scorers: [
+      { player: "J. Manzambi", goal_times: ["45+4'"] },
+      { player: "N. Jackson", goal_times: ["67'"] },
+    ],
+    home_assists: [],
+    away_assists: [],
+  };
+  const incidentBeforeScore = {
+    ...twoNil,
+    away_goal_scorers: [
+      ...twoNil.away_goal_scorers,
+      { player: "E. Buendía", goal_times: ["79'"] },
+    ],
+    away_assists: [{ player: "J. McGinn", assist_times: ["79'"] }],
+  };
+
+  const earlyGoals = __testHooks
+    .buildMatchEvents(twoNil, incidentBeforeScore, monitorState, Date.now())
+    .filter((event) => event.type === "goal");
+  assert.equal(earlyGoals.length, 0);
+
+  const threeNil = {
+    ...incidentBeforeScore,
+    score_status: "79'",
+    away_score: 3,
+  };
+  const goals = __testHooks
+    .buildMatchEvents(incidentBeforeScore, threeNil, monitorState, Date.now())
+    .filter((event) => event.type === "goal");
+
+  assert.equal(goals.length, 1);
+  assert.equal(goals[0].title, "Goal 79'");
+  assert.equal(
+    goals[0].body,
+    "Tottenham Hotspur 0 - 3 Aston Villa (E. Buendía, assist: J. McGinn)"
+  );
+});
+
 test("emits goal when score delta appears before timeline details", () => {
   const monitorState = newMonitorState();
   const snap0 = {
