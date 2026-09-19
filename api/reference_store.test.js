@@ -5,6 +5,30 @@ const assert = require("node:assert/strict");
 const { createReferenceStore } = require("./reference_store");
 const { dataset } = require("./reference_test_helpers");
 
+test("metadata-only catalogue reads skip squad payloads while normal readers receive them", async () => {
+  const value = dataset();
+  const queried = [];
+  const store = createReferenceStore(async () => ({ collection(name) {
+    return { find(filter) {
+      queried.push({ name, filter });
+      return { async toArray() {
+        if (name === "bsd_reference_competitions") return value.manifests.map((payload) => ({ payload }));
+        if (name === "bsd_reference_status") return value.statuses;
+        if (name === "bsd_reference_teams") return value.rows;
+        throw new Error(`Unexpected collection: ${name}`);
+      } };
+    } };
+  } }));
+  const metadata = await store.load(["1"], { includeRows: false });
+  assert.deepEqual(metadata, { manifests: value.manifests, statuses: value.statuses, rows: [] });
+  assert.deepEqual(queried.map((query) => query.name), ["bsd_reference_competitions", "bsd_reference_status"]);
+  const full = await store.load(["1"]);
+  assert.deepEqual(full, value);
+  assert.deepEqual(queried.at(-1), {
+    name: "bsd_reference_teams", filter: { snapshot_id: { $in: ["snapshot-1"] } },
+  });
+});
+
 test("a team write failure cannot update the active competition manifest", async () => {
   let replaced = false;
   const store = createReferenceStore(async () => ({ collection(name) {

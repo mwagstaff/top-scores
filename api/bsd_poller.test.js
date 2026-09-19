@@ -226,3 +226,92 @@ test("buildMetricsText exposes BSD poller metrics", () => {
   assert.match(text, /^top_scores_process_resident_memory_bytes \d+$/m);
   assert.match(text, /^top_scores_process_heap_bytes\{kind="used"\} \d+$/m);
 });
+
+function isolatedPollerState(overrides = {}, clock = Date) {
+  const vm = require("node:vm");
+  const fs = require("node:fs");
+  const dependencies = {
+    "./bsd_client": { setRequestObserver() {} },
+    "./mongo_client": { getBsdRecords: async () => [], upsertBsdRecord: async () => {} },
+    "./bsd_current_matches": {
+      publishBsdCurrentMatchesProjection: async () => ({ changed: false, payload_hash: "test" }),
+    },
+    ...overrides,
+  };
+  return vm.runInNewContext(
+    fs.readFileSync(require.resolve("./bsd_poller"), "utf8") + `
+      ;({ poller: module.exports, finishedIncidentRepairAttempts, incidentPayloadHashes,
+          setLiveIds(ids) { liveEventIds = ids; } });`,
+    {
+      require: (name) => dependencies[name] || require(name), module: { exports: {} },
+      process, AbortController, Date: clock, console: { error() {}, log() {}, warn() {} },
+    }
+  );
+}
+
+test("finished incident repair drops expired retry history even when no matches remain", async () => {
+  const nowMs = Date.parse("2026-09-19T20:00:00Z");
+  const dayMs = 24 * 60 * 60 * 1000;
+  const state = isolatedPollerState({}, class extends Date {
+    static now() { return nowMs; }
+  });
+  state.finishedIncidentRepairAttempts.set("old", nowMs - 2 * dayMs);
+  state.finishedIncidentRepairAttempts.set("expired", nowMs - dayMs);
+  state.finishedIncidentRepairAttempts.set("recent", nowMs - dayMs + 1);
+
+  await state.poller.reconcileIncompleteFinishedIncidents();
+
+  assert.deepEqual([...state.finishedIncidentRepairAttempts.keys()], ["recent"]);
+});
+
+test("an incident response arriving after settlement does not retain the finished event hash", async () => {
+  let completeRequest;
+  let writes = 0;
+  const state = isolatedPollerState({
+    "./bsd_client": {
+      setRequestObserver() {},
+      getIncidents: () => new Promise((resolve) => { completeRequest = resolve; }),
+    },
+    "./mongo_client": { upsertBsdRecord: async () => { writes += 1; } },
+  });
+  state.setLiveIds([101]);
+  state.incidentPayloadHashes.set("101", "previous");
+  const polling = state.poller.pollIncidents();
+
+  // The live poll removes both the ID and hash when a match finishes.
+  state.setLiveIds([]);
+  state.incidentPayloadHashes.delete("101");
+  completeRequest({ event_id: 101, incidents: [] });
+  await polling;
+
+  assert.equal(writes, 1);
+  assert.equal(state.incidentPayloadHashes.size, 0);
+
+  // Hashes must still deduplicate writes for matches that remain live.
+  state.setLiveIds([102]);
+  const livePolling = state.poller.pollIncidents();
+  completeRequest({ event_id: 102, incidents: [] });
+  await livePolling;
+  const repeatedPolling = state.poller.pollIncidents();
+  completeRequest({ event_id: 102, incidents: [] });
+  await repeatedPolling;
+  assert.equal(writes, 2);
+  assert.equal(state.incidentPayloadHashes.size, 1);
+});
+
+test("live event hashes are pruned even when saving the next live snapshot fails", async () => {
+  const state = isolatedPollerState({
+    "./bsd_client": {
+      setRequestObserver() {},
+      getLiveEvents: async () => ({ events: [{ id: 102, league_id: 1 }] }),
+    },
+    "./mongo_client": { upsertBsdRecords: async () => { throw new Error("Mongo unavailable"); } },
+  });
+  state.setLiveIds([101, 102]);
+  state.incidentPayloadHashes.set("101", "finished");
+  state.incidentPayloadHashes.set("102", "live");
+
+  await state.poller.pollLiveEvents();
+
+  assert.deepEqual([...state.incidentPayloadHashes.keys()], ["102"]);
+});

@@ -44,7 +44,7 @@ function createCatalogueRefresher({ client = bsd, store = createReferenceStore()
     const summary = { skipped: false, succeeded: 0, failed: 0 };
     try {
       await store.ensureIndexes();
-      const previous = await store.load(competitionIds.map(String));
+      const previous = await store.load(competitionIds.map(String), { includeRows: false });
       const published = new Map(previous.manifests.map((manifest) => [manifest.competition.id, manifest]));
       const resolveColours = colourResolver();
       async function fetchPlayer(playerId, listedPlayer) {

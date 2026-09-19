@@ -314,7 +314,21 @@ async function hydrateMissingDetails(allEvents, nowMs = Date.now()) {
   // run. Recently finished matches are deliberately revisited so a restart
   // cannot lose the post-match settlement passes. Early BSD payloads with an
   // "Unknown" manager card are also refreshed.
-  const incidentDocs = await getBsdRecords("bsd_incidents");
+  const playedEvents = allEvents.filter(isPlayed);
+  const eventIds = [...new Set(playedEvents.map((event) => String(event.id)))];
+  // A runtime refresh only needs these events, not every historical incident
+  // payload. Keep the read bounded even as the backfilled history grows.
+  const incidentDocs = eventIds.length > 0
+    ? await getBsdRecords("bsd_incidents", { _id: { $in: eventIds } }, {
+        projection: {
+          _id: 1,
+          updated_at: 1,
+          "payload.incidents.type": 1,
+          "payload.incidents.minute": 1,
+          "payload.incidents.player": 1,
+        },
+      })
+    : [];
   const hydratedIds = new Set(incidentDocs.map((doc) => String(doc._id)));
   const incidentDocsById = new Map(incidentDocs.map((doc) => [String(doc._id), doc]));
   const staleIncidentIds = new Set(
@@ -322,8 +336,7 @@ async function hydrateMissingDetails(allEvents, nowMs = Date.now()) {
       .filter(hasUnknownOutsideTimelineCardIncident)
       .map((doc) => String(doc._id))
   );
-  const toHydrate = allEvents
-    .filter(isPlayed)
+  const toHydrate = playedEvents
     .filter((event) => {
       const id = String(event.id);
       return (
@@ -333,7 +346,7 @@ async function hydrateMissingDetails(allEvents, nowMs = Date.now()) {
       );
     })
     .sort((a, b) => Date.parse(b.event_date || 0) - Date.parse(a.event_date || 0));
-  console.log(`[bsd] hydrating incidents/lineups for ${toHydrate.length} played events (skipping ${allEvents.filter(isPlayed).length - toHydrate.length} already hydrated, stale=${staleIncidentIds.size})`);
+  console.log(`[bsd] hydrating incidents/lineups for ${toHydrate.length} played events (skipping ${playedEvents.length - toHydrate.length} already hydrated, stale=${staleIncidentIds.size})`);
   for (const event of toHydrate) {
     // eslint-disable-next-line no-await-in-loop
     await hydrateDetail(event);

@@ -2,11 +2,14 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { EventEmitter } = require("node:events");
+const https = require("node:https");
 
 const {
   setRequestObserver,
   getRateLimitState,
   getLeagues,
+  getEvent,
   __private,
 } = require("./bsd_client");
 
@@ -45,10 +48,11 @@ test("getRateLimitState returns expected shape", () => {
 });
 
 test("_acquireToken decrements the token count by 1", async () => {
-  const before = getRateLimitState().tokens;
-  assert.ok(before > 0, "expected tokens to be available");
-  await _acquireToken();
-  assert.equal(getRateLimitState().tokens, before - 1);
+  const limiter = _createRateLimiter(30);
+  await _acquireToken(1, limiter);
+  // Reading global state refills tokens with elapsed wall time, which makes
+  // an exact decrement assertion race the clock.
+  assert.equal(limiter.tokens, 29);
 });
 
 test("RATE_LIMIT_REFILL_INTERVAL_MS is 60 seconds", () => {
@@ -170,6 +174,157 @@ test("requests reject with BSD_NO_API_KEY when BSD_API_KEY is unset", async () =
   } finally {
     if (saved !== undefined) process.env.BSD_API_KEY = saved;
   }
+});
+
+// ---------------------------------------------------------------------------
+// Response lifecycle
+// ---------------------------------------------------------------------------
+
+function mockResponses(t, respond, responseOptions = () => ({})) {
+  const savedApiKey = process.env.BSD_API_KEY;
+  process.env.BSD_API_KEY = "test-key";
+  t.after(() => {
+    if (savedApiKey === undefined) delete process.env.BSD_API_KEY;
+    else process.env.BSD_API_KEY = savedApiKey;
+    setRequestObserver(null);
+  });
+  return t.mock.method(https, "get", (_url, _options, onResponse) => {
+    const req = new EventEmitter();
+    const res = new EventEmitter();
+    const response = responseOptions(_url);
+    res.statusCode = response.statusCode || 200;
+    res.headers = response.headers || {};
+    res.complete = false;
+    res.setEncoding = () => res;
+    res.resume = () => res;
+    let onTimeout;
+    req.setTimeout = (_timeoutMs, callback) => {
+      onTimeout = callback;
+      return req;
+    };
+    // A destroyed request can report its error only on the response once
+    // headers have arrived. Reproduce that sequence without a live server.
+    req.destroy = (error) => {
+      res.emit("error", error);
+      res.emit("close");
+      return req;
+    };
+    process.nextTick(() => {
+      onResponse(res);
+      respond(res, () => onTimeout());
+    });
+    return req;
+  });
+}
+
+test("truncated response errors reject and release their request slot", { timeout: 1_000 }, async (t) => {
+  const observed = [];
+  mockResponses(t, (res) => {
+    res.emit("data", '{"id":');
+    res.emit("error", Object.assign(new Error("aborted"), { code: "ECONNRESET" }));
+    res.emit("close");
+  });
+  setRequestObserver((event) => observed.push(event));
+
+  await assert.rejects(getEvent(123, { maxAttempts: 1 }), {
+    code: "ECONNRESET",
+    url: "https://sports.bzzoiro.com/api/v2/events/123/",
+  });
+  assert.equal(getRateLimitState().activeRequests, 0);
+  assert.equal(observed.length, 1);
+  assert.equal(observed[0].errorCode, "ECONNRESET");
+});
+
+test("incomplete response close rejects even without a response error", { timeout: 1_000 }, async (t) => {
+  mockResponses(t, (res) => {
+    res.emit("data", '{"id":');
+    res.emit("close");
+  });
+
+  await assert.rejects(getEvent(123, { maxAttempts: 1 }), { code: "ECONNRESET" });
+  assert.equal(getRateLimitState().activeRequests, 0);
+});
+
+test("discarded HTTP error body failures preserve the status and retry delay", { timeout: 1_000 }, async (t) => {
+  const observed = [];
+  mockResponses(t, (res) => {
+    res.emit("error", Object.assign(new Error("aborted"), { code: "ECONNRESET" }));
+    res.emit("close");
+  }, () => ({ statusCode: 429, headers: { "retry-after": "2" } }));
+  setRequestObserver((event) => observed.push(event));
+
+  await assert.rejects(getEvent(123, { maxAttempts: 1 }), {
+    code: "HTTP_429",
+    statusCode: 429,
+    retryAfterMs: 2_000,
+  });
+  assert.equal(getRateLimitState().activeRequests, 0);
+  assert.equal(observed.length, 1);
+  assert.equal(observed[0].errorCode, "HTTP_429");
+});
+
+test("discarded redirect body failures do not settle the follow-up request", { timeout: 1_000 }, async (t) => {
+  const observed = [];
+  mockResponses(t, (res) => {
+    if (res.statusCode === 301) {
+      res.emit("error", Object.assign(new Error("aborted"), { code: "ECONNRESET" }));
+      res.emit("close");
+      return;
+    }
+    setImmediate(() => {
+      assert.equal(getRateLimitState().activeRequests, 1);
+      assert.equal(observed.length, 0);
+      res.emit("data", '{"id":456}');
+      res.complete = true;
+      res.emit("end");
+      res.emit("close");
+    });
+  }, (url) => url.pathname.endsWith("/123/")
+    ? { statusCode: 301, headers: { location: "/api/v2/events/456/" } }
+    : {});
+  setRequestObserver((event) => observed.push(event));
+
+  assert.deepEqual(await getEvent(123, { maxAttempts: 1 }), { id: 456 });
+  assert.equal(getRateLimitState().activeRequests, 0);
+  assert.equal(observed.length, 1);
+  assert.equal(observed[0].url, "https://sports.bzzoiro.com/api/v2/events/456/");
+});
+
+test("timeout after response headers rejects once and releases its request slot", { timeout: 1_000 }, async (t) => {
+  const observed = [];
+  mockResponses(t, (res, timeout) => {
+    res.emit("data", '{"id":');
+    timeout();
+    // Late events must not parse or append the abandoned body.
+    res.emit("data", "123}");
+    res.emit("end");
+  });
+  setRequestObserver((event) => observed.push(event));
+
+  await assert.rejects(getEvent(123, { maxAttempts: 1 }), { code: "ETIMEDOUT" });
+  assert.equal(getRateLimitState().activeRequests, 0);
+  assert.equal(observed.length, 1);
+  assert.equal(observed[0].errorCode, "ETIMEDOUT");
+});
+
+test("truncated responses retry and a complete response releases its request slot", { timeout: 1_000 }, async (t) => {
+  let attempt = 0;
+  mockResponses(t, (res) => {
+    attempt += 1;
+    if (attempt === 1) {
+      res.emit("data", '{"id":');
+      res.emit("error", Object.assign(new Error("aborted"), { code: "ECONNRESET" }));
+    } else {
+      res.emit("data", '{"id":123}');
+      res.complete = true;
+      res.emit("end");
+    }
+    res.emit("close");
+  });
+
+  assert.deepEqual(await getEvent(123, { maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0 }), { id: 123 });
+  assert.equal(attempt, 2);
+  assert.equal(getRateLimitState().activeRequests, 0);
 });
 
 // ---------------------------------------------------------------------------

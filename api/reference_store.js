@@ -68,13 +68,15 @@ function createReferenceStore(database = getDb) {
         { _id: String(competitionId) }, { _id: String(competitionId), payload: status, updated_at: new Date().toISOString() }, { upsert: true }
       );
     },
-    async load(competitionIds) {
+    async load(competitionIds, { includeRows = true } = {}) {
       const value = await db();
       const [manifests, statuses] = await Promise.all([
         value.collection("bsd_reference_competitions").find({ _id: { $in: competitionIds } }).toArray(),
         value.collection("bsd_reference_status").find({ _id: { $in: competitionIds } }).toArray(),
       ]);
-      const rows = await value.collection("bsd_reference_teams").find({ snapshot_id: { $in: manifests.map((doc) => doc.payload.snapshot_id) } }).toArray();
+      const rows = includeRows
+        ? await value.collection("bsd_reference_teams").find({ snapshot_id: { $in: manifests.map((doc) => doc.payload.snapshot_id) } }).toArray()
+        : [];
       return { manifests: manifests.map((doc) => doc.payload), rows, statuses };
     },
     async prune() {

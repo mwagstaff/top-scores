@@ -267,6 +267,7 @@ async function pollLiveEvents() {
     const nextLiveEventIds = allowlistedEvents.map((event) => event.id);
     const settledEventIds = diffSettledEventIds(liveEventIds, nextLiveEventIds);
     liveEventIds = nextLiveEventIds;
+    settledEventIds.forEach((id) => incidentPayloadHashes.delete(String(id)));
     const nextLiveEventsPayloadHash = hashPayload(allowlistedEvents);
     const liveEventsChanged = nextLiveEventsPayloadHash !== liveEventsPayloadHash;
     if (liveEventsChanged && allowlistedEvents.length > 0) {
@@ -281,7 +282,6 @@ async function pollLiveEvents() {
       void flushSettledStandings(settledLeagueIds);
     }
     if (settledEventIds.length > 0) {
-      settledEventIds.forEach((id) => incidentPayloadHashes.delete(String(id)));
       scheduleSettledEventReconciliation(settledEventIds);
     }
 
@@ -411,6 +411,13 @@ function selectIncompleteFinishedEventIds(events, incidentDocs, lineupDocs, nowM
 
 async function reconcileIncompleteFinishedIncidents() {
   const nowMs = Date.now();
+  // Attempts only suppress retries for one day; do not retain every repaired
+  // event for the lifetime of this process.
+  for (const [id, attemptedAt] of finishedIncidentRepairAttempts) {
+    if (nowMs - attemptedAt >= FINISHED_INCIDENTS_RETRY_MS) {
+      finishedIncidentRepairAttempts.delete(id);
+    }
+  }
   const events = await getBsdRecords("bsd_events", {
     status: "finished",
     league_id: { $in: BSD_LEAGUE_ALLOWLIST.flatMap((id) => [id, Number(id)]) },
@@ -611,7 +618,11 @@ async function pollIncidents() {
         await upsertBsdRecord("bsd_incidents", id, incidents, {
           event_id: incidents && incidents.event_id != null ? incidents.event_id : id,
         });
-        incidentPayloadHashes.set(String(id), nextHash);
+        // A live poll may have removed this event while the request was in
+        // flight. Do not reintroduce its hash after settlement cleaned it up.
+        if (liveEventIds.some((liveId) => String(liveId) === String(id))) {
+          incidentPayloadHashes.set(String(id), nextHash);
+        }
         changedCount += 1;
       } catch (error) {
         console.error(`[bsd-runtime] incidents event ${id} failed: ${error.message || error}`);

@@ -252,10 +252,12 @@ function _fetchJson(url, options = {}) {
     const requestedUrl = String(url || "").trim();
     const startedAtMs = Date.now();
     let settled = false;
+    let raw = "";
 
     const complete = ({ statusCode, error, data }) => {
       if (settled) return;
       settled = true;
+      raw = "";
       _notifyObserver({
         source,
         initiator,
@@ -286,6 +288,15 @@ function _fetchJson(url, options = {}) {
       (res) => {
         const statusCode = Number(res.statusCode || 0);
 
+        // Failures after headers arrive are emitted on the response, not
+        // necessarily on the request. Also handle discarded response bodies:
+        // HTTP errors already settle by status; redirects have their own fetch.
+        res.on("error", (error) => {
+          if (statusCode !== 200) return;
+          if (!error.url) error.url = requestedUrl;
+          complete({ statusCode, error });
+        });
+
         if (statusCode >= 300 && statusCode < 400 && res.headers.location) {
           res.resume();
           _fetchJson(new URL(res.headers.location, target).toString(), options)
@@ -307,10 +318,19 @@ function _fetchJson(url, options = {}) {
           return;
         }
 
-        let raw = "";
+        res.on("close", () => {
+          if (res.complete || settled) return;
+          const error = new Error("BSD response closed before the body was complete");
+          error.code = "ECONNRESET";
+          error.url = requestedUrl;
+          complete({ statusCode, error });
+        });
         res.setEncoding("utf8");
-        res.on("data", (chunk) => { raw += chunk; });
+        res.on("data", (chunk) => {
+          if (!settled) raw += chunk;
+        });
         res.on("end", () => {
+          if (settled) return;
           let parsed;
           try {
             parsed = JSON.parse(raw);

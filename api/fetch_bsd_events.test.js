@@ -72,6 +72,74 @@ function ingestionFixture({ candidates = [], upcoming = [], lookup } = {}) {
   };
 }
 
+function detailHydrationFixture(incidentDocs = []) {
+  const queries = [];
+  const requests = [];
+  const sandbox = {
+    module: { exports: {} },
+    process: { env: {} },
+    console: { log() {}, error() {} },
+    require(name) {
+      if (name === "./bsd_client") return {
+        async getIncidents(id) { requests.push(["incidents", id]); return { event_id: id, incidents: [] }; },
+        async getLineups(id) { requests.push(["lineups", id]); return { event_id: id }; },
+      };
+      if (name === "./bsd_config") return { BSD_LEAGUE_ALLOWLIST: ["12"] };
+      if (name === "./mongo_client") return {
+        async getBsdRecords(collection, filter, options) {
+          queries.push(JSON.parse(JSON.stringify({ collection, filter, options })));
+          return incidentDocs.filter((doc) => filter._id.$in.includes(String(doc._id)));
+        },
+        async upsertBsdRecord() {},
+      };
+      throw new Error(`Unexpected dependency: ${name}`);
+    },
+  };
+  vm.runInNewContext(fs.readFileSync(require.resolve("./fetch_bsd_events"), "utf8"), sandbox);
+  return { hydrate: sandbox.module.exports.hydrateMissingDetails, queries, requests };
+}
+
+test("detail hydration reads only the current played events while preserving settle and stale-card refreshes", async () => {
+  const nowMs = Date.parse("2026-09-19T18:00:00Z");
+  const recentDate = new Date(nowMs - 60 * 60 * 1000).toISOString();
+  const staleDate = new Date(nowMs - RECENT_FINISHED_DETAIL_REFRESH_MS - 1_000).toISOString();
+  const fixture = detailHydrationFixture([
+    { _id: "1", updated_at: new Date(nowMs).toISOString(), payload: { incidents: [] } },
+    { _id: "2", updated_at: staleDate, payload: { incidents: [] } },
+    { _id: "3", updated_at: staleDate, payload: { incidents: [] } },
+    { _id: "4", updated_at: staleDate, payload: { incidents: [{ type: "card", minute: -1, player: "Unknown" }] } },
+    { _id: "unrelated-history", payload: { incidents: [{ type: "card", minute: -1, player: "Unknown" }] } },
+  ]);
+  await fixture.hydrate([
+    { id: 1, status: "finished", event_date: recentDate },
+    { id: 2, status: "finished", event_date: recentDate },
+    { id: 3, status: "finished", event_date: "2026-01-01T15:00:00Z" },
+    { id: 4, status: "finished", event_date: "2026-01-01T15:00:00Z" },
+    { id: 5, status: "finished", event_date: recentDate },
+    { id: 6, status: "notstarted", event_date: recentDate },
+    { id: 7, status: "cancelled", event_date: recentDate },
+  ], nowMs);
+  assert.deepEqual(fixture.queries, [{
+    collection: "bsd_incidents",
+    filter: { _id: { $in: ["1", "2", "3", "4", "5"] } },
+    options: { projection: {
+      _id: 1, updated_at: 1, "payload.incidents.type": 1,
+      "payload.incidents.minute": 1, "payload.incidents.player": 1,
+    } },
+  }]);
+  assert.deepEqual(fixture.requests, [
+    ["incidents", 2], ["lineups", 2], ["incidents", 5], ["lineups", 5],
+    ["incidents", 4], ["lineups", 4],
+  ]);
+});
+
+test("detail hydration skips Mongo entirely when the refresh has no played events", async () => {
+  const fixture = detailHydrationFixture();
+  await fixture.hydrate([{ id: 1, status: "notstarted" }, { id: 2, status: "postponed" }]);
+  assert.deepEqual(fixture.queries, []);
+  assert.deepEqual(fixture.requests, []);
+});
+
 test("incremental ingestion refreshes withdrawn Wolves fixtures while preserving the replacement", async () => {
   const replacement = {
     id: 601933, league_id: 12, home_team: "Wolverhampton", away_team: "Portsmouth",

@@ -83,6 +83,21 @@ test("deduplicates team/profile fetches across competitions and avoids refreshin
   assert.equal(calls.length, previous);
 });
 
+test("catalogue refresh checks publication age without loading all previous squads", async () => {
+  const { client, calls } = fixture();
+  const store = memoryStore(dataset());
+  const load = store.load;
+  store.load = async (ids, options) => {
+    assert.deepEqual(ids, ["1"]);
+    assert.deepEqual(options, { includeRows: false });
+    const value = await load();
+    return { ...value, rows: [] };
+  };
+  const result = await refresher(client, store, ["1"], () => Date.parse(time) + 1_000).refresh();
+  assert.deepEqual([result.succeeded, result.failed], [0, 0]);
+  assert.deepEqual(calls, []);
+});
+
 test("malformed and truncated squads, empty membership and invalid ratings never replace snapshots", async (t) => {
   for (const overrides of [
     { async getTeams() { return []; } },
