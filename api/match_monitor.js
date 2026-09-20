@@ -4834,6 +4834,14 @@ function compareLiveActivityMatches(lhs, rhs, prefs = {}) {
   );
 }
 
+function compareFinishedLiveActivityMatches(lhs, rhs, prefs = {}) {
+  const lhsTeamScore = liveActivityTeamScoreTotal(lhs);
+  const rhsTeamScore = liveActivityTeamScoreTotal(rhs);
+  if (lhsTeamScore !== rhsTeamScore) return rhsTeamScore - lhsTeamScore;
+
+  return compareLiveActivityMatches(lhs, rhs, prefs);
+}
+
 function compareUpcomingLiveActivityMatches(lhs, rhs) {
   const leftKickoff = Number(parseMatchDateTimeMs(lhs) || 0);
   const rightKickoff = Number(parseMatchDateTimeMs(rhs) || 0);
@@ -7431,9 +7439,11 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now(),
     .sort((lhs, rhs) => compareLiveActivityMatches(lhs, rhs, prefs));
   const sortedFinished = finishedMatches
     .map(annotateMatchWithLiveActivityTeamRatings)
-    .sort((lhs, rhs) => compareLiveActivityMatches(lhs, rhs, prefs));
+    .sort((lhs, rhs) => compareFinishedLiveActivityMatches(lhs, rhs, prefs));
   const sortedLiveAndFinished = [...sortedLive, ...sortedFinished]
-    .sort((lhs, rhs) => compareLiveActivityMatches(lhs, rhs, prefs))
+    .sort((lhs, rhs) => sortedLive.length > 0
+      ? compareLiveActivityMatches(lhs, rhs, prefs)
+      : compareFinishedLiveActivityMatches(lhs, rhs, prefs))
     .slice(0, LIVE_ACTIVITY_MAX_MATCHES);
   const sortedRecentKickoff = sortUpcomingMatchesForLiveActivity(
     recentKickoffMatches.map(annotateMatchWithLiveActivityTeamRatings),
@@ -8461,6 +8471,7 @@ module.exports = {
     calculateFantasyCurrentScore,
     setFantasyScoreContext: fantasyScore.setFantasyScoreContext,
     resetFantasyScoreContext: fantasyScore.resetFantasyScoreContext,
+    compareFinishedLiveActivityMatches,
     compareLiveActivityMatches,
     compareUpcomingLiveActivityMatches,
     sortUpcomingMatchesForLiveActivity,

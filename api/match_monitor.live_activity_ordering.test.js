@@ -58,6 +58,26 @@ test("Live Activity uses Scores club ratings and Premier League priority before 
   assert.deepEqual(present({ premierLeagueMatchesFirst: false }),
     ["ofi", "levski", "sociedad", "besiktas", "juventus", "palace"]);
 
+  const finishedEntries = entries.map((entry) => ({
+    state: { finishedAtMs: nowMs - 60_000 },
+    match: {
+      ...entry.match,
+      home_score: 2,
+      away_score: 1,
+      score_status: "FT",
+    },
+  }));
+  const finishedPresentation = __testHooks.buildLiveActivityPresentationForUser(
+    { preferences: { liveActivityDelayMinutes: 0, premierLeagueMatchesFirst: true } },
+    finishedEntries,
+    nowMs
+  );
+  assert.equal(finishedPresentation.mode, "multi_finished");
+  assert.deepEqual(
+    finishedPresentation.matches.map((match) => match.match_details_id),
+    ["sociedad", "besiktas", "juventus", "palace", "plzen", "ofi"]
+  );
+
   // Two Premier League fixtures are still ordered by their combined rating.
   const palace = entries.find((entry) => entry.match.match_details_id === "palace").match;
   const sociedad = entries.find((entry) => entry.match.match_details_id === "sociedad").match;
