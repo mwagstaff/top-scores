@@ -1176,6 +1176,14 @@ final class FixtureBrowserStore: ObservableObject {
             autoRefreshTaskID = UUID()
             return
         }
+        if refreshImmediately {
+            refreshToday()
+            // Revalidate today's scores on activation, even while its cached bucket is fresh.
+            if selectedDateKey == todayDateKey,
+               selectedDateTask == nil || selectedDateTaskDateKey != todayDateKey {
+                loadSelectedDateIfNeeded(force: true)
+            }
+        }
         if changed || refreshImmediately || autoRefreshTask == nil {
             startAutoRefreshLoop(refreshImmediately: refreshImmediately)
         }
