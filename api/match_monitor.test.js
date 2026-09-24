@@ -7097,3 +7097,62 @@ test("dedupeFantasyDeadlineReminderUsers collapses duplicate APNS targets to the
   assert.equal(deduped[0].user.deviceToken, "newer-device");
   assert.equal(deduped[0].record.dedupe_basis, "apns_token");
 });
+
+test("isFACupEarlyRoundMatch mirrors the app's FA Cup early-round rules", () => {
+  const faCup = (extra) => ({ league: "FA Cup", ...extra });
+  assert.equal(__testHooks.isFACupEarlyRoundMatch(faCup({ league_subcategory: "Qualification Round 2" })), true);
+  assert.equal(__testHooks.isFACupEarlyRoundMatch(faCup({ league_subcategory: "Extra Preliminary Round" })), true);
+  assert.equal(__testHooks.isFACupEarlyRoundMatch(faCup({ league_subcategory: "First Round Proper" })), true);
+  assert.equal(__testHooks.isFACupEarlyRoundMatch(faCup({ league_subcategory: "Round 2 Replays" })), true);
+  assert.equal(__testHooks.isFACupEarlyRoundMatch(faCup({ league_subcategory: "Round 3" })), false);
+  assert.equal(__testHooks.isFACupEarlyRoundMatch(faCup({ league_subcategory: "Quarter-finals" })), false);
+  assert.equal(__testHooks.isFACupEarlyRoundMatch(faCup({ round_number: 1 })), true);
+  assert.equal(__testHooks.isFACupEarlyRoundMatch(faCup({ round_number: 3 })), false);
+  assert.equal(
+    __testHooks.isFACupEarlyRoundMatch({ league: "EFL Cup", league_subcategory: "Round 2" }),
+    false
+  );
+});
+
+test("filterCanonicalLiveActivityMatchesForUser hides FA Cup early rounds unless enabled", () => {
+  const nowMs = Date.parse("2026-09-23T12:00:00Z");
+  const matches = [
+    {
+      date: "2026-09-23",
+      time: "17:00",
+      league: "International Friendly",
+      home_team: "Azerbaijan",
+      away_team: "Tajikistan",
+      tv_channels: [],
+    },
+    {
+      date: "2026-09-23",
+      time: "19:45",
+      league: "FA Cup",
+      league_subcategory: "Qualification Round 2",
+      home_team: "Thame United",
+      away_team: "Exmouth Town",
+      tv_channels: [],
+    },
+  ];
+  const teams = (list) => list.map((match) => `${match.home_team}|${match.away_team}`);
+
+  assert.deepEqual(
+    teams(__testHooks.filterCanonicalLiveActivityMatchesForUser(matches, liveActivityUser(0, {}), nowMs)),
+    ["Azerbaijan|Tajikistan"]
+  );
+  assert.deepEqual(
+    teams(
+      __testHooks.filterCanonicalLiveActivityMatchesForUser(
+        matches,
+        liveActivityUser(0, { showFACupEarlyRounds: true }),
+        nowMs
+      )
+    ),
+    ["Azerbaijan|Tajikistan", "Thame United|Exmouth Town"]
+  );
+  assert.deepEqual(__testHooks.isEligibleForLiveActivityByPreferences(liveActivityUser(0, {}), matches[1]), {
+    eligible: false,
+    reason: "fa_cup_early_round_filtered_out",
+  });
+});

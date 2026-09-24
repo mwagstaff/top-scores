@@ -4488,6 +4488,7 @@ function filterCanonicalLiveActivityMatchesForUser(matches, user, nowMs = Date.n
       };
     })
     .filter(Boolean)
+    .filter((match) => prefs.showFACupEarlyRounds === true || !isFACupEarlyRoundMatch(match))
     .filter((match) => {
       if (liveActivityFixtureCategoryFilter) {
         return liveActivityFixtureCategoryFilter(user, match);
@@ -4872,6 +4873,34 @@ function compareUpcomingLiveActivityMatches(lhs, rhs) {
   );
 }
 
+// Mirrors Match.isFACupEarlyRound in the iOS app, which hides these rounds from
+// the fixtures list unless showFACupEarlyRounds is enabled.
+function isFACupEarlyRoundMatch(match) {
+  const leagueId = match && match.league_id != null ? String(match.league_id) : null;
+  const league = String((match && match.league) || "").trim().toLowerCase();
+  if (leagueId !== "39" && league !== "fa cup") return false;
+
+  // BSD exposes round_name as league_subcategory. Named stages take
+  // precedence because qualifying and knockout rounds can reuse numbers.
+  const round = String((match && match.league_subcategory) || "")
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean);
+  if (round.length === 0) {
+    return match.round_number === 1 || match.round_number === 2;
+  }
+  if (round.some((token) => token.startsWith("qualif") || token === "preliminary")) {
+    return true;
+  }
+  const properRound = round
+    .filter((token) => token !== "proper" && token !== "replay" && token !== "replays")
+    .join(" ");
+  return [
+    "1", "2", "round 1", "round 2", "1st round", "2nd round",
+    "first round", "second round", "round one", "round two",
+  ].includes(properRound);
+}
+
 function isEligibleForLiveActivityByPreferences(user, match) {
   const prefs = user && user.preferences && typeof user.preferences === "object" ? user.preferences : {};
   const hasFixtureViewOptionSelection =
@@ -4881,6 +4910,13 @@ function isEligibleForLiveActivityByPreferences(user, match) {
     return {
       eligible: false,
       reason: "invalid_match",
+    };
+  }
+
+  if (prefs.showFACupEarlyRounds !== true && isFACupEarlyRoundMatch(match)) {
+    return {
+      eligible: false,
+      reason: "fa_cup_early_round_filtered_out",
     };
   }
 
@@ -8497,6 +8533,7 @@ module.exports = {
     matchIsMajorGameOfInterest,
     matchIsMajorUefaClubKnockoutFixture,
     isEligibleForLiveActivityByPreferences,
+    isFACupEarlyRoundMatch,
     shouldAllowInactiveLiveActivityEvaluation,
     hasImminentUpcomingLiveActivityMatch,
     isWithinLiveActivityActiveWindow,
