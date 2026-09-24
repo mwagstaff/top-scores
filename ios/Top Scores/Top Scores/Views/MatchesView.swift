@@ -697,6 +697,7 @@ struct MatchesView: View {
         } message: {
             Text(calendarSubscriptionErrorMessage)
         }
+        .crashBreadcrumb("team_search", isPresented: isTeamSearchPresented)
         .sheet(isPresented: $isTeamSearchPresented, onDismiss: navigateToPendingTeam) {
             TeamSearchView(apiBaseURL: preferences.apiBaseURL) { context in
                 pendingTeamSearchDestination = context
@@ -704,6 +705,7 @@ struct MatchesView: View {
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
+        .crashBreadcrumb("scores_beat_the_ai", isPresented: isPredictionMenuPresented)
         .sheet(isPresented: $isPredictionMenuPresented) {
             if let predictionGame {
                 PredictionGameMenuFlow(onPredictionsVisibilityChanged: predictionsVisibilityDidChange)
@@ -1025,6 +1027,7 @@ struct MatchesView: View {
             .accessibilityLabel("Choose fixture date")
             .accessibilityValue(scoresHeaderSubtitle ?? "No date selected")
             .accessibilityHint("Opens a calendar to jump to another date")
+            .crashBreadcrumb("fixture_date_picker", isPresented: isFixtureDatePickerPresented)
             .popover(isPresented: $isFixtureDatePickerPresented) {
                 fixtureDatePickerPopover
                     .presentationCompactAdaptation(.sheet)

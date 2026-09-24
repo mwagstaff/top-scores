@@ -76,6 +76,7 @@ const {
   upsertBsdRecords,
   registerCalendarSubscription,
   getCalendarSubscription,
+  saveAppCrashReport,
 } = require("./mongo_client");
 const { generateICalendar } = require("./ical_feed");
 const {
@@ -28338,6 +28339,48 @@ app.post(`${API_PREFIX}/live-activity/widget-diagnostics`, async (req, res) => {
       error: "Failed to save widget diagnostics",
       message: err.message,
     });
+  }
+});
+
+// MetricKit crash reports forwarded by the iOS app on a later launch, together with
+// the screen/sheet breadcrumbs recorded before the crash. TestFlight crash logs only
+// carry system frames for UIKit-internal crashes, so the breadcrumbs name the screen.
+app.post(`${API_PREFIX}/app-diagnostics/crash`, async (req, res) => {
+  setCacheOnlyHeaders(res);
+
+  const { crash, breadcrumbs, appVersion, osVersion, deviceModel } = req.body || {};
+  if (!crash || typeof crash !== "object") {
+    res.status(400).json({ error: "Missing crash object." });
+    return;
+  }
+  const normalizedBreadcrumbs = Array.isArray(breadcrumbs)
+    ? breadcrumbs.map((entry) => String(entry || "").slice(0, 300)).filter(Boolean).slice(-60)
+    : [];
+
+  try {
+    const record = {
+      device_token: req.deviceToken || null,
+      app_version: typeof appVersion === "string" ? appVersion.slice(0, 40) : null,
+      os_version: typeof osVersion === "string" ? osVersion.slice(0, 80) : null,
+      device_model: typeof deviceModel === "string" ? deviceModel.slice(0, 40) : null,
+      crash,
+      breadcrumbs: normalizedBreadcrumbs,
+    };
+    await saveAppCrashReport(record);
+    console.warn(
+      `[API] App crash report ${JSON.stringify({
+        device: (req.deviceToken || "").slice(0, 12) || null,
+        app_version: record.app_version,
+        signal: crash.signal ?? null,
+        exception_type: crash.exceptionType ?? null,
+        crashed_at: crash.timestamp ?? null,
+        last_breadcrumbs: normalizedBreadcrumbs.slice(-5),
+      })}`
+    );
+    res.status(200).json({ success: true });
+  } catch (err) {
+    console.error("[API] Error saving app crash report:", err);
+    res.status(500).json({ error: "Failed to save crash report", message: err.message });
   }
 });
 

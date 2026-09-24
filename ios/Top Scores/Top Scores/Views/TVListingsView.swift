@@ -173,6 +173,7 @@ struct TVListingsView: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             ukListingsNote
         }
+        .crashBreadcrumb("watchability_info", isPresented: selectedWatchabilityMatch != nil)
         .sheet(item: $selectedWatchabilityMatch) { match in
             WatchabilityBreakdownSheet(match: match)
         }

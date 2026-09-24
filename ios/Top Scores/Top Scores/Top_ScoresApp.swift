@@ -26,6 +26,7 @@ struct Top_ScoresApp: App {
 
     init() {
         PerformanceSignposter.startup.emitEvent("AppInit")
+        CrashBreadcrumbs.record("launch \(AppDiagnosticsMonitor.appVersion)")
         AppDiagnosticsMonitor.shared.start()
         BackgroundRefreshManager.register()
         PhoneWatchSyncService.shared.activate()
@@ -75,6 +76,7 @@ struct Top_ScoresApp: App {
         }
         .onChange(of: scenePhase) { _, newPhase in
             performanceDiagnosticSetSceneState(String(describing: newPhase))
+            CrashBreadcrumbs.record("scene \(newPhase)")
             diagnosticLog("[TopScoresApp] scenePhase changed to %@", String(describing: newPhase))
             LiveActivitySyncService.shared.handleScenePhaseChange(newPhase)
             switch newPhase {

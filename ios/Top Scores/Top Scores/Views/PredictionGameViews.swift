@@ -35,9 +35,11 @@ struct PredictionGameView: View {
                 }
             }
         }
+        .crashBreadcrumb("beat_the_ai_fixture", isPresented: selectedFixture != nil)
         .sheet(item: $selectedFixture) { target in
             PredictionGameEditor(fixtureID: target.id)
         }
+        .crashBreadcrumb("beat_the_ai_rules_list", isPresented: showsRules)
         .sheet(isPresented: $showsRules) {
             PredictionGameRulesView()
         }

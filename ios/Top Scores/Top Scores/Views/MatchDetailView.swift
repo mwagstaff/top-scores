@@ -376,6 +376,7 @@ struct MatchDetailView: View {
         .alert(item: $actionAlert) { alert in
             Alert(title: Text(alert.title), message: Text(alert.message), dismissButton: .default(Text("OK")))
         }
+        .crashBreadcrumb("match_calendar_picker", isPresented: showCalendarPicker)
         .sheet(isPresented: $showCalendarPicker) {
             NavigationStack {
                 List {
@@ -1545,6 +1546,7 @@ private struct MatchDetailPredictionPanel: View {
             RoundedRectangle(cornerRadius: 15, style: .continuous)
                 .stroke(Color.white.opacity(0.16), lineWidth: 1)
         }
+        .crashBreadcrumb("match_prediction_help", isPresented: helpTopic != nil)
         .sheet(item: $helpTopic) { topic in
             NavigationStack {
                 VStack(alignment: .leading, spacing: 18) {
@@ -1946,6 +1948,7 @@ private struct MatchEventsCard: View {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .fill(Color(.secondarySystemBackground))
             )
+            .crashBreadcrumb("match_player", isPresented: selectedPlayer != nil)
             .sheet(item: $selectedPlayer) { player in
                 PlayerDetailsSheet(player: player, apiBaseURL: preferences.apiBaseURL)
             }
@@ -2774,6 +2777,7 @@ private struct FantasyMatchPlayersSection: View {
             showsPitchMarkings: true,
             accentOpacity: 0.24
         )
+        .crashBreadcrumb("match_player", isPresented: selectedPlayer != nil)
         .sheet(item: $selectedPlayer) { selection in
             FantasyPlayerDetailsSheet(
                 selection: selection,
@@ -3351,6 +3355,7 @@ private struct MatchLineupTeamPanelsView: View {
 
             MatchLineupMarkerLegend()
         }
+        .crashBreadcrumb("match_player", isPresented: selectedPlayer != nil)
         .sheet(item: $selectedPlayer) { player in
             PlayerDetailsSheet(player: player, apiBaseURL: preferences.apiBaseURL)
         }

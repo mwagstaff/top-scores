@@ -183,6 +183,7 @@ private struct PredictionGameMatchButton<Fallback: View>: View {
             .accessibilityIdentifier("prediction-game-\(fixtureID)")
             .accessibilityLabel(accessibilityLabel(state: state))
             .accessibilityHint(state.accessibilityHint)
+            .crashBreadcrumb("match_prediction_edit", isPresented: isEditing)
             .sheet(isPresented: $isEditing) {
                 PredictionGameEditor(fixtureID: fixtureID)
                     .environmentObject(store)

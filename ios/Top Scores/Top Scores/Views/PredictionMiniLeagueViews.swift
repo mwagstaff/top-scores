@@ -53,6 +53,7 @@ struct PredictionMiniLeaguesView: View {
         .task(id: initialInvitationCode) {
             if let initialInvitationCode { sheet = .join(initialInvitationCode) }
         }
+        .crashBreadcrumb("mini_league_sheet", isPresented: sheet != nil)
         .sheet(item: $sheet) { destination in
             NavigationStack {
                 switch destination {
@@ -427,6 +428,7 @@ struct PredictionMiniLeagueDetailView: View {
         .onChange(of: selectedRoundID) { _, _ in Task { await load() } }
         .onChange(of: selectedSeasonID) { _, _ in Task { await load() } }
         .refreshable { await load() }
+        .crashBreadcrumb("mini_league_settings", isPresented: showsSettings)
         .sheet(isPresented: $showsSettings, onDismiss: { if !membershipEnded { Task { await load() } } }) {
             if let detail {
                 NavigationStack { PredictionMiniLeagueSettingsView(detail: detail, leagues: leagues, onMembershipEnded: { membershipEnded = true; showsSettings = false; dismiss() }) }

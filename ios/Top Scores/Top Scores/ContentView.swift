@@ -109,6 +109,8 @@ struct ContentView: View {
                 content: .teamPicker
             )
         }
+        .crashBreadcrumb("team_picker", isPresented: fixturesCoordinator.isTeamPickerPresented)
+        .onChange(of: selectedTab) { _, tab in CrashBreadcrumbs.record("tab \(tab)") }
         .background(FootballVisualStyle.pageBackground)
         .tint(Color.accentColor)
         .environment(\.returnFromPredictionGameToFixtures) {

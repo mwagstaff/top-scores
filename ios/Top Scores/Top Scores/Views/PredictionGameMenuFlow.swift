@@ -62,6 +62,7 @@ struct PredictionGameMenuFlow: View {
         .toolbarColorScheme(.dark, for: .navigationBar)
         .preferredColorScheme(.dark)
         .interactiveDismissDisabled(game.isSaving)
+        .crashBreadcrumb("beat_the_ai_rules", isPresented: showsRules)
         .sheet(isPresented: $showsRules) { rules }
         .task(id: preferences.apiBaseURL) {
             path = invitationCode.map { [.leagues($0)] } ?? []

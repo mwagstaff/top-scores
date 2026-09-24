@@ -389,6 +389,68 @@ final class AppDiagnosticsMonitor: NSObject, MXMetricManagerSubscriber, @uncheck
                 )
             }
             persist(payload)
+            if !crashes.isEmpty {
+                let breadcrumbs = CrashBreadcrumbs.recent()
+                let timestamp = payload.timeStampEnd.formatted(.iso8601)
+                Task { @MainActor in
+                    for crash in crashes {
+                        await Self.upload(crash, timestamp: timestamp, breadcrumbs: breadcrumbs)
+                    }
+                }
+            }
+        }
+    }
+
+    nonisolated static var appVersion: String {
+        let info = Bundle.main.infoDictionary
+        let version = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "\(version) (\(build))"
+    }
+
+    /// Forwards a MetricKit crash with the breadcrumb trail so UIKit-internal crashes
+    /// (no app frames in the stack) can still be attributed to a screen.
+    private static func upload(
+        _ crash: MXCrashDiagnostic,
+        timestamp: String,
+        breadcrumbs: [String]
+    ) async {
+        let snapshot = PreferencesStore.loadSnapshot()
+        guard let baseURL = URL(string: snapshot.apiBaseURL) else { return }
+        var crashObject: [String: Any] = [
+            "timestamp": timestamp,
+            "signal": crash.signal?.stringValue as Any,
+            "exceptionType": crash.exceptionType?.stringValue as Any,
+            "exceptionCode": crash.exceptionCode?.stringValue as Any,
+            "terminationReason": crash.terminationReason as Any,
+            "appBuild": crash.metaData.applicationBuildVersion,
+        ]
+        // The API caps request bodies at 64KB; UIKit-internal stacks are usually well under.
+        let callStack = crash.callStackTree.jsonRepresentation()
+        if callStack.count < 40_000,
+           let tree = try? JSONSerialization.jsonObject(with: callStack) {
+            crashObject["callStackTree"] = tree
+        }
+        let payload: [String: Any] = [
+            "crash": crashObject,
+            "breadcrumbs": breadcrumbs,
+            "appVersion": appVersion,
+            "osVersion": crash.metaData.osVersion,
+            "deviceModel": crash.metaData.deviceType,
+        ]
+        var request = URLRequest(url: baseURL.appendingPathComponent("app-diagnostics/crash"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        DeviceIdentity.applyHeader(to: &request)
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+            let (_, response) = try await URLSession.shared.data(for: request)
+            diagnosticLog(
+                "[AppDiagnostics] crash_report_uploaded status=%d",
+                (response as? HTTPURLResponse)?.statusCode ?? -1
+            )
+        } catch {
+            diagnosticLog("[AppDiagnostics] crash_report_upload_failed error=%@", error.localizedDescription)
         }
     }
 

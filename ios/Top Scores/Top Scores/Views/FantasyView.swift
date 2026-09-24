@@ -180,18 +180,22 @@ struct FantasyView: View {
                     }
                 }
             }
+            .crashBreadcrumb("fantasy_add_rival", isPresented: showAddRivalSheet)
             .sheet(isPresented: $showAddRivalSheet) {
                 addRivalSheet
             }
+            .crashBreadcrumb("fantasy_sign_in", isPresented: showFantasySignIn)
             .sheet(isPresented: $showFantasySignIn) {
                 FantasySignInView { entryID in
                     completeFantasySignIn(entryID)
                 }
             }
+            .crashBreadcrumb("fantasy_rival_squad", isPresented: selectedRivalSquad != nil)
             .sheet(item: $selectedRivalSquad) { rival in
                 rivalDetailSheet(rival)
                     .presentationDragIndicator(.visible)
             }
+            .crashBreadcrumb("fantasy_league_detail", isPresented: selectedLeagueStanding != nil)
             .sheet(
                 item: $selectedLeagueStanding,
                 onDismiss: resetLeagueDetailPresentation
@@ -199,6 +203,7 @@ struct FantasyView: View {
                 leagueDetailSheet(league)
                     .presentationDragIndicator(.visible)
             }
+            .crashBreadcrumb("fantasy_score_breakdown", isPresented: selectedScoreBreakdown != nil)
             .sheet(item: $selectedScoreBreakdown) { breakdown in
                 scoreBreakdownSheet(breakdown)
                     .presentationDragIndicator(.visible)
@@ -227,6 +232,7 @@ struct FantasyView: View {
                     Text("Remove \(rivalTeamNamePendingDeletion) from Your rivals?")
                 }
             }
+            .crashBreadcrumb("fantasy_player", isPresented: selectedPlayerSelection != nil)
             .sheet(item: $selectedPlayerSelection) { selection in
                 FantasyPlayerDetailsSheet(
                     selection: selection,
@@ -235,6 +241,7 @@ struct FantasyView: View {
                 )
                 .presentationDragIndicator(.visible)
             }
+            .crashBreadcrumb("fantasy_review_share", isPresented: showReviewShareSheet)
             .sheet(isPresented: $showReviewShareSheet, onDismiss: {
                 shareRemovedEntryIDs = []
                 isPreparingShareImage = false
@@ -251,6 +258,7 @@ struct FantasyView: View {
                 reviewAndShareSheet
                     .presentationDragIndicator(.visible)
             }
+            .crashBreadcrumb("fantasy_share", isPresented: activeSharePayload != nil)
             .sheet(item: $activeSharePayload, onDismiss: {
                 activeSharePayload = nil
             }) {
@@ -2253,6 +2261,7 @@ struct FantasyView: View {
         } message: {
             Text(leagueMemberLoadErrorMessage)
         }
+        .crashBreadcrumb("fantasy_league_member_player", isPresented: selectedLeagueMemberPlayerSelection != nil)
         .sheet(item: $selectedLeagueMemberPlayerSelection) { selection in
             FantasyPlayerDetailsSheet(
                 selection: selection,
@@ -2261,6 +2270,7 @@ struct FantasyView: View {
             )
             .presentationDragIndicator(.visible)
         }
+        .crashBreadcrumb("fantasy_league_member_breakdown", isPresented: selectedLeagueMemberScoreBreakdown != nil)
         .sheet(item: $selectedLeagueMemberScoreBreakdown) { breakdown in
             scoreBreakdownSheet(
                 breakdown,

@@ -108,6 +108,7 @@ struct ProfileView: View {
             .toolbarColorScheme(.dark, for: .navigationBar)
         }
         .environment(\.colorScheme, .dark)
+        .crashBreadcrumb("profile_beat_the_ai", isPresented: showsPredictionGame)
         .sheet(isPresented: $showsPredictionGame) {
             PredictionGameMenuFlow(onPredictionsVisibilityChanged: {})
                 .presentationDetents([.large])

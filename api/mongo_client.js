@@ -11,6 +11,7 @@ const MONGODB_URI_TOP_SCORES = process.env.MONGODB_URI_TOP_SCORES || "";
 const DEFAULT_DB_NAME = "top_scores";
 const MATCH_WRITE_LOGS_TTL_SECONDS = 6 * 24 * 60 * 60;
 const BBC_REQUESTS_TTL_SECONDS = 7 * 24 * 60 * 60;
+const APP_CRASH_REPORTS_TTL_SECONDS = 90 * 24 * 60 * 60;
 
 let client = null;
 let db = null;
@@ -113,6 +114,9 @@ async function ensureIndexes() {
       { key: { source: 1, timestamp_ms: -1 }, name: "source_timestamp" },
       { key: { status_code: 1, timestamp_ms: -1 }, name: "status_timestamp" },
       { key: { inserted_at: 1 }, name: "inserted_at_ttl", expireAfterSeconds: BBC_REQUESTS_TTL_SECONDS },
+    ]),
+    collection("app_crash_reports").createIndexes([
+      { key: { inserted_at: 1 }, name: "inserted_at_ttl", expireAfterSeconds: APP_CRASH_REPORTS_TTL_SECONDS },
     ]),
     // BSD evaluation collections (all carry an `updated_at` ISO timestamp).
     collection("bsd_leagues").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
@@ -777,6 +781,15 @@ async function saveBbcRequestHistory(record) {
   return stripMongoId(doc);
 }
 
+async function saveAppCrashReport(record) {
+  const mongoDb = await getDb();
+  if (!mongoDb || !record) return null;
+  // BSON Date required for the inserted_at_ttl TTL index to expire docs.
+  const doc = { ...record, inserted_at: new Date() };
+  await collection("app_crash_reports").insertOne(doc);
+  return stripMongoId(doc);
+}
+
 // ---------------------------------------------------------------------------
 // Supplementary LiveFootballOnTV snapshots.
 //
@@ -1245,6 +1258,7 @@ module.exports = {
   saveBbcMatchEventHistory,
   saveBbcNotificationHistory,
   saveBbcRequestHistory,
+  saveAppCrashReport,
   acquireLiveFootballTvLease,
   releaseLiveFootballTvLease,
   saveLiveFootballTvSnapshot,

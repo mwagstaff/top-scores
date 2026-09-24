@@ -67,6 +67,7 @@ final class PredictionGameCenterService: NSObject, GKGameCenterControllerDelegat
                                     return
                                 }
                                 self.authenticationController = controller
+                                CrashBreadcrumbs.record("present game_center_sign_in")
                                 presenter.present(controller, animated: true)
                             } else if let error {
                                 self.finishAuthentication(error: error)
@@ -159,6 +160,7 @@ final class PredictionGameCenterService: NSObject, GKGameCenterControllerDelegat
             leaderboardID: leaderboardID, playerScope: .friendsOnly, timeScope: .allTime
         )
         controller.gameCenterDelegate = self
+        CrashBreadcrumbs.record("present game_center_dashboard")
         presenter.present(controller, animated: true)
     }
 
@@ -205,6 +207,7 @@ final class PredictionGameCenterService: NSObject, GKGameCenterControllerDelegat
         GKAccessPoint.shared.isActive = false
         let controller = GKGameCenterViewController(state: state)
         controller.gameCenterDelegate = self
+        CrashBreadcrumbs.record("present game_center_dashboard")
         presenter.present(controller, animated: true)
     }
 

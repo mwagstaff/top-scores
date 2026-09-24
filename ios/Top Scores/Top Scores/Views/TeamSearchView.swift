@@ -62,8 +62,10 @@ struct TeamSearchView: View {
         .environment(\.colorScheme, .dark)
         .onAppear {
             store.configureForSearch(apiBaseURL: apiBaseURL)
-            Task { @MainActor in
-                await Task.yield()
+            // Focus only after the sheet's presentation transition has settled: raising the
+            // keyboard while UIKit is still resolving the sheet's detents crashes in
+            // SheetLayoutInfo._activeDetents (iOS 26).
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                 isSearchFocused = true
             }
         }
