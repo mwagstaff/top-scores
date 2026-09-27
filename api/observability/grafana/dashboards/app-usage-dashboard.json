@@ -1,655 +1,1198 @@
 {
   "uid": "top-scores-app-usage",
-  "title": "top-scores • App Usage",
-  "tags": ["top-scores", "app", "usage", "performance", "ios"],
-  "timezone": "browser",
+  "title": "Top Scores \u00b7 Audience and Usage",
+  "tags": [
+    "top-scores",
+    "app",
+    "usage",
+    "performance",
+    "ios"
+  ],
+  "timezone": "Europe/London",
   "schemaVersion": 38,
-  "version": 1,
-  "refresh": "30s",
+  "version": 2,
+  "refresh": "1m",
   "time": {
-    "from": "now-24h",
+    "from": "now-30d",
     "to": "now"
   },
   "panels": [
     {
+      "id": 1,
       "type": "stat",
-      "title": "Unique Devices (All Time)",
-      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "blue", "value": null },
-              { "color": "green", "value": 1 }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
-        "orientation": "auto",
-        "textMode": "value_and_name",
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "center"
+      "title": "Active today \u00b7 London",
+      "description": "Distinct production iPhone/iPad installations with recorded foreground activity. Background requests and legacy clients are excluded.",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 4
       },
       "targets": [
         {
-          "expr": "top_scores_app_metrics_unique_devices_total{job=\"top-scores\"}",
-          "legendFormat": "Unique devices"
+          "refId": "A",
+          "expr": "max(top_scores_audience_active_installations{job=\"top-scores\",window=\"today\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "legendFormat": "__auto",
+          "instant": true,
+          "range": false
         }
-      ]
-    },
-    {
-      "type": "stat",
-      "title": "Active Devices (Last 30 Days)",
-      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "blue", "value": null },
-              { "color": "green", "value": 1 }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
-        "orientation": "auto",
-        "textMode": "value_and_name",
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "center"
-      },
-      "targets": [
-        {
-          "expr": "top_scores_app_metrics_active_devices_total{job=\"top-scores\"}",
-          "legendFormat": "Active devices"
-        }
-      ]
-    },
-    {
-      "type": "stat",
-      "title": "Total Events (All Time)",
-      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "blue", "value": null }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
-        "orientation": "auto",
-        "textMode": "value_and_name",
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "center"
-      },
-      "targets": [
-        {
-          "expr": "top_scores_app_metrics_events_total{job=\"top-scores\"}",
-          "legendFormat": "Total events"
-        }
-      ]
-    },
-    {
-      "type": "stat",
-      "title": "Rejected Events (All Time)",
-      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
-      "fieldConfig": {
-        "defaults": {
-          "color": { "mode": "thresholds" },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              { "color": "green", "value": null },
-              { "color": "yellow", "value": 1 },
-              { "color": "red", "value": 10 }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
-        "orientation": "auto",
-        "textMode": "value_and_name",
-        "colorMode": "background",
-        "graphMode": "none",
-        "justifyMode": "center"
-      },
-      "targets": [
-        {
-          "expr": "top_scores_app_metrics_events_rejected_total{job=\"top-scores\"}",
-          "legendFormat": "Rejected events"
-        }
-      ]
-    },
-
-    {
-      "type": "timeseries",
-      "title": "Active Devices Over Time",
-      "description": "Number of unique device IDs seen within the active window (rolling 30-day lookback). Note: the active device count is tracked in-memory and resets to zero on server restart, which can cause visible drops in this chart.",
-      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      ],
       "fieldConfig": {
         "defaults": {
           "unit": "short",
-          "custom": { "spanNulls": true }
-        },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": { "mode": "multi" }
-      },
-      "targets": [
-        {
-          "expr": "top_scores_app_metrics_active_devices_total{job=\"top-scores\"}",
-          "legendFormat": "Active devices"
-        },
-        {
-          "expr": "top_scores_app_metrics_unique_devices_total{job=\"top-scores\"}",
-          "legendFormat": "Unique devices (all time)"
-        }
-      ]
-    },
-
-    {
-      "type": "timeseries",
-      "title": "Event Rate by Type",
-      "description": "Rate of app events received per minute, broken down by event type.",
-      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "reqpm",
-          "custom": { "spanNulls": true }
-        },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": { "mode": "multi" }
-      },
-      "targets": [
-        {
-          "expr": "sum by (event) (rate(top_scores_app_metrics_events_by_device_total{job=\"top-scores\"}[5m])) * 60",
-          "legendFormat": "{{event}}"
-        }
-      ]
-    },
-
-    {
-      "type": "table",
-      "title": "Top Screens Opened",
-      "description": "Screens (screen_view events) ordered by total views.",
-      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 10 },
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": [
-          {
-            "matcher": { "id": "byName", "options": "Value" },
-            "properties": [
-              { "id": "displayName", "value": "Total Views" },
-              { "id": "custom.width", "value": 120 }
-            ]
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
           },
-          {
-            "matcher": { "id": "byName", "options": "screen" },
-            "properties": [
-              { "id": "displayName", "value": "Screen" }
-            ]
-          }
-        ]
+          "noValue": "Unavailable"
+        },
+        "overrides": []
       },
       "options": {
-        "sortBy": [{ "displayName": "Total Views", "desc": true }],
-        "footer": { "show": false }
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Active \u00b7 last 7 days",
+      "description": "Distinct production iPhone/iPad installations with recorded foreground activity. Background requests and legacy clients are excluded.",
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 4
       },
-      "transformations": [
-        { "id": "labelsToFields", "options": { "valueLabel": "screen" } },
-        { "id": "merge", "options": {} },
+      "targets": [
         {
-          "id": "filterFieldsByName",
-          "options": { "include": { "names": ["screen", "Value"] } }
+          "refId": "A",
+          "expr": "max(top_scores_audience_active_installations{job=\"top-scores\",window=\"7d\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "legendFormat": "__auto",
+          "instant": true,
+          "range": false
         }
       ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "noValue": "Unavailable"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Active \u00b7 last 30 days",
+      "description": "Distinct production iPhone/iPad installations with recorded foreground activity. Background requests and legacy clients are excluded.",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
       "targets": [
         {
-          "expr": "sort_desc(sum by (screen) (top_scores_app_metrics_events_by_device_total{job=\"top-scores\", event=\"screen_view\"}))",
+          "refId": "A",
+          "expr": "max(top_scores_audience_active_installations{job=\"top-scores\",window=\"30d\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "legendFormat": "__auto",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "noValue": "Unavailable"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Collection healthy (1 = yes)",
+      "description": "Audience snapshots refresh each minute. A snapshot older than three minutes is unavailable, not zero users.",
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(top_scores_audience_ready{job=\"top-scores\"})",
+          "legendFormat": "__auto",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "noValue": "Unavailable"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Active installations over time",
+      "description": "Rolling distinct counts; never sum daily unique counts.",
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (window)(top_scores_audience_active_installations{job=\"top-scores\",window=~\"7d|30d\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "legendFormat": "{{window}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Daily active \u00b7 previous completed London day",
+      "description": "Each point shows the previous completed London calendar day. Late deliveries can revise it. Counts survive API restarts.",
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(top_scores_audience_active_installations{job=\"top-scores\",window=\"yesterday\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "legendFormat": "Previous day",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "type": "stat",
+      "title": "Foreground sessions \u00b7 $window",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 12,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(top_scores_audience_events{job=\"top-scores\",window=\"$window\",event=\"app_open\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "legendFormat": "__auto",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "noValue": "Unavailable"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 8,
+      "type": "stat",
+      "title": "Sessions per active installation \u00b7 $window",
+      "description": "",
+      "gridPos": {
+        "x": 6,
+        "y": 12,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max(top_scores_audience_events{job=\"top-scores\",window=\"$window\",event=\"app_open\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1)) / clamp_min(max(top_scores_audience_active_installations{job=\"top-scores\",window=\"$window\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1)), 1)",
+          "legendFormat": "__auto",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "noValue": "Unavailable"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 9,
+      "type": "stat",
+      "title": "Active 7 days \u00b7 week-on-week change",
+      "description": "Requires at least a week of v2 collection history. Compares rolling seven-day audiences.",
+      "gridPos": {
+        "x": 12,
+        "y": 12,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(max(top_scores_audience_active_installations{job=\"top-scores\",window=\"7d\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1)) / clamp_min(max(top_scores_audience_active_installations{job=\"top-scores\",window=\"7d\"} offset 7d), 1) - 1) * 100",
+          "legendFormat": "__auto",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "noValue": "Unavailable"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 10,
+      "type": "stat",
+      "title": "Snapshot age",
+      "description": "",
+      "gridPos": {
+        "x": 18,
+        "y": 12,
+        "w": 6,
+        "h": 4
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - max(top_scores_audience_snapshot_timestamp_seconds{job=\"top-scores\"} > 0)",
+          "legendFormat": "__auto",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "noValue": "Unavailable"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 11,
+      "type": "bargauge",
+      "title": "Feature reach \u00b7 unique installations \u00b7 $window",
+      "description": "A person visiting ten times still counts once for this screen. An installation can use several screens; do not sum reach across features.",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 9
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (screen)(top_scores_audience_feature_installations{job=\"top-scores\",window=\"$window\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
           "legendFormat": "{{screen}}",
           "instant": true,
-          "format": "table"
+          "range": false
         }
-      ]
-    },
-
-    {
-      "type": "table",
-      "title": "Top Activities Performed",
-      "description": "User activities (non-screen_view events) ordered by total count.",
-      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 10 },
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": [
-          {
-            "matcher": { "id": "byName", "options": "Value" },
-            "properties": [
-              { "id": "displayName", "value": "Total Count" },
-              { "id": "custom.width", "value": 120 }
-            ]
-          },
-          {
-            "matcher": { "id": "byName", "options": "event" },
-            "properties": [{ "id": "displayName", "value": "Activity" }]
-          },
-          {
-            "matcher": { "id": "byName", "options": "screen" },
-            "properties": [{ "id": "displayName", "value": "Screen" }]
-          }
-        ]
-      },
-      "options": {
-        "sortBy": [{ "displayName": "Total Count", "desc": true }],
-        "footer": { "show": false }
-      },
-      "transformations": [
-        { "id": "labelsToFields", "options": { "valueLabel": "event" } },
-        { "id": "merge", "options": {} }
       ],
-      "targets": [
-        {
-          "expr": "sort_desc(sum by (event, screen) (top_scores_app_metrics_events_by_device_total{job=\"top-scores\", event!=\"screen_view\", event!=\"app_open\"}))",
-          "legendFormat": "{{event}} / {{screen}}",
-          "instant": true,
-          "format": "table"
-        }
-      ]
-    },
-
-    {
-      "type": "timeseries",
-      "title": "Screen Load Time — p90 & p95 (All Screens)",
-      "description": "90th and 95th percentile load time across all screen_view events that reported a duration.",
-      "gridPos": { "x": 0, "y": 22, "w": 12, "h": 8 },
       "fieldConfig": {
         "defaults": {
-          "unit": "ms",
-          "custom": { "spanNulls": true }
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
         },
         "overrides": []
       },
       "options": {
-        "tooltip": { "mode": "multi" }
-      },
-      "targets": [
-        {
-          "expr": "histogram_quantile(0.90, sum(increase(top_scores_app_event_duration_seconds_bucket{job=\"top-scores\", event=\"screen_view\"}[1h])) by (le)) * 1000",
-          "legendFormat": "p90"
-        },
-        {
-          "expr": "histogram_quantile(0.95, sum(increase(top_scores_app_event_duration_seconds_bucket{job=\"top-scores\", event=\"screen_view\"}[1h])) by (le)) * 1000",
-          "legendFormat": "p95"
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
         }
-      ]
+      }
     },
-
     {
-      "type": "timeseries",
-      "title": "Activity Duration — p90 & p95 (All Activities)",
-      "description": "90th and 95th percentile duration across all non-screen_view activities that reported a duration.",
-      "gridPos": { "x": 12, "y": 22, "w": 12, "h": 8 },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ms",
-          "custom": { "spanNulls": true }
-        },
-        "overrides": []
-      },
-      "options": {
-        "tooltip": { "mode": "multi" }
+      "id": 12,
+      "type": "bargauge",
+      "title": "Feature visits \u00b7 $window",
+      "description": "",
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 9
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.90, sum(increase(top_scores_app_event_duration_seconds_bucket{job=\"top-scores\", event!=\"screen_view\", event!=\"app_open\"}[1h])) by (le)) * 1000",
-          "legendFormat": "p90"
-        },
-        {
-          "expr": "histogram_quantile(0.95, sum(increase(top_scores_app_event_duration_seconds_bucket{job=\"top-scores\", event!=\"screen_view\", event!=\"app_open\"}[1h])) by (le)) * 1000",
-          "legendFormat": "p95"
-        }
-      ]
-    },
-
-    {
-      "type": "table",
-      "title": "Screen Load Time — p90 & p95 per Screen",
-      "description": "Percentile load times per screen (from screen open to data ready). Only screens that reported durationMs are included.",
-      "gridPos": { "x": 0, "y": 30, "w": 12, "h": 10 },
-      "fieldConfig": {
-        "defaults": { "unit": "ms" },
-        "overrides": [
-          {
-            "matcher": { "id": "byName", "options": "screen" },
-            "properties": [{ "id": "displayName", "value": "Screen" }]
-          },
-          {
-            "matcher": { "id": "byName", "options": "Value #p90" },
-            "properties": [
-              { "id": "displayName", "value": "p90 (ms)" },
-              { "id": "custom.width", "value": 110 }
-            ]
-          },
-          {
-            "matcher": { "id": "byName", "options": "Value #p95" },
-            "properties": [
-              { "id": "displayName", "value": "p95 (ms)" },
-              { "id": "custom.width", "value": 110 }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "sortBy": [{ "displayName": "p95 (ms)", "desc": true }],
-        "footer": { "show": false }
-      },
-      "transformations": [
-        { "id": "merge", "options": {} }
-      ],
-      "targets": [
-        {
-          "expr": "histogram_quantile(0.90, sum by (screen, le) (top_scores_app_event_duration_seconds_bucket{job=\"top-scores\", event=\"screen_view\"})) * 1000",
+          "refId": "A",
+          "expr": "max by (screen)(top_scores_audience_feature_visits{job=\"top-scores\",window=\"$window\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
           "legendFormat": "{{screen}}",
-          "refId": "p90",
           "instant": true,
-          "format": "table"
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
         },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 13,
+      "type": "bargauge",
+      "title": "Actions \u00b7 $window",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 25,
+        "w": 12,
+        "h": 10
+      },
+      "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (screen, le) (top_scores_app_event_duration_seconds_bucket{job=\"top-scores\", event=\"screen_view\"})) * 1000",
+          "refId": "A",
+          "expr": "max by (event)(top_scores_audience_events{job=\"top-scores\",window=\"$window\",event!~\"app_open|screen_view|match_details_loaded\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "legendFormat": "{{event}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Screen visits per minute",
+      "description": "Receipt-time rate of accepted, deduplicated production foreground events. Offline deliveries appear when received.",
+      "gridPos": {
+        "x": 12,
+        "y": 25,
+        "w": 12,
+        "h": 10
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (screen) (rate(top_scores_audience_events_total{job=\"top-scores\",event=\"screen_view\"}[$__rate_interval])) * 60",
           "legendFormat": "{{screen}}",
-          "refId": "p95",
-          "instant": true,
-          "format": "table"
+          "instant": false,
+          "range": true
         }
-      ]
-    },
-
-    {
-      "type": "table",
-      "title": "Activity Duration — p90 & p95 per Activity",
-      "description": "Percentile durations per activity type. Only activities that reported durationMs are included.",
-      "gridPos": { "x": 12, "y": 30, "w": 12, "h": 10 },
-      "fieldConfig": {
-        "defaults": { "unit": "ms" },
-        "overrides": [
-          {
-            "matcher": { "id": "byName", "options": "event" },
-            "properties": [{ "id": "displayName", "value": "Activity" }]
-          },
-          {
-            "matcher": { "id": "byName", "options": "screen" },
-            "properties": [{ "id": "displayName", "value": "Screen" }]
-          },
-          {
-            "matcher": { "id": "byName", "options": "Value #p90" },
-            "properties": [
-              { "id": "displayName", "value": "p90 (ms)" },
-              { "id": "custom.width", "value": 110 }
-            ]
-          },
-          {
-            "matcher": { "id": "byName", "options": "Value #p95" },
-            "properties": [
-              { "id": "displayName", "value": "p95 (ms)" },
-              { "id": "custom.width", "value": 110 }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "sortBy": [{ "displayName": "p95 (ms)", "desc": true }],
-        "footer": { "show": false }
-      },
-      "transformations": [
-        { "id": "merge", "options": {} }
       ],
-      "targets": [
-        {
-          "expr": "histogram_quantile(0.90, sum by (event, screen, le) (top_scores_app_event_duration_seconds_bucket{job=\"top-scores\", event!=\"screen_view\", event!=\"app_open\"})) * 1000",
-          "legendFormat": "{{event}} / {{screen}}",
-          "refId": "p90",
-          "instant": true,
-          "format": "table"
-        },
-        {
-          "expr": "histogram_quantile(0.95, sum by (event, screen, le) (top_scores_app_event_duration_seconds_bucket{job=\"top-scores\", event!=\"screen_view\", event!=\"app_open\"})) * 1000",
-          "legendFormat": "{{event}} / {{screen}}",
-          "refId": "p95",
-          "instant": true,
-          "format": "table"
-        }
-      ]
-    },
-
-    {
-      "type": "timeseries",
-      "title": "Screen Load Time p90 — Per Screen Over Time",
-      "description": "p90 load time per screen over the selected time window.",
-      "gridPos": { "x": 0, "y": 40, "w": 24, "h": 8 },
       "fieldConfig": {
         "defaults": {
-          "unit": "ms",
-          "custom": { "spanNulls": true }
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
         },
         "overrides": []
       },
       "options": {
-        "tooltip": { "mode": "multi" }
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 15,
+      "type": "bargauge",
+      "title": "Sessions by London hour \u00b7 last 30 days",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 35,
+        "w": 12,
+        "h": 8
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.90, sum by (screen, le) (increase(top_scores_app_event_duration_seconds_bucket{job=\"top-scores\", event=\"screen_view\"}[1h]))) * 1000",
-          "legendFormat": "{{screen}}"
+          "refId": "A",
+          "expr": "sum by (hour) (max by (weekday,hour)(top_scores_audience_sessions_by_hour{job=\"top-scores\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1)))",
+          "legendFormat": "{{hour}}:00",
+          "instant": true,
+          "range": false
         }
-      ]
-    },
-
-    {
-      "type": "timeseries",
-      "title": "Activity Duration p90 — Per Activity Over Time",
-      "description": "p90 duration per activity type over the selected time window.",
-      "gridPos": { "x": 0, "y": 48, "w": 24, "h": 8 },
+      ],
       "fieldConfig": {
         "defaults": {
-          "unit": "ms",
-          "custom": { "spanNulls": true }
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
         },
         "overrides": []
       },
       "options": {
-        "tooltip": { "mode": "multi" }
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 16,
+      "type": "bargauge",
+      "title": "Sessions by weekday \u00b7 last 30 days",
+      "description": "1 = Monday through 7 = Sunday; Europe/London.",
+      "gridPos": {
+        "x": 12,
+        "y": 35,
+        "w": 12,
+        "h": 8
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.90, sum by (event, le) (increase(top_scores_app_event_duration_seconds_bucket{job=\"top-scores\", event!=\"screen_view\", event!=\"app_open\"}[1h]))) * 1000",
-          "legendFormat": "{{event}}"
+          "refId": "A",
+          "expr": "sum by (weekday) (max by (weekday,hour)(top_scores_audience_sessions_by_hour{job=\"top-scores\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1)))",
+          "legendFormat": "Day {{weekday}}",
+          "instant": true,
+          "range": false
         }
-      ]
-    },
-
-    {
-      "type": "table",
-      "title": "Events by Device Model",
-      "description": "Total events broken down by device model (e.g. iPhone, iPad).",
-      "gridPos": { "x": 0, "y": 56, "w": 6, "h": 10 },
+      ],
       "fieldConfig": {
-        "defaults": {},
-        "overrides": [
-          {
-            "matcher": { "id": "byName", "options": "device_model" },
-            "properties": [{ "id": "displayName", "value": "Device Model" }]
-          },
-          {
-            "matcher": { "id": "byName", "options": "Value" },
-            "properties": [
-              { "id": "displayName", "value": "Events" },
-              { "id": "custom.width", "value": 100 }
-            ]
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
           }
-        ]
+        },
+        "overrides": []
       },
       "options": {
-        "sortBy": [{ "displayName": "Events", "desc": true }],
-        "footer": { "show": false }
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 17,
+      "type": "bargauge",
+      "title": "App version \u00b7 active installations \u00b7 $window",
+      "description": "Each installation is assigned its most recently observed value within the window; these are installation counts, not event shares.",
+      "gridPos": {
+        "x": 0,
+        "y": 43,
+        "w": 8,
+        "h": 8
       },
-      "transformations": [
-        { "id": "labelsToFields", "options": { "valueLabel": "device_model" } },
-        { "id": "merge", "options": {} },
-        { "id": "filterFieldsByName", "options": { "include": { "names": ["device_model", "Value"] } } }
-      ],
       "targets": [
         {
-          "expr": "sort_desc(sum by (device_model) (top_scores_app_metrics_events_by_device_total{job=\"top-scores\"}))",
-          "legendFormat": "{{device_model}}",
+          "refId": "A",
+          "expr": "max by (value)(top_scores_audience_installations_by_dimension{job=\"top-scores\",window=\"$window\",dimension=\"app_version\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "legendFormat": "{{value}}",
           "instant": true,
-          "format": "table"
+          "range": false
         }
-      ]
-    },
-
-    {
-      "type": "table",
-      "title": "Events by Device Type",
-      "description": "Total events broken down by device type (phone, pad, etc.).",
-      "gridPos": { "x": 6, "y": 56, "w": 6, "h": 10 },
+      ],
       "fieldConfig": {
-        "defaults": {},
-        "overrides": [
-          {
-            "matcher": { "id": "byName", "options": "device_type" },
-            "properties": [{ "id": "displayName", "value": "Device Type" }]
-          },
-          {
-            "matcher": { "id": "byName", "options": "Value" },
-            "properties": [
-              { "id": "displayName", "value": "Events" },
-              { "id": "custom.width", "value": 100 }
-            ]
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
           }
-        ]
+        },
+        "overrides": []
       },
       "options": {
-        "sortBy": [{ "displayName": "Events", "desc": true }],
-        "footer": { "show": false }
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 18,
+      "type": "bargauge",
+      "title": "Device class \u00b7 active installations \u00b7 $window",
+      "description": "Each installation is assigned its most recently observed value within the window; these are installation counts, not event shares.",
+      "gridPos": {
+        "x": 8,
+        "y": 43,
+        "w": 8,
+        "h": 8
       },
-      "transformations": [
-        { "id": "labelsToFields", "options": { "valueLabel": "device_type" } },
-        { "id": "merge", "options": {} },
-        { "id": "filterFieldsByName", "options": { "include": { "names": ["device_type", "Value"] } } }
-      ],
       "targets": [
         {
-          "expr": "sort_desc(sum by (device_type) (top_scores_app_metrics_events_by_device_total{job=\"top-scores\"}))",
-          "legendFormat": "{{device_type}}",
+          "refId": "A",
+          "expr": "max by (value)(top_scores_audience_installations_by_dimension{job=\"top-scores\",window=\"$window\",dimension=\"device_type\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "legendFormat": "{{value}}",
           "instant": true,
-          "format": "table"
+          "range": false
         }
-      ]
-    },
-
-    {
-      "type": "table",
-      "title": "Events by App Version",
-      "description": "Total events broken down by app version and build number.",
-      "gridPos": { "x": 12, "y": 56, "w": 6, "h": 10 },
+      ],
       "fieldConfig": {
-        "defaults": {},
-        "overrides": [
-          {
-            "matcher": { "id": "byName", "options": "app_version" },
-            "properties": [{ "id": "displayName", "value": "Version" }]
-          },
-          {
-            "matcher": { "id": "byName", "options": "build_number" },
-            "properties": [{ "id": "displayName", "value": "Build" }]
-          },
-          {
-            "matcher": { "id": "byName", "options": "Value" },
-            "properties": [
-              { "id": "displayName", "value": "Events" },
-              { "id": "custom.width", "value": 90 }
-            ]
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
           }
-        ]
+        },
+        "overrides": []
       },
       "options": {
-        "sortBy": [{ "displayName": "Events", "desc": true }],
-        "footer": { "show": false }
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 19,
+      "type": "bargauge",
+      "title": "OS major version \u00b7 active installations \u00b7 $window",
+      "description": "Each installation is assigned its most recently observed value within the window; these are installation counts, not event shares.",
+      "gridPos": {
+        "x": 16,
+        "y": 43,
+        "w": 8,
+        "h": 8
       },
-      "transformations": [
-        { "id": "labelsToFields", "options": { "valueLabel": "app_version" } },
-        { "id": "merge", "options": {} },
-        { "id": "filterFieldsByName", "options": { "include": { "names": ["app_version", "build_number", "Value"] } } }
-      ],
       "targets": [
         {
-          "expr": "sort_desc(sum by (app_version, build_number) (top_scores_app_metrics_events_by_device_total{job=\"top-scores\"}))",
-          "legendFormat": "{{app_version}} ({{build_number}})",
+          "refId": "A",
+          "expr": "max by (value)(top_scores_audience_installations_by_dimension{job=\"top-scores\",window=\"$window\",dimension=\"os_major\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "legendFormat": "{{value}}",
           "instant": true,
-          "format": "table"
+          "range": false
         }
-      ]
-    },
-
-    {
-      "type": "table",
-      "title": "Events by iOS Version",
-      "description": "Total events broken down by iOS/OS version.",
-      "gridPos": { "x": 18, "y": 56, "w": 6, "h": 10 },
+      ],
       "fieldConfig": {
-        "defaults": {},
-        "overrides": [
-          {
-            "matcher": { "id": "byName", "options": "os_version" },
-            "properties": [{ "id": "displayName", "value": "iOS Version" }]
-          },
-          {
-            "matcher": { "id": "byName", "options": "Value" },
-            "properties": [
-              { "id": "displayName", "value": "Events" },
-              { "id": "custom.width", "value": 100 }
-            ]
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
           }
-        ]
+        },
+        "overrides": []
       },
       "options": {
-        "sortBy": [{ "displayName": "Events", "desc": true }],
-        "footer": { "show": false }
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "API requests by surface / state",
+      "description": "Production requests. Watch requests have unknown foreground state; widget refreshes are background activity.",
+      "gridPos": {
+        "x": 0,
+        "y": 51,
+        "w": 12,
+        "h": 8
       },
-      "transformations": [
-        { "id": "labelsToFields", "options": { "valueLabel": "os_version" } },
-        { "id": "merge", "options": {} },
-        { "id": "filterFieldsByName", "options": { "include": { "names": ["os_version", "Value"] } } }
-      ],
       "targets": [
         {
-          "expr": "sort_desc(sum by (os_version) (top_scores_app_metrics_events_by_device_total{job=\"top-scores\"}))",
-          "legendFormat": "{{os_version}}",
-          "instant": true,
-          "format": "table"
+          "refId": "A",
+          "expr": "sum by (surface,state) (rate(top_scores_audience_request_duration_seconds_count{job=\"top-scores\",build_type=\"production\"}[$__rate_interval])) * 60",
+          "legendFormat": "{{surface}} \u00b7 {{state}}",
+          "instant": false,
+          "range": true
         }
-      ]
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 21,
+      "type": "bargauge",
+      "title": "API requests by route \u00b7 selected period",
+      "description": "",
+      "gridPos": {
+        "x": 12,
+        "y": 51,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sort_desc(sum by (route) (increase(top_scores_audience_request_duration_seconds_count{job=\"top-scores\",build_type=\"production\"}[$__range])))",
+          "legendFormat": "{{route}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "API error percentage",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 59,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * sum(rate(top_scores_audience_request_duration_seconds_count{job=\"top-scores\",build_type=\"production\",status=~\"4xx|5xx\"}[$__rate_interval])) / clamp_min(sum(rate(top_scores_audience_request_duration_seconds_count{job=\"top-scores\",build_type=\"production\"}[$__rate_interval])), 0.000001)",
+          "legendFormat": "Errors",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "API response p95 by route",
+      "description": "",
+      "gridPos": {
+        "x": 8,
+        "y": 59,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (route,le) (rate(top_scores_audience_request_duration_seconds_bucket{job=\"top-scores\",build_type=\"production\"}[$__rate_interval])))",
+          "legendFormat": "{{route}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "Screen/data load p50 and p95",
+      "description": "Only instrumented screens reporting a duration. Duration is load time, not time spent in the app.",
+      "gridPos": {
+        "x": 16,
+        "y": 59,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (screen,le) (rate(top_scores_audience_event_duration_seconds_bucket{job=\"top-scores\",event=~\"screen_view|match_details_loaded\"}[$__rate_interval])))",
+          "legendFormat": "{{screen}} p95",
+          "instant": false,
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.50, sum by (screen,le) (rate(top_scores_audience_event_duration_seconds_bucket{job=\"top-scores\",event=~\"screen_view|match_details_loaded\"}[$__rate_interval])))",
+          "legendFormat": "{{screen}} p50"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 25,
+      "type": "bargauge",
+      "title": "Event delivery outcomes \u00b7 selected period",
+      "description": "Includes legacy and debug deliveries; used to diagnose collection failures. Duplicate retries are acknowledged without recounting.",
+      "gridPos": {
+        "x": 0,
+        "y": 67,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (result) (increase(top_scores_audience_deliveries_total{job=\"top-scores\"}[$__range]))",
+          "legendFormat": "{{result}}",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      }
+    },
+    {
+      "id": 26,
+      "type": "timeseries",
+      "title": "Unclassified API traffic per minute",
+      "description": "Older clients, website, scripts and requests without metadata. Not part of the headline audience.",
+      "gridPos": {
+        "x": 8,
+        "y": 67,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (surface,build_type) (rate(top_scores_audience_request_duration_seconds_count{job=\"top-scores\",build_type=\"unknown\"}[$__rate_interval])) * 60",
+          "legendFormat": "{{surface}} / {{build_type}}",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 27,
+      "type": "timeseries",
+      "title": "Identified iOS request coverage",
+      "description": "",
+      "gridPos": {
+        "x": 16,
+        "y": 67,
+        "w": 8,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * sum(rate(top_scores_audience_request_duration_seconds_count{job=\"top-scores\",surface=\"ios_app\",build_type=\"production\",identified=\"yes\"}[$__rate_interval])) / clamp_min(sum(rate(top_scores_audience_request_duration_seconds_count{job=\"top-scores\",surface=\"ios_app\",build_type=\"production\"}[$__rate_interval])), 0.000001)",
+          "legendFormat": "Identified",
+          "instant": false,
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      }
+    },
+    {
+      "id": 28,
+      "type": "text",
+      "title": "How to read this dashboard",
+      "gridPos": {
+        "x": 0,
+        "y": 75,
+        "w": 24,
+        "h": 5
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "**Audience = production iPhone/iPad installations with v2 foreground events.** One person can have several installations. App opens count foreground sessions; transient inactive interruptions do not start another session.\n\nAudience cards, feature reach and profile panels use the named fixed window, independent of the date picker. Request/event trends and totals use the date picker. Legacy traffic cannot be backfilled into foreground audience counts. Offline events can arrive up to 48 hours late. Widgets, watch, website and unknown traffic are excluded from the headline audience. An unavailable snapshot shows no audience value rather than zero. Aggregate history requires Prometheus retention covering the chosen date range."
+      }
     }
-  ]
+  ],
+  "description": "Production iPhone/iPad installation activity. Audience windows are fixed; request and event trends follow the time picker. Data starts with analytics v2. Identifiers never appear in metrics.",
+  "templating": {
+    "list": [
+      {
+        "name": "window",
+        "label": "Audience window",
+        "type": "custom",
+        "query": "today,7d,30d",
+        "current": {
+          "text": "30d",
+          "value": "30d"
+        },
+        "options": [
+          {
+            "text": "today",
+            "value": "today",
+            "selected": false
+          },
+          {
+            "text": "7d",
+            "value": "7d",
+            "selected": false
+          },
+          {
+            "text": "30d",
+            "value": "30d",
+            "selected": true
+          }
+        ],
+        "includeAll": false,
+        "multi": false
+      }
+    ]
+  }
 }

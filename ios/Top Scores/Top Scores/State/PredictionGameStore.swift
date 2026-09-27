@@ -125,7 +125,11 @@ final class PredictionGameStore: ObservableObject {
     /// independently from data loads and declining sign-in leaves guest play ready.
     func gameScreenDidAppear(apiBaseURL: String) async {
         await activate(apiBaseURL: apiBaseURL, loadDashboard: false)
-        if !gameScreenVisible { automaticGameCenterAttempt = nil; gamePresentationID = UUID() }
+        if !gameScreenVisible {
+            automaticGameCenterAttempt = nil
+            gamePresentationID = UUID()
+            AppMetricsService.shared.fireScreenView(screen: "predictions", apiBaseURL: apiBaseURL)
+        }
         gameScreenVisible = true
         let server = normalizedServer(apiBaseURL)
         if let previousServer = automaticGameCenterServer, previousServer != server {
@@ -404,6 +408,7 @@ final class PredictionGameStore: ObservableObject {
                 history.sort { $0.kickoffAt > $1.kickoffAt }
                 historyNextOffset += 1
             }
+            AppMetricsService.shared.fireActivity("prediction_submitted", screen: "predictions", apiBaseURL: apiBaseURL)
             return true
         } catch let error as PredictionGameAPIError where error.requiresAIReview {
             _ = await loadFixture(fixtureID: fixtureID, apiBaseURL: apiBaseURL)

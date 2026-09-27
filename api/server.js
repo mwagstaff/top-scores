@@ -18,6 +18,8 @@ const zlib = require("zlib");
 const { monitorEventLoopDelay, performance } = require("perf_hooks");
 const express = require("express");
 const liveActivityMetrics = require("./live_activity_metrics");
+const { createAppAnalytics } = require("./app_analytics");
+const appAnalytics = createAppAnalytics();
 const { zonedDateTimeToUtcMs, zonedDateTimeToZonedDateTime } = require("./match_time");
 const {
   matchIsMajorGameOfInterest,
@@ -731,6 +733,8 @@ app.use((req, res, next) => {
   if (/^\/api\/v1\/goal-guesser\/(?:me|leagues\/[^/]+\/members\/[^/]+)\/team-logo\/?$/.test(req.path) && req.method === "PUT") return next();
   return express.json({ limit: "64kb" })(req, res, next);
 });
+
+app.use(appAnalytics.requestMiddleware);
 
 const goalGuesserTestHarnessEnabled = process.env.NODE_ENV === "test" && parseEnvBoolean(process.env.GOAL_GUESSER_TEST_HARNESS_ENABLED, false);
 registerGoalGuesserRoutes(app, {
@@ -5971,7 +5975,7 @@ function pollFantasyAssistantManagerEntries() {
 }
 
 function buildPrometheusMetricsText() {
-  const lines = [];
+  const lines = [appAnalytics.metrics()];
   const nowMs = Date.now();
   const cpuUsage = process.cpuUsage(PROCESS_CPU_USAGE_START);
   const cpuUserSeconds = cpuUsage.user / 1_000_000;
@@ -6982,6 +6986,7 @@ function buildPrometheusMetricsText() {
   lines.push("# TYPE top_scores_app_metrics_events_by_device_total counter");
   lines.push("# HELP app_actions_total Total number of app actions recorded");
   lines.push("# TYPE app_actions_total counter");
+  const appActionsByDimension = new Map();
   Array.from(appMetricEventsByDimension.values())
     .sort((lhs, rhs) => appMetricEventKey(lhs.labels).localeCompare(appMetricEventKey(rhs.labels)))
     .forEach((entry) => {
@@ -6991,13 +6996,20 @@ function buildPrometheusMetricsText() {
         entry.count,
         entry.labels
       );
-      pushPrometheusSample(lines, "app_actions_total", entry.count, {
+      const labels = {
         action: entry.labels.event,
         screen: entry.labels.screen || "unknown",
         build_type: entry.labels.build_type || "unknown",
         platform: entry.labels.platform,
-      });
+      };
+      const key = metricLabelKey(labels);
+      const aggregate = appActionsByDimension.get(key) || { labels, count: 0 };
+      aggregate.count += entry.count;
+      appActionsByDimension.set(key, aggregate);
     });
+  appActionsByDimension.forEach(({ labels, count }) => {
+    pushPrometheusSample(lines, "app_actions_total", count, labels);
+  });
 
   const appEventDurationEntries = Array.from(appEventDurationMetrics.values()).sort((lhs, rhs) =>
     metricLabelKey(lhs.labels).localeCompare(metricLabelKey(rhs.labels))
@@ -24990,7 +25002,7 @@ app.post(`${API_PREFIX}/admin/cache-state/invalidate`, (req, res) => {
   });
 });
 
-app.post(`${API_PREFIX}/app-metrics`, (req, res) => {
+app.post(`${API_PREFIX}/app-metrics`, async (req, res) => {
   setCacheOnlyHeaders(res);
 
   if (!req.body || typeof req.body !== "object" || Array.isArray(req.body)) {
@@ -25000,20 +25012,31 @@ app.post(`${API_PREFIX}/app-metrics`, (req, res) => {
   }
 
   const payload = req.body;
+  let accepted;
+  try {
+    accepted = await appAnalytics.accept(payload, req.deviceToken || normalizeDeviceToken(payload.deviceToken));
+  } catch (error) {
+    appUsageMetrics.appMetricEventsRejectedTotal += 1;
+    if (error.status === 429 || error.status === 503) res.set("Retry-After", "60");
+    res.status(error.status || 503).json({ error: error.message });
+    return;
+  }
+  if (accepted.duplicate) {
+    res.status(202).json({ success: true, recorded: true, duplicate: true });
+    return;
+  }
+  appAnalytics.recordDuration(accepted.event);
   const event = normalizeMetricLabel(payload.event || "app_open", "app_open");
   const labels = {
     event,
-    screen: normalizeMetricLabel(payload.screen || payload.view, "unknown"),
-    build_type: normalizeMetricLabel(payload.buildType || payload.build_type, "unknown"),
-    platform: normalizeMetricLabel(payload.platform || "ios", "ios"),
-    os_version: normalizeMetricLabel(payload.osVersion || payload.systemVersion, "unknown"),
-    device_type: normalizeMetricLabel(
-      payload.deviceType || payload.userInterfaceIdiom || payload.idiom,
-      "unknown"
-    ),
-    device_model: normalizeMetricLabel(payload.deviceModel || payload.model, "unknown"),
-    app_version: normalizeMetricLabel(payload.appVersion, "unknown"),
-    build_number: normalizeMetricLabel(payload.buildNumber, "unknown"),
+    screen: accepted.event.screen,
+    build_type: accepted.event.build_type,
+    platform: "ios",
+    os_version: accepted.event.os_major,
+    device_type: accepted.event.device_type,
+    device_model: accepted.event.device_type,
+    app_version: accepted.event.app_version,
+    build_number: "unknown",
   };
 
   const deviceToken = req.deviceToken || normalizeDeviceToken(payload.deviceToken);
@@ -25021,6 +25044,10 @@ app.post(`${API_PREFIX}/app-metrics`, (req, res) => {
     trackSeenDeviceToken(deviceToken);
   }
 
+  if (appMetricEventsByDimension.size >= 2000 && !appMetricEventsByDimension.has(appMetricEventKey(labels))) {
+    labels.app_version = "other";
+    labels.os_version = "other";
+  }
   const key = appMetricEventKey(labels);
   const existing = appMetricEventsByDimension.get(key);
   if (existing) {
@@ -33607,6 +33634,7 @@ async function shutdownRuntime(options = {}) {
       cancelRuntimeTimeout(teamRankingsDailyWarmTimer);
       teamRankingsDailyWarmTimer = null;
     }
+    appAnalytics.stop();
     stopEventLoopStallLogger();
     stopCacheStateWatcher();
     clearRuntimeTimeouts();
@@ -33661,6 +33689,7 @@ function startApiRuntime() {
   }
 
   runtimeRole = "api";
+  appAnalytics.start();
   startEventLoopStallLogger();
   operationalBootstrapPromise = bootstrapOperationalState({ mode: "api" });
   startApiIntervals();

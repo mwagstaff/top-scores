@@ -141,6 +141,7 @@ nonisolated struct PredictionGameAPIClient: Sendable {
         if !query.isEmpty { components.queryItems = query }
         guard let requestURL = components.url else { throw PredictionGameAPIError.invalidURL }
         var request = URLRequest(url: requestURL)
+        DeviceIdentity.applyHeader(to: &request)
         request.httpMethod = method
         request.httpBody = body
         request.timeoutInterval = 20

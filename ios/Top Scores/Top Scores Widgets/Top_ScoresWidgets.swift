@@ -931,6 +931,13 @@ private enum WidgetMatchScoreRefresher {
         else { return payload }
 
         var request = URLRequest(url: url)
+        request.setValue("widget", forHTTPHeaderField: "X-Client-Surface")
+        request.setValue("background", forHTTPHeaderField: "X-Client-State")
+        #if DEBUG
+        request.setValue("debug", forHTTPHeaderField: "X-Build-Type")
+        #else
+        request.setValue("production", forHTTPHeaderField: "X-Build-Type")
+        #endif
         request.httpMethod = "POST"
         request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         request.timeoutInterval = 8

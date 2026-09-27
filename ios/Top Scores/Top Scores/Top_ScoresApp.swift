@@ -74,7 +74,11 @@ struct Top_ScoresApp: App {
                     )
                 }
         }
-        .onChange(of: scenePhase) { _, newPhase in
+        .onChange(of: scenePhase, initial: true) { _, newPhase in
+            let beganSession = DeviceIdentity.activity.update(active: newPhase == .active, background: newPhase == .background)
+            if beganSession {
+                AppMetricsService.shared.fireActivity("app_open", apiBaseURL: preferences.apiBaseURL)
+            }
             performanceDiagnosticSetSceneState(String(describing: newPhase))
             CrashBreadcrumbs.record("scene \(newPhase)")
             diagnosticLog("[TopScoresApp] scenePhase changed to %@", String(describing: newPhase))
@@ -136,16 +140,6 @@ struct Top_ScoresApp: App {
             ) else { return }
             PerformanceSignposter.startup.emitEvent("DeferredStartupPreferencesSync")
             await PreferencesSyncService.shared.syncPreferences(snapshot)
-            guard !Task.isCancelled else { return }
-
-            try? await Task.sleep(nanoseconds: startupDeferredSpacingNanos)
-            guard !Task.isCancelled else { return }
-
-            guard await InteractiveMotionGate.shared.waitUntilIdle(
-                operation: "startup_app_metric"
-            ) else { return }
-            PerformanceSignposter.startup.emitEvent("DeferredStartupAppMetric")
-            await AppMetricsService.shared.sendAppOpenMetric(apiBaseURL: snapshot.apiBaseURL)
             guard !Task.isCancelled else { return }
 
             try? await Task.sleep(nanoseconds: startupDeferredSpacingNanos)

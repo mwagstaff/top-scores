@@ -209,6 +209,7 @@ struct TablesView: View {
             isVisible = true
             consumePendingNavigationIfNeeded()
             guard !hasLoaded else {
+                AppMetricsService.shared.fireScreenView(screen: "tables", apiBaseURL: preferences.apiBaseURL)
                 Task {
                     await liveRefreshTables()
                     await refreshSelectedCompetitionMatchesIfLive()
@@ -223,7 +224,9 @@ struct TablesView: View {
                 await loadTables(force: false)
                 let durationMs = screenOpenedAt.map { Int(Date().timeIntervalSince($0) * 1000) }
                 screenOpenedAt = nil
-                AppMetricsService.shared.fireScreenView(screen: "tables", durationMs: durationMs, apiBaseURL: preferences.apiBaseURL)
+                if isVisible {
+                    AppMetricsService.shared.fireScreenView(screen: "tables", durationMs: durationMs, apiBaseURL: preferences.apiBaseURL)
+                }
                 // Pull fresh (server-recomputed) standings right away so any live
                 // match shows immediately, rather than waiting for the first timer tick.
                 await liveRefreshTables()

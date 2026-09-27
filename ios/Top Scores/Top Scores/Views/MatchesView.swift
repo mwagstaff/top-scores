@@ -1393,7 +1393,7 @@ struct MatchesView: View {
     }
 
     private func sendTimedScreenView() {
-        guard !screenViewSentForActivation else { return }
+        guard isSelected, screenOpenedAt != nil, !screenViewSentForActivation else { return }
         screenViewSentForActivation = true
         let durationMs = screenOpenedAt.map { Int(Date().timeIntervalSince($0) * 1000) }
         screenOpenedAt = nil

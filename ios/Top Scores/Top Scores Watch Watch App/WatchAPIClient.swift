@@ -30,6 +30,13 @@ struct WatchAPIClient {
         }
 
         var request = URLRequest(url: url)
+        request.setValue("watch", forHTTPHeaderField: "X-Client-Surface")
+        request.setValue("unknown", forHTTPHeaderField: "X-Client-State")
+        #if DEBUG
+        request.setValue("debug", forHTTPHeaderField: "X-Build-Type")
+        #else
+        request.setValue("production", forHTTPHeaderField: "X-Build-Type")
+        #endif
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
         request.setValue("no-cache", forHTTPHeaderField: "Pragma")
@@ -82,6 +89,13 @@ struct WatchAPIClient {
         }
 
         var request = URLRequest(url: url)
+        request.setValue("watch", forHTTPHeaderField: "X-Client-Surface")
+        request.setValue("unknown", forHTTPHeaderField: "X-Client-State")
+        #if DEBUG
+        request.setValue("debug", forHTTPHeaderField: "X-Build-Type")
+        #else
+        request.setValue("production", forHTTPHeaderField: "X-Build-Type")
+        #endif
         request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
         request.setValue("no-cache", forHTTPHeaderField: "Pragma")

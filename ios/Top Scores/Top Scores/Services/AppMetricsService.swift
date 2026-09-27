@@ -5,65 +5,116 @@ import Darwin
 actor AppMetricsService {
     static let shared = AppMetricsService()
 
-    private init() {}
+    private nonisolated struct PendingEvent: Codable, Sendable {
+        let body: Data
+        let endpoint: URL
+        let recordedAt: Date
+    }
+    private static let queueKey = "analytics.pendingEvents.v2"
+    private var pending: [PendingEvent]
+    private var flushing = false
+    private var retryTask: Task<Void, Never>?
+    private var retryDelay: UInt64 = 5
+    private let defaults: UserDefaults
+    private let session: URLSession
 
-    // MARK: - Public API (fire-and-forget)
+    init(defaults: UserDefaults = .standard, session: URLSession = .shared) {
+        self.defaults = defaults
+        self.session = session
+        pending = defaults.data(forKey: Self.queueKey)
+            .flatMap { try? JSONDecoder().decode([PendingEvent].self, from: $0) } ?? []
+    }
 
-    /// Record that the user navigated to a screen. Call from onAppear or when a tab becomes selected.
-    /// durationMs: time from screen open until data was ready (nil = not measured / instant).
     nonisolated func fireScreenView(screen: String, durationMs: Int? = nil, apiBaseURL: String) {
+        fireActivity("screen_view", screen: screen, durationMs: durationMs, apiBaseURL: apiBaseURL)
+    }
+
+    nonisolated func fireActivity(_ activity: String, screen: String? = nil, durationMs: Int? = nil, apiBaseURL: String) {
+        let context = DeviceIdentity.activity.snapshot
+        let recordedAt = Date()
+        // Preloading or background refreshes are not feature visits.
+        guard context.state == "foreground" else { return }
         Task(priority: .utility) {
-            await sendEvent(event: "screen_view", screen: screen, durationMs: durationMs, apiBaseURL: apiBaseURL)
+            await enqueue(event: activity, screen: screen, durationMs: durationMs,
+                          apiBaseURL: apiBaseURL, context: context, recordedAt: recordedAt)
         }
     }
 
-    /// Record a user activity (preference toggle, manual refresh, search, etc.).
-    /// activity: snake_case name, e.g. "preference_toggle", "manual_refresh".
-    /// screen: the screen where it happened.
-    /// durationMs: how long the activity took (nil = instant / not measured).
-    nonisolated func fireActivity(_ activity: String, screen: String, durationMs: Int? = nil, apiBaseURL: String) {
-        Task(priority: .utility) {
-            await sendEvent(event: activity, screen: screen, durationMs: durationMs, apiBaseURL: apiBaseURL)
+    func enqueue(event: String, screen: String?, durationMs: Int?, apiBaseURL: String,
+                         context: AppActivityContext.Snapshot, recordedAt: Date) async {
+        guard let baseURL = URL(string: apiBaseURL),
+              ["https", "http"].contains(baseURL.scheme?.lowercased() ?? ""), baseURL.host != nil else { return }
+        var payload = await buildPayload(event: event, screen: screen, durationMs: durationMs)
+        payload["schemaVersion"] = 2
+        payload["eventId"] = UUID().uuidString
+        payload["surface"] = "ios_app"
+        payload["state"] = context.state
+        payload["recordedAt"] = ISO8601DateFormatter().string(from: recordedAt)
+        guard let body = try? JSONSerialization.data(withJSONObject: payload) else { return }
+        pending.removeAll { Date().timeIntervalSince($0.recordedAt) > 48 * 3600 }
+        if pending.count >= 200 { pending.removeFirst(pending.count - 199) }
+        pending.append(PendingEvent(body: body, endpoint: baseURL.appendingPathComponent("app-metrics"), recordedAt: recordedAt))
+        persist()
+        await flush()
+    }
+
+    private func persist() {
+        if let data = try? JSONEncoder().encode(pending) {
+            defaults.set(data, forKey: Self.queueKey)
         }
     }
 
-    // MARK: - Existing API
-
-    func sendAppOpenMetric(apiBaseURL: String) async {
-        await sendEvent(event: "app_open", screen: nil, durationMs: nil, apiBaseURL: apiBaseURL)
-    }
-
-    // MARK: - Core
-
-    private func sendEvent(event: String, screen: String?, durationMs: Int?, apiBaseURL: String) async {
-        guard let baseURL = URL(string: apiBaseURL) else {
-            diagnosticLog("[AppMetrics] Invalid API base URL: %@", apiBaseURL)
-            return
-        }
-
-        let endpoint = baseURL.appendingPathComponent("app-metrics")
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.cachePolicy = .reloadIgnoringLocalCacheData
-        request.timeoutInterval = 10
-        DeviceIdentity.applyHeader(to: &request)
-
-        let payload = await buildPayload(event: event, screen: screen, durationMs: durationMs)
-
-        do {
-            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-            let (_, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse else {
-                diagnosticLog("[AppMetrics] Invalid response type for event=%@", event)
+    private func flush() async {
+        guard !flushing else { return }
+        flushing = true
+        defer { flushing = false }
+        retryTask?.cancel()
+        retryTask = nil
+        pending.removeAll { Date().timeIntervalSince($0.recordedAt) > 48 * 3600 }
+        while let item = pending.first {
+            guard !Task.isCancelled else { persist(); return }
+            var request = URLRequest(url: item.endpoint)
+            request.httpMethod = "POST"
+            request.httpBody = item.body
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.cachePolicy = .reloadIgnoringLocalCacheData
+            request.timeoutInterval = 10
+            DeviceIdentity.applyHeader(to: &request)
+            do {
+                let (_, response) = try await session.data(for: request)
+                guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+                if http.statusCode == 429 || http.statusCode >= 500 {
+                    if let seconds = http.value(forHTTPHeaderField: "Retry-After").flatMap(UInt64.init) {
+                        retryDelay = min(300, max(retryDelay, seconds))
+                    }
+                    throw URLError(.resourceUnavailable)
+                }
+                // Terminal validation failures are discarded; retries preserve the event ID.
+                guard (200...299).contains(http.statusCode) || (400...499).contains(http.statusCode) else {
+                    throw URLError(.badServerResponse)
+                }
+                // Enqueues can run while networking is suspended; remove this exact event.
+                if let index = pending.firstIndex(where: { $0.body == item.body }) { pending.remove(at: index) }
+                retryDelay = 5
+                persist()
+            } catch {
+                persist()
+                if Task.isCancelled { return }
+                let delay = retryDelay
+                retryDelay = min(300, retryDelay * 2)
+                retryTask = Task(priority: .utility) { [weak self] in
+                    do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+                    await self?.retryPending()
+                }
                 return
             }
-            if !(200...299).contains(httpResponse.statusCode) {
-                diagnosticLog("[AppMetrics] HTTP %d for event=%@ screen=%@", httpResponse.statusCode, event, screen ?? "-")
-            }
-        } catch {
-            diagnosticLog("[AppMetrics] Error sending event=%@ error=%@", event, error.localizedDescription)
         }
+        persist()
+    }
+
+    private func retryPending() async {
+        retryTask = nil
+        await flush()
     }
 
     private func buildPayload(event: String, screen: String?, durationMs: Int?) async -> [String: Any] {

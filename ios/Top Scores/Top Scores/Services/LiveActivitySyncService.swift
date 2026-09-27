@@ -984,6 +984,7 @@ final class LiveActivitySyncService {
                 activity.id,
                 staleDate.description
             )
+            AppMetricsService.shared.fireActivity("live_activity_started", apiBaseURL: PreferencesStore.loadSnapshot().apiBaseURL)
             scheduleSharedWidgetDiagnosticsFlush()
             lock.withLock {
                 pendingForegroundStartContentState = nil
