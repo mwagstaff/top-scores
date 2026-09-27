@@ -64,7 +64,7 @@ function windows(now) {
   };
 }
 
-function summaryPipeline(now) {
+function summaryPipeline(now, buildType = "production") {
   const facets = {};
   for (const [window, [start, end]] of Object.entries(windows(now))) {
     const match = { $match: { recorded_at: { $gte: new Date(start), $lt: new Date(end) } } };
@@ -88,7 +88,7 @@ function summaryPipeline(now) {
     ];
   }
   return [
-    { $match: { schema: 2, build_type: "production", surface: "ios_app", state: "foreground", recorded_at: { $gte: new Date(now - 30 * DAY) } } },
+    { $match: { schema: 2, build_type: buildType, surface: "ios_app", state: "foreground", recorded_at: { $gte: new Date(now - 30 * DAY) } } },
     { $facet: facets },
   ];
 }
@@ -156,17 +156,22 @@ function createAppAnalytics({ database = getDb, clock = Date.now } = {}) {
     refreshing = (async () => {
       const db = await initialize();
       const now = clock();
-      const result = await events.aggregate(summaryPipeline(now), { maxTimeMS: 10000 }).toArray();
-      const rows = result[0] || {}, next = {};
-      for (const window of Object.keys(windows(now))) {
-        const audience = {};
-        for (const dimension of ["total", "app_version", "os_major", "device_type"]) audience[dimension] = rows[`${window}_${dimension}`] || [];
-        next[window] = [{ audience: [audience], features: rows[`${window}_features`] || [], events: rows[`${window}_events`] || [], hours: rows[`${window}_hours`] || [] }];
-      }
-      // Retain identifier-free daily summaries after the 45-day event expiry.
-      for (const window of ["today", "yesterday", "previous_day", "earlier_day"]) {
-        const day = londonDay(new Date(windows(now)[window][0]));
-        await db.collection("app_analytics_daily").replaceOne({ _id: day }, { _id: day, summary: next[window]?.[0] || {}, updated_at: new Date(now) }, { upsert: true });
+      const next = {};
+      for (const buildType of ["production", "debug"]) {
+        const result = await events.aggregate(summaryPipeline(now, buildType), { maxTimeMS: 10000 }).toArray();
+        const rows = result[0] || {}, summaries = {};
+        for (const window of Object.keys(windows(now))) {
+          const audience = {};
+          for (const dimension of ["total", "app_version", "os_major", "device_type"]) audience[dimension] = rows[`${window}_${dimension}`] || [];
+          summaries[window] = [{ audience: [audience], features: rows[`${window}_features`] || [], events: rows[`${window}_events`] || [], hours: rows[`${window}_hours`] || [] }];
+        }
+        // Preserve the production document IDs; debug summaries have a separate namespace.
+        for (const window of ["today", "yesterday", "previous_day", "earlier_day"]) {
+          const day = londonDay(new Date(windows(now)[window][0]));
+          const id = buildType === "production" ? day : `${day}:debug`;
+          await db.collection("app_analytics_daily").replaceOne({ _id: id }, { _id: id, build_type: buildType, summary: summaries[window]?.[0] || {}, updated_at: new Date(now) }, { upsert: true });
+        }
+        next[buildType] = summaries;
       }
       snapshot = next; updated = now;
     })().catch(() => { failures++; }).finally(() => { refreshing = null; });
@@ -193,12 +198,12 @@ function createAppAnalytics({ database = getDb, clock = Date.now } = {}) {
     next();
   }
   function recordDuration(event) {
-    if (event.schema !== 2 || event.build_type !== "production" || event.surface !== "ios_app" || event.state !== "foreground") return;
-    const id = `${event.event}:${event.screen}`;
-    const count = eventCounts.get(id) || { labels: { event: event.event, screen: event.screen }, count: 0 };
+    if (event.schema !== 2 || !["production", "debug"].includes(event.build_type) || event.surface !== "ios_app" || event.state !== "foreground") return;
+    const id = `${event.build_type}:${event.event}:${event.screen}`;
+    const count = eventCounts.get(id) || { labels: { event: event.event, screen: event.screen, build_type: event.build_type }, count: 0 };
     count.count++; eventCounts.set(id, count);
     if (event.duration_seconds == null) return;
-    const row = durations.get(id) || { labels: { event: event.event, screen: event.screen }, count: 0, sum: 0, buckets: BUCKETS.map(() => 0) };
+    const row = durations.get(id) || { labels: { event: event.event, screen: event.screen, build_type: event.build_type }, count: 0, sum: 0, buckets: BUCKETS.map(() => 0) };
     row.count++; row.sum += event.duration_seconds;
     BUCKETS.forEach((limit, i) => { if (event.duration_seconds <= limit) row.buckets[i]++; });
     durations.set(id, row);
@@ -216,23 +221,23 @@ function createAppAnalytics({ database = getDb, clock = Date.now } = {}) {
     emit("refresh_failures_total", failures, {}, "counter");
     for (const [result, count] of Object.entries(deliveries)) emit("deliveries_total", count, { result }, "counter");
     for (const row of eventCounts.values()) emit("events_total", row.count, row.labels, "counter");
-    if (snapshot) for (const window of Object.keys(windows(clock()))) {
+    if (snapshot) for (const build_type of ["production", "debug"]) for (const window of Object.keys(windows(clock()))) {
       if (window === "previous_day" || window === "earlier_day") continue;
-      const data = snapshot[window]?.[0] || {};
+      const data = snapshot[build_type][window]?.[0] || {};
       const audience = data.audience?.[0] || {};
-      emit("active_installations", audience.total?.[0]?.count || 0, { window });
+      emit("active_installations", audience.total?.[0]?.count || 0, { window, build_type });
       for (const dimension of ["app_version", "os_major", "device_type"]) {
-        for (const row of audience[dimension] || []) emit("installations_by_dimension", row.count, { window, dimension, value: row._id });
+        for (const row of audience[dimension] || []) emit("installations_by_dimension", row.count, { window, dimension, value: row._id, build_type });
       }
       for (const screen of SCREENS) {
         const row = data.features?.find((item) => item._id === screen);
-        emit("feature_installations", row?.installations || 0, { window, screen });
-        emit("feature_visits", row?.visits || 0, { window, screen });
+        emit("feature_installations", row?.installations || 0, { window, screen, build_type });
+        emit("feature_visits", row?.visits || 0, { window, screen, build_type });
       }
-      for (const event of EVENTS) emit("events", data.events?.find((item) => item._id === event)?.count || 0, { window, event });
+      for (const event of EVENTS) emit("events", data.events?.find((item) => item._id === event)?.count || 0, { window, event, build_type });
       if (window === "30d") for (let weekday = 1; weekday <= 7; weekday++) for (let hour = 0; hour < 24; hour++) {
         const row = data.hours?.find((item) => item._id.hour === hour && item._id.weekday === weekday);
-        emit("sessions_by_hour", row?.count || 0, { weekday, hour: String(hour).padStart(2, "0") });
+        emit("sessions_by_hour", row?.count || 0, { weekday, hour: String(hour).padStart(2, "0"), build_type });
       }
     }
     function histogram(name, rows) {

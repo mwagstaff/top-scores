@@ -82,29 +82,41 @@ test("Mongo persistence, deduplication, audience exclusion, feature reach and sn
     for (const override of [{ buildType: "debug" }, { state: "background" }, { surface: "widget" }, { schemaVersion: undefined }]) {
       await first.accept(payload(override), crypto.randomUUID());
     }
+    // The same installation can use both builds; debug does not inflate production.
+    const debugEvent = await first.accept(payload({ buildType: "debug", event: "screen_view", screen: "tables", durationMs: 100 }), token);
+    first.recordDuration(debugEvent.event);
+    first.recordDuration(normalizeEvent(payload({ event: "screen_view", screen: "tables", durationMs: 200 }), token, now));
     const other = crypto.randomUUID();
     await first.accept(payload({ recordedAt: new Date(now - 86400000).toISOString() }), other);
     await first.refresh();
     let metrics = first.metrics();
-    assert.match(metrics, /active_installations\{window="today"\} 1/);
-    assert.match(metrics, /active_installations\{window="7d"\} 2/);
-    assert.match(metrics, /active_installations\{window="30d"\} 2/);
-    assert.match(metrics, /feature_installations\{window="today",screen="tables"\} 1/);
-    assert.match(metrics, /feature_visits\{window="today",screen="tables"\} 2/);
-    assert.match(metrics, /events\{window="today",event="app_open"\} 1/);
-    assert.match(metrics, /installations_by_dimension\{window="7d",dimension="app_version",value="2.1"\} 2/);
+    assert.match(metrics, /active_installations\{window="today",build_type="production"\} 1/);
+    assert.match(metrics, /active_installations\{window="7d",build_type="production"\} 2/);
+    assert.match(metrics, /active_installations\{window="30d",build_type="production"\} 2/);
+    assert.match(metrics, /feature_installations\{window="today",screen="tables",build_type="production"\} 1/);
+    assert.match(metrics, /feature_visits\{window="today",screen="tables",build_type="production"\} 2/);
+    assert.match(metrics, /events\{window="today",event="app_open",build_type="production"\} 1/);
+    assert.match(metrics, /installations_by_dimension\{window="7d",dimension="app_version",value="2.1",build_type="production"\} 2/);
+    assert.match(metrics, /active_installations\{window="today",build_type="debug"\} 2/);
+    assert.match(metrics, /feature_installations\{window="today",screen="tables",build_type="debug"\} 1/);
+    assert.match(metrics, /events_total\{event="screen_view",screen="tables",build_type="debug"\} 1/);
+    assert.match(metrics, /event_duration_seconds_sum\{event="screen_view",screen="tables",build_type="debug"\} 0.1/);
+    assert.match(metrics, /event_duration_seconds_sum\{event="screen_view",screen="tables",build_type="production"\} 0.2/);
     assert.doesNotMatch(metrics, new RegExp(token));
     const samples = metrics.split("\n").filter((line) => line && !line.startsWith("#")).map((line) => line.slice(0, line.lastIndexOf(" ")));
     assert.equal(new Set(samples).size, samples.length, "Each Prometheus sample must have a unique name and label set");
     const restarted = createAppAnalytics(options);
     assert.equal((await restarted.accept(opened, token)).duplicate, true);
     await restarted.refresh();
-    assert.match(restarted.metrics(), /active_installations\{window="7d"\} 2/);
+    assert.match(restarted.metrics(), /active_installations\{window="7d",build_type="production"\} 2/);
+    assert.match(restarted.metrics(), /active_installations\{window="7d",build_type="debug"\} 2/);
     const stored = await db.collection("app_analytics_events").findOne({ event: "app_open" });
     assert.match(stored.installation, /^[a-f0-9]{64}$/);
     assert.notEqual(stored.installation, token);
     const daily = await db.collection("app_analytics_daily").findOne({ _id: "2026-09-27" });
     assert.equal(daily.summary.audience[0].total[0].count, 1);
+    const debugDaily = await db.collection("app_analytics_daily").findOne({ _id: "2026-09-27:debug" });
+    assert.equal(debugDaily.summary.audience[0].total[0].count, 2);
     assert.doesNotMatch(JSON.stringify(daily), new RegExp(stored.installation));
     const indexes = await db.collection("app_analytics_events").indexes();
     assert.ok(indexes.some((index) => index.expireAfterSeconds === 0));
@@ -113,13 +125,13 @@ test("Mongo persistence, deduplication, audience exclusion, feature reach and sn
     await restarted.accept(payload({ appVersion: "2.2", recordedAt: new Date(clock - 1).toISOString() }), token);
     await restarted.refresh();
     metrics = restarted.metrics();
-    assert.match(metrics, /active_installations\{window="7d"\} 2/);
-    assert.match(metrics, /dimension="app_version",value="2.2"\} 1/);
+    assert.match(metrics, /active_installations\{window="7d",build_type="production"\} 2/);
+    assert.match(metrics, /dimension="app_version",value="2.2",build_type="production"\} 1/);
     clock += 4 * 60000;
     assert.match(restarted.metrics(), /top_scores_audience_ready 0/);
     // Rolling counts expire even before Mongo's asynchronous TTL cleanup.
     clock += 31 * 86400000;
     await restarted.refresh();
-    assert.match(restarted.metrics(), /active_installations\{window="30d"\} 0/);
+    assert.match(restarted.metrics(), /active_installations\{window="30d",build_type="production"\} 0/);
   } finally { await db.dropDatabase(); await client.close(); }
 });

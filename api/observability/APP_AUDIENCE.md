@@ -6,7 +6,7 @@ The existing `top-scores-app-usage` Grafana UID now displays **Top Scores · Aud
 
 1. Deploy the API changes with the existing MongoDB configuration (`MONGODB_URI_TOP_SCORES`). The API creates its analytics collections and indexes automatically. No additional secret is required: a random HMAC key is created once in `app_analytics_config` and reused after restarts. Back up and restrict access to this collection with the rest of MongoDB; changing the key splits installation identities.
 2. Import the updated Grafana dashboard. It keeps the existing dashboard URL. Check **Collection healthy = 1** and snapshot age below three minutes. A real zero audience is expected before the instrumented production app is used.
-3. Release the instrumented iPhone/iPad app and extensions. Debug events never enter the headline audience. The dashboard starts collecting v2 audience history at rollout; legacy request counts cannot be backfilled into foreground audience history.
+3. Release the instrumented iPhone/iPad app and extensions. The Build selector defaults to Production. Choose Debug to inspect development builds run from Xcode; Debug and Production audiences are aggregated separately. The dashboard starts collecting v2 audience history at rollout; legacy request counts cannot be backfilled into foreground audience history.
 4. Confirm Prometheus retention covers the historical range required. Mongo retains identifier-free daily summaries beyond event expiry, but the dashboard's historical graphs use Prometheus history.
 
 This change does not start or deploy the API automatically. The dashboard's version-specific filters refer to observed installations, not App Store download totals.
@@ -14,7 +14,7 @@ This change does not start or deploy the API automatically. The dashboard's vers
 ## Definitions
 
 - Identity is the app's existing random `X-Device-Token` UUID. It is not an APNs token or a person/account identity. Reinstalls, restoration and multiple devices can change the relationship between installations and people.
-- Audience includes only schema-v2, production, `ios_app`, foreground events with a valid installation ID. Screen activity can establish that an installation was active even if its app-open event was lost. Widgets, watch, website, old clients and unknown traffic are excluded.
+- Audience includes only schema-v2, `ios_app`, foreground events with a valid installation ID for the selected Build (Production or Debug). Screen activity can establish that an installation was active even if its app-open event was lost. Widgets, watch, website, old clients and unknown traffic are excluded.
 - Today is the Europe/London calendar day, including DST. Seven and thirty days are trailing elapsed-time windows. The daily trend reports the previous completed London day. Unique counts are deduplicated across the whole window.
 - App opens count foreground sessions: cold activation or return from background. Temporary inactive interruptions and multiple active windows do not create additional sessions.
 - Feature reach is distinct installations with a screen-view event. Feature visits are event counts. Several features may be used by the same installation, so feature reach must not be summed to obtain total audience.
@@ -28,9 +28,9 @@ This change does not start or deploy the API automatically. The dashboard's vers
 
 The app records events independently of startup data requests and persists up to 200 pending events. It retries network/429/5xx failures with backoff capped at five minutes, respecting numeric Retry-After within that bound. Events expire from the local queue after 48 hours; the oldest is dropped if the queue fills. Retries retain the event ID. Permanent 4xx validation failures are discarded. This bounded queue cannot guarantee capture of every offline session.
 
-The API acknowledges events only after Mongo upsert succeeds. Its unique key combines keyed hashes of installation and event IDs, so retry/restart/concurrent delivery cannot double-count the event. Stored event records expire after 45 days. Daily identifier-free summaries in `app_analytics_daily` are updated for today and the prior three days to allow for delayed delivery across DST boundaries. TTL cleanup is asynchronous; query time boundaries apply independently of physical deletion.
+The API acknowledges events only after Mongo upsert succeeds. Its unique key combines keyed hashes of installation and event IDs, so retry/restart/concurrent delivery cannot double-count the event. Stored event records expire after 45 days. Daily identifier-free summaries in `app_analytics_daily` (existing date IDs for Production, date + `:debug` for Debug) are updated for today and the prior three days to allow for delayed delivery across DST boundaries. TTL cleanup is asynchronous; query time boundaries apply independently of physical deletion.
 
-The API refreshes its aggregate snapshot every minute using a time-indexed Mongo aggregation with a ten-second query limit. `/metrics` only reads the cached snapshot. Mongo outages return 503 to event deliveries; normal data routes remain independent. A snapshot older than three minutes is unhealthy, and audience panels suppress stale values rather than reporting zero. Metrics do not contain installation IDs or event IDs.
+The API refreshes its aggregate snapshot every minute using separate time-indexed Mongo aggregations for Production and Debug, each with a ten-second query limit. `/metrics` only reads the cached snapshot. Mongo outages return 503 to event deliveries; normal data routes remain independent. A snapshot older than three minutes is unhealthy, and audience panels suppress stale values rather than reporting zero. Metrics do not contain installation IDs or event IDs.
 
 Requests are classified before feature-route registration. The phone sends surface, lifecycle state, app version/build and build type. Widgets identify as background; watch foreground state remains unknown. These extensions do not share the phone's installation identity for analytics. Direct requests to third-party services, such as FPL, receive no Top Scores identity headers.
 
@@ -39,3 +39,9 @@ Requests are classified before feature-route registration. The phone sends surfa
 Run `node --test app_analytics.test.js server.runtime_metrics.test.js` from `api`. The Mongo integration case can also run with `APP_ANALYTICS_TEST_MONGO_URI` pointing at an isolated local Mongo instance (`mongodb://127.0.0.1:...`). It creates and drops its own randomly named test database. It never uses production credentials. The integration case checks unique counts, repeat feature visits, legacy/debug/background exclusion, deduplication after restart, metadata changes, TTL indexes and time-window expiry.
 
 The focused iOS `AppAudienceTests` check foreground session boundaries and persistence of event IDs across queue reconstruction and retries. Build both the iOS and watch simulator schemes after changing client attribution. Validate dashboard JSON and PromQL before importing.
+
+## Zero users while using a development build
+
+Check the Build selector first. An Xcode Debug build reports `build_type="debug"` and is deliberately excluded when Production is selected. Successful event delivery and a healthy collection snapshot do not imply production usage. Select Debug to inspect the development audience, feature visits, request traffic and latency. Collection health, delivery outcomes and unclassified traffic remain global diagnostics.
+
+This selector requires the updated API exporter and dashboard import; the app already sends the necessary build metadata, so no new app build is required. Debug audience counts can include already-stored events after the next snapshot refresh. Build-labelled Prometheus history starts with this exporter deployment; historical unlabelled series are not reclassified.

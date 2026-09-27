@@ -10,7 +10,7 @@
   ],
   "timezone": "Europe/London",
   "schemaVersion": 38,
-  "version": 2,
+  "version": 3,
   "refresh": "1m",
   "time": {
     "from": "now-30d",
@@ -18,20 +18,35 @@
   },
   "panels": [
     {
-      "id": 1,
-      "type": "stat",
-      "title": "Active today \u00b7 London",
-      "description": "Distinct production iPhone/iPad installations with recorded foreground activity. Background requests and legacy clients are excluded.",
+      "id": 29,
+      "type": "text",
+      "title": "Build selection",
       "gridPos": {
         "x": 0,
         "y": 0,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Showing **${build:text}** usage. Select **Debug** above to see development builds run from Xcode. **Production** shows Release/TestFlight/App Store builds. Collection health and delivery outcomes cover all builds."
+      }
+    },
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Active today \u00b7 London \u00b7 ${build:text}",
+      "description": "Distinct iPhone/iPad installations with recorded foreground activity for the selected build. Production excludes Xcode Debug builds. Choose Debug to inspect a development build.",
+      "gridPos": {
+        "x": 0,
+        "y": 3,
         "w": 6,
         "h": 4
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "max(top_scores_audience_active_installations{job=\"top-scores\",window=\"today\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "expr": "max(top_scores_audience_active_installations{build_type=\"$build\",job=\"top-scores\",window=\"today\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
           "legendFormat": "__auto",
           "instant": true,
           "range": false
@@ -63,18 +78,18 @@
     {
       "id": 2,
       "type": "stat",
-      "title": "Active \u00b7 last 7 days",
-      "description": "Distinct production iPhone/iPad installations with recorded foreground activity. Background requests and legacy clients are excluded.",
+      "title": "Active \u00b7 last 7 days \u00b7 ${build:text}",
+      "description": "Distinct iPhone/iPad installations with recorded foreground activity for the selected build. Production excludes Xcode Debug builds. Choose Debug to inspect a development build.",
       "gridPos": {
         "x": 6,
-        "y": 0,
+        "y": 3,
         "w": 6,
         "h": 4
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "max(top_scores_audience_active_installations{job=\"top-scores\",window=\"7d\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "expr": "max(top_scores_audience_active_installations{build_type=\"$build\",job=\"top-scores\",window=\"7d\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
           "legendFormat": "__auto",
           "instant": true,
           "range": false
@@ -106,18 +121,18 @@
     {
       "id": 3,
       "type": "stat",
-      "title": "Active \u00b7 last 30 days",
-      "description": "Distinct production iPhone/iPad installations with recorded foreground activity. Background requests and legacy clients are excluded.",
+      "title": "Active \u00b7 last 30 days \u00b7 ${build:text}",
+      "description": "Distinct iPhone/iPad installations with recorded foreground activity for the selected build. Production excludes Xcode Debug builds. Choose Debug to inspect a development build.",
       "gridPos": {
         "x": 12,
-        "y": 0,
+        "y": 3,
         "w": 6,
         "h": 4
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "max(top_scores_audience_active_installations{job=\"top-scores\",window=\"30d\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "expr": "max(top_scores_audience_active_installations{build_type=\"$build\",job=\"top-scores\",window=\"30d\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
           "legendFormat": "__auto",
           "instant": true,
           "range": false
@@ -153,7 +168,7 @@
       "description": "Audience snapshots refresh each minute. A snapshot older than three minutes is unavailable, not zero users.",
       "gridPos": {
         "x": 18,
-        "y": 0,
+        "y": 3,
         "w": 6,
         "h": 4
       },
@@ -196,14 +211,14 @@
       "description": "Rolling distinct counts; never sum daily unique counts.",
       "gridPos": {
         "x": 0,
-        "y": 4,
+        "y": 7,
         "w": 12,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (window)(top_scores_audience_active_installations{job=\"top-scores\",window=~\"7d|30d\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "expr": "max by (window)(top_scores_audience_active_installations{build_type=\"$build\",job=\"top-scores\",window=~\"7d|30d\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
           "legendFormat": "{{window}}",
           "instant": false,
           "range": true
@@ -236,14 +251,14 @@
       "description": "Each point shows the previous completed London calendar day. Late deliveries can revise it. Counts survive API restarts.",
       "gridPos": {
         "x": 12,
-        "y": 4,
+        "y": 7,
         "w": 12,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "max(top_scores_audience_active_installations{job=\"top-scores\",window=\"yesterday\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "expr": "max(top_scores_audience_active_installations{build_type=\"$build\",job=\"top-scores\",window=\"yesterday\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
           "legendFormat": "Previous day",
           "instant": false,
           "range": true
@@ -272,18 +287,18 @@
     {
       "id": 7,
       "type": "stat",
-      "title": "Foreground sessions \u00b7 $window",
+      "title": "Foreground sessions \u00b7 $window \u00b7 ${build:text}",
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 12,
+        "y": 15,
         "w": 6,
         "h": 4
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "max(top_scores_audience_events{job=\"top-scores\",window=\"$window\",event=\"app_open\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "expr": "max(top_scores_audience_events{build_type=\"$build\",job=\"top-scores\",window=\"$window\",event=\"app_open\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
           "legendFormat": "__auto",
           "instant": true,
           "range": false
@@ -319,14 +334,14 @@
       "description": "",
       "gridPos": {
         "x": 6,
-        "y": 12,
+        "y": 15,
         "w": 6,
         "h": 4
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "max(top_scores_audience_events{job=\"top-scores\",window=\"$window\",event=\"app_open\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1)) / clamp_min(max(top_scores_audience_active_installations{job=\"top-scores\",window=\"$window\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1)), 1)",
+          "expr": "max(top_scores_audience_events{build_type=\"$build\",job=\"top-scores\",window=\"$window\",event=\"app_open\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1)) / clamp_min(max(top_scores_audience_active_installations{build_type=\"$build\",job=\"top-scores\",window=\"$window\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1)), 1)",
           "legendFormat": "__auto",
           "instant": true,
           "range": false
@@ -362,14 +377,14 @@
       "description": "Requires at least a week of v2 collection history. Compares rolling seven-day audiences.",
       "gridPos": {
         "x": 12,
-        "y": 12,
+        "y": 15,
         "w": 6,
         "h": 4
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "(max(top_scores_audience_active_installations{job=\"top-scores\",window=\"7d\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1)) / clamp_min(max(top_scores_audience_active_installations{job=\"top-scores\",window=\"7d\"} offset 7d), 1) - 1) * 100",
+          "expr": "(max(top_scores_audience_active_installations{build_type=\"$build\",job=\"top-scores\",window=\"7d\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1)) / clamp_min(max(top_scores_audience_active_installations{build_type=\"$build\",job=\"top-scores\",window=\"7d\"} offset 7d), 1) - 1) * 100",
           "legendFormat": "__auto",
           "instant": true,
           "range": false
@@ -404,7 +419,7 @@
       "description": "",
       "gridPos": {
         "x": 18,
-        "y": 12,
+        "y": 15,
         "w": 6,
         "h": 4
       },
@@ -447,14 +462,14 @@
       "description": "A person visiting ten times still counts once for this screen. An installation can use several screens; do not sum reach across features.",
       "gridPos": {
         "x": 0,
-        "y": 16,
+        "y": 19,
         "w": 12,
         "h": 9
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (screen)(top_scores_audience_feature_installations{job=\"top-scores\",window=\"$window\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "expr": "max by (screen)(top_scores_audience_feature_installations{build_type=\"$build\",job=\"top-scores\",window=\"$window\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
           "legendFormat": "{{screen}}",
           "instant": true,
           "range": false
@@ -489,14 +504,14 @@
       "description": "",
       "gridPos": {
         "x": 12,
-        "y": 16,
+        "y": 19,
         "w": 12,
         "h": 9
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (screen)(top_scores_audience_feature_visits{job=\"top-scores\",window=\"$window\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "expr": "max by (screen)(top_scores_audience_feature_visits{build_type=\"$build\",job=\"top-scores\",window=\"$window\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
           "legendFormat": "{{screen}}",
           "instant": true,
           "range": false
@@ -531,14 +546,14 @@
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 25,
+        "y": 28,
         "w": 12,
         "h": 10
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (event)(top_scores_audience_events{job=\"top-scores\",window=\"$window\",event!~\"app_open|screen_view|match_details_loaded\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "expr": "max by (event)(top_scores_audience_events{build_type=\"$build\",job=\"top-scores\",window=\"$window\",event!~\"app_open|screen_view|match_details_loaded\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
           "legendFormat": "{{event}}",
           "instant": true,
           "range": false
@@ -570,17 +585,17 @@
       "id": 14,
       "type": "timeseries",
       "title": "Screen visits per minute",
-      "description": "Receipt-time rate of accepted, deduplicated production foreground events. Offline deliveries appear when received.",
+      "description": "Receipt-time rate of accepted, deduplicated foreground events for the selected build. Offline deliveries appear when received.",
       "gridPos": {
         "x": 12,
-        "y": 25,
+        "y": 28,
         "w": 12,
         "h": 10
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (screen) (rate(top_scores_audience_events_total{job=\"top-scores\",event=\"screen_view\"}[$__rate_interval])) * 60",
+          "expr": "sum by (screen) (rate(top_scores_audience_events_total{build_type=\"$build\",job=\"top-scores\",event=\"screen_view\"}[$__rate_interval])) * 60",
           "legendFormat": "{{screen}}",
           "instant": false,
           "range": true
@@ -613,14 +628,14 @@
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 35,
+        "y": 38,
         "w": 12,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (hour) (max by (weekday,hour)(top_scores_audience_sessions_by_hour{job=\"top-scores\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1)))",
+          "expr": "sum by (hour) (max by (weekday,hour)(top_scores_audience_sessions_by_hour{build_type=\"$build\",job=\"top-scores\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1)))",
           "legendFormat": "{{hour}}:00",
           "instant": true,
           "range": false
@@ -655,14 +670,14 @@
       "description": "1 = Monday through 7 = Sunday; Europe/London.",
       "gridPos": {
         "x": 12,
-        "y": 35,
+        "y": 38,
         "w": 12,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (weekday) (max by (weekday,hour)(top_scores_audience_sessions_by_hour{job=\"top-scores\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1)))",
+          "expr": "sum by (weekday) (max by (weekday,hour)(top_scores_audience_sessions_by_hour{build_type=\"$build\",job=\"top-scores\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1)))",
           "legendFormat": "Day {{weekday}}",
           "instant": true,
           "range": false
@@ -697,14 +712,14 @@
       "description": "Each installation is assigned its most recently observed value within the window; these are installation counts, not event shares.",
       "gridPos": {
         "x": 0,
-        "y": 43,
+        "y": 46,
         "w": 8,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (value)(top_scores_audience_installations_by_dimension{job=\"top-scores\",window=\"$window\",dimension=\"app_version\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "expr": "max by (value)(top_scores_audience_installations_by_dimension{build_type=\"$build\",job=\"top-scores\",window=\"$window\",dimension=\"app_version\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
           "legendFormat": "{{value}}",
           "instant": true,
           "range": false
@@ -739,14 +754,14 @@
       "description": "Each installation is assigned its most recently observed value within the window; these are installation counts, not event shares.",
       "gridPos": {
         "x": 8,
-        "y": 43,
+        "y": 46,
         "w": 8,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (value)(top_scores_audience_installations_by_dimension{job=\"top-scores\",window=\"$window\",dimension=\"device_type\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "expr": "max by (value)(top_scores_audience_installations_by_dimension{build_type=\"$build\",job=\"top-scores\",window=\"$window\",dimension=\"device_type\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
           "legendFormat": "{{value}}",
           "instant": true,
           "range": false
@@ -781,14 +796,14 @@
       "description": "Each installation is assigned its most recently observed value within the window; these are installation counts, not event shares.",
       "gridPos": {
         "x": 16,
-        "y": 43,
+        "y": 46,
         "w": 8,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (value)(top_scores_audience_installations_by_dimension{job=\"top-scores\",window=\"$window\",dimension=\"os_major\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "expr": "max by (value)(top_scores_audience_installations_by_dimension{build_type=\"$build\",job=\"top-scores\",window=\"$window\",dimension=\"os_major\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
           "legendFormat": "{{value}}",
           "instant": true,
           "range": false
@@ -820,17 +835,17 @@
       "id": 20,
       "type": "timeseries",
       "title": "API requests by surface / state",
-      "description": "Production requests. Watch requests have unknown foreground state; widget refreshes are background activity.",
+      "description": "Requests for the selected build. Watch requests have unknown foreground state; widget refreshes are background activity.",
       "gridPos": {
         "x": 0,
-        "y": 51,
+        "y": 54,
         "w": 12,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (surface,state) (rate(top_scores_audience_request_duration_seconds_count{job=\"top-scores\",build_type=\"production\"}[$__rate_interval])) * 60",
+          "expr": "sum by (surface,state) (rate(top_scores_audience_request_duration_seconds_count{job=\"top-scores\",build_type=\"$build\"}[$__rate_interval])) * 60",
           "legendFormat": "{{surface}} \u00b7 {{state}}",
           "instant": false,
           "range": true
@@ -863,14 +878,14 @@
       "description": "",
       "gridPos": {
         "x": 12,
-        "y": 51,
+        "y": 54,
         "w": 12,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "sort_desc(sum by (route) (increase(top_scores_audience_request_duration_seconds_count{job=\"top-scores\",build_type=\"production\"}[$__range])))",
+          "expr": "sort_desc(sum by (route) (increase(top_scores_audience_request_duration_seconds_count{job=\"top-scores\",build_type=\"$build\"}[$__range])))",
           "legendFormat": "{{route}}",
           "instant": true,
           "range": false
@@ -905,14 +920,14 @@
       "description": "",
       "gridPos": {
         "x": 0,
-        "y": 59,
+        "y": 62,
         "w": 8,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "100 * sum(rate(top_scores_audience_request_duration_seconds_count{job=\"top-scores\",build_type=\"production\",status=~\"4xx|5xx\"}[$__rate_interval])) / clamp_min(sum(rate(top_scores_audience_request_duration_seconds_count{job=\"top-scores\",build_type=\"production\"}[$__rate_interval])), 0.000001)",
+          "expr": "100 * sum(rate(top_scores_audience_request_duration_seconds_count{job=\"top-scores\",build_type=\"$build\",status=~\"4xx|5xx\"}[$__rate_interval])) / clamp_min(sum(rate(top_scores_audience_request_duration_seconds_count{job=\"top-scores\",build_type=\"$build\"}[$__rate_interval])), 0.000001)",
           "legendFormat": "Errors",
           "instant": false,
           "range": true
@@ -945,14 +960,14 @@
       "description": "",
       "gridPos": {
         "x": 8,
-        "y": 59,
+        "y": 62,
         "w": 8,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (route,le) (rate(top_scores_audience_request_duration_seconds_bucket{job=\"top-scores\",build_type=\"production\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (route,le) (rate(top_scores_audience_request_duration_seconds_bucket{job=\"top-scores\",build_type=\"$build\"}[$__rate_interval])))",
           "legendFormat": "{{route}}",
           "instant": false,
           "range": true
@@ -985,21 +1000,21 @@
       "description": "Only instrumented screens reporting a duration. Duration is load time, not time spent in the app.",
       "gridPos": {
         "x": 16,
-        "y": 59,
+        "y": 62,
         "w": 8,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (screen,le) (rate(top_scores_audience_event_duration_seconds_bucket{job=\"top-scores\",event=~\"screen_view|match_details_loaded\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (screen,le) (rate(top_scores_audience_event_duration_seconds_bucket{build_type=\"$build\",job=\"top-scores\",event=~\"screen_view|match_details_loaded\"}[$__rate_interval])))",
           "legendFormat": "{{screen}} p95",
           "instant": false,
           "range": true
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.50, sum by (screen,le) (rate(top_scores_audience_event_duration_seconds_bucket{job=\"top-scores\",event=~\"screen_view|match_details_loaded\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.50, sum by (screen,le) (rate(top_scores_audience_event_duration_seconds_bucket{build_type=\"$build\",job=\"top-scores\",event=~\"screen_view|match_details_loaded\"}[$__rate_interval])))",
           "legendFormat": "{{screen}} p50"
         }
       ],
@@ -1030,7 +1045,7 @@
       "description": "Includes legacy and debug deliveries; used to diagnose collection failures. Duplicate retries are acknowledged without recounting.",
       "gridPos": {
         "x": 0,
-        "y": 67,
+        "y": 70,
         "w": 8,
         "h": 8
       },
@@ -1072,7 +1087,7 @@
       "description": "Older clients, website, scripts and requests without metadata. Not part of the headline audience.",
       "gridPos": {
         "x": 8,
-        "y": 67,
+        "y": 70,
         "w": 8,
         "h": 8
       },
@@ -1112,14 +1127,14 @@
       "description": "",
       "gridPos": {
         "x": 16,
-        "y": 67,
+        "y": 70,
         "w": 8,
         "h": 8
       },
       "targets": [
         {
           "refId": "A",
-          "expr": "100 * sum(rate(top_scores_audience_request_duration_seconds_count{job=\"top-scores\",surface=\"ios_app\",build_type=\"production\",identified=\"yes\"}[$__rate_interval])) / clamp_min(sum(rate(top_scores_audience_request_duration_seconds_count{job=\"top-scores\",surface=\"ios_app\",build_type=\"production\"}[$__rate_interval])), 0.000001)",
+          "expr": "100 * sum(rate(top_scores_audience_request_duration_seconds_count{job=\"top-scores\",surface=\"ios_app\",build_type=\"$build\",identified=\"yes\"}[$__rate_interval])) / clamp_min(sum(rate(top_scores_audience_request_duration_seconds_count{job=\"top-scores\",surface=\"ios_app\",build_type=\"$build\"}[$__rate_interval])), 0.000001)",
           "legendFormat": "Identified",
           "instant": false,
           "range": true
@@ -1151,19 +1166,43 @@
       "title": "How to read this dashboard",
       "gridPos": {
         "x": 0,
-        "y": 75,
+        "y": 78,
         "w": 24,
         "h": 5
       },
       "options": {
         "mode": "markdown",
-        "content": "**Audience = production iPhone/iPad installations with v2 foreground events.** One person can have several installations. App opens count foreground sessions; transient inactive interruptions do not start another session.\n\nAudience cards, feature reach and profile panels use the named fixed window, independent of the date picker. Request/event trends and totals use the date picker. Legacy traffic cannot be backfilled into foreground audience counts. Offline events can arrive up to 48 hours late. Widgets, watch, website and unknown traffic are excluded from the headline audience. An unavailable snapshot shows no audience value rather than zero. Aggregate history requires Prometheus retention covering the chosen date range."
+        "content": "**Audience = iPhone/iPad installations with v2 foreground events for the selected build.** Production excludes Debug builds; choose Debug for an app run from Xcode. Debug and Production counts stay separate. One person can have several installations. App opens count foreground sessions; transient inactive interruptions do not start another session.\n\nAudience cards, feature reach and profile panels use the named fixed window, independent of the date picker. Request/event trends and totals use the date picker. Legacy traffic cannot be backfilled into foreground audience counts. Offline events can arrive up to 48 hours late. Widgets, watch, website and unknown traffic are excluded from the headline audience. An unavailable snapshot shows no audience value rather than zero. Aggregate history requires Prometheus retention covering the chosen date range."
       }
     }
   ],
-  "description": "Production iPhone/iPad installation activity. Audience windows are fixed; request and event trends follow the time picker. Data starts with analytics v2. Identifiers never appear in metrics.",
+  "description": "iPhone/iPad installation activity, separated by Production and Debug build. Production is the default; choose Debug for Xcode development builds. Audience windows are fixed; request and event trends follow the time picker.",
   "templating": {
     "list": [
+      {
+        "name": "build",
+        "label": "Build",
+        "type": "custom",
+        "query": "Production : production,Debug : debug",
+        "current": {
+          "text": "Production",
+          "value": "production"
+        },
+        "options": [
+          {
+            "text": "Production",
+            "value": "production",
+            "selected": true
+          },
+          {
+            "text": "Debug",
+            "value": "debug",
+            "selected": false
+          }
+        ],
+        "includeAll": false,
+        "multi": false
+      },
       {
         "name": "window",
         "label": "Audience window",
