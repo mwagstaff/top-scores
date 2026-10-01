@@ -2,6 +2,8 @@
 /* eslint-disable no-console */
 "use strict";
 
+if (require.main === module) require("./runtime_logging").installTimestampedConsole();
+
 // ---------------------------------------------------------------------------
 // BSD runtime (long-running launchd-managed service, mirrors scraper.js's
 // multi-cadence pattern — no HTTP port, just timed jobs):
@@ -25,6 +27,7 @@
 // ---------------------------------------------------------------------------
 
 const bsd = require("./bsd_client");
+const diagnostics = require("./bsd_diagnostics");
 const { refreshCatalogue } = require("./fetch_bsd_catalogue");
 const http = require("http");
 const crypto = require("crypto");
@@ -120,7 +123,10 @@ const FINISHED_INCIDENTS_RETRY_MS = 24 * 60 * 60 * 1000;
 const FINISHED_INCIDENTS_BATCH_SIZE = 20;
 const finishedIncidentRepairAttempts = new Map();
 
-bsd.setRequestObserver(bsdHttpMetrics.trackRequestMetric);
+bsd.setRequestObserver((event) => {
+  bsdHttpMetrics.trackRequestMetric(event);
+  diagnostics.request(event);
+});
 
 function markPollSuccess(name) {
   lastSuccessfulPollAt.set(name, Date.now());
@@ -161,9 +167,9 @@ async function refreshCurrentMatchesProjection(reason) {
     do {
       projectionRefreshPending = false;
       const startedAt = Date.now();
-      const result = await publishBsdCurrentMatchesProjection(reason, {
+      const result = await diagnostics.run("projection", () => publishBsdCurrentMatchesProjection(reason, {
         knownHash: currentMatchesProjectionHash,
-      });
+      }), { reason });
       currentMatchesProjectionHash = result.payload_hash;
       if (!result.changed) continue;
       console.log(
@@ -488,7 +494,7 @@ function scheduleStandingsDailyRefresh() {
   standingsDailyRefreshTimer = setTimeout(async () => {
     standingsDailyRefreshTimer = null;
     try {
-      await refreshAllStandings();
+      await diagnostics.run("daily_standings", () => refreshAllStandings());
       markPollSuccess("standings");
       console.log("[bsd-runtime] daily standings refresh complete");
     } catch (error) {
@@ -753,7 +759,7 @@ async function refreshReference() {
   if (referenceRefreshInFlight) return;
   referenceRefreshInFlight = true;
   try {
-    await refreshAllReference();
+    await diagnostics.run("reference", () => refreshAllReference());
     markPollSuccess("reference");
     void refreshCurrentMatchesProjection("reference");
   } catch (error) {
@@ -769,7 +775,7 @@ async function refreshLeagues() {
   if (referenceRefreshInFlight) return;
   referenceRefreshInFlight = true;
   try {
-    await ingestLeagues();
+    await diagnostics.run("leagues", () => ingestLeagues());
     markPollSuccess("leagues");
     void refreshCurrentMatchesProjection("leagues");
   } catch (error) {
@@ -783,12 +789,12 @@ async function refreshEvents() {
   if (eventsRefreshInFlight) return;
   eventsRefreshInFlight = true;
   try {
-    await refreshIncrementalEvents();
-    await reconcileIncompleteFinishedIncidents().catch((error) => {
+    await diagnostics.run("events", () => refreshIncrementalEvents());
+    await diagnostics.run("finished_incidents_repair", () => reconcileIncompleteFinishedIncidents()).catch((error) => {
       console.warn(`[bsd-runtime] finished incidents repair failed: ${error.message || error}`);
     });
     markPollSuccess("events");
-    await reconcileActiveLiveFootballTvListings().catch((error) => {
+    await diagnostics.run("tv_reconciliation", () => reconcileActiveLiveFootballTvListings()).catch((error) => {
       console.warn(`[bsd-runtime] supplementary TV reconciliation failed: ${error.message || error}`);
     });
     void refreshCurrentMatchesProjection("events_refresh");
@@ -803,7 +809,7 @@ async function refreshBroadcasts() {
   if (broadcastsRefreshInFlight) return;
   broadcastsRefreshInFlight = true;
   try {
-    await refreshAllBroadcasts();
+    await diagnostics.run("broadcasts", () => refreshAllBroadcasts());
     markPollSuccess("broadcasts");
     void refreshCurrentMatchesProjection("broadcasts");
   } catch (error) {
@@ -817,7 +823,7 @@ async function refreshPredictions() {
   if (predictionsRefreshInFlight) return;
   predictionsRefreshInFlight = true;
   try {
-    await refreshAllPredictions();
+    await diagnostics.run("predictions", () => refreshAllPredictions());
     markPollSuccess("predictions");
   } catch (error) {
     console.error(`[bsd-runtime] predictions refresh failed: ${error.message || error}`);
@@ -830,7 +836,7 @@ async function refreshManagers() {
   if (managersRefreshInFlight) return;
   managersRefreshInFlight = true;
   try {
-    await refreshAllManagers();
+    await diagnostics.run("managers", () => refreshAllManagers());
     markPollSuccess("managers");
   } catch (error) {
     console.error(`[bsd-runtime] managers refresh failed: ${error.message || error}`);
@@ -841,7 +847,7 @@ async function refreshManagers() {
 
 async function refreshGameCatalogue() {
   try {
-    const result = await refreshCatalogue({ signal: catalogueAbortController.signal });
+    const result = await diagnostics.run("catalogue", () => refreshCatalogue({ signal: catalogueAbortController.signal }));
     if (!result.skipped && result.succeeded > 0) markPollSuccess("game_catalogue");
     if (!result.skipped) console.log(`[bsd-runtime] game catalogue: ${result.succeeded} published, ${result.failed} failed`);
   } catch (error) {
@@ -850,6 +856,14 @@ async function refreshGameCatalogue() {
 }
 
 function start() {
+  diagnostics.start(() => ({
+    rateLimit: bsd.getRateLimitState(),
+    liveEvents: liveEventIds.length, liveLeagues: liveLeagueIds.size,
+    incidentHashes: incidentPayloadHashes.size, settlementTimers: settlementTimers.size,
+    repairAttempts: finishedIncidentRepairAttempts.size,
+    pollsInFlight: { live: livePollInFlight, incidents: incidentsPollInFlight,
+      lineups: lineupsPollInFlight, standings: standingsPollInFlight },
+  }));
   catalogueAbortController = new AbortController();
   console.log(
     `[bsd-runtime] starting (live=${LIVE_POLL_MS}ms, live_idle=${LIVE_IDLE_POLL_MS}ms, incidents=${INCIDENTS_POLL_MS}ms, ` +
@@ -888,6 +902,7 @@ function start() {
 }
 
 async function stop(signal) {
+  diagnostics.stop();
   catalogueAbortController.abort();
   console.log(`[bsd-runtime] ${signal} received, shutting down`);
   timers.forEach((timer) => clearInterval(timer));

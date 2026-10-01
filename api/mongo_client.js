@@ -1184,7 +1184,10 @@ async function getBsdRecords(collectionName, filter = {}, options = {}) {
   if (Number.isFinite(Number(options.limit)) && Number(options.limit) > 0) {
     cursor = cursor.limit(Math.floor(Number(options.limit)));
   }
-  return cursor.toArray();
+  return require("./bsd_diagnostics").run("mongo_read", () => cursor.toArray(), {
+    collection: collectionName, filtered: Object.keys(filter).length > 0,
+    projected: Boolean(options.projection), limit: options.limit || null,
+  }, { quiet: true });
 }
 
 // Lightweight existence check across a whole bsd_ collection — projects only

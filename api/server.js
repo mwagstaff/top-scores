@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+if (require.main === module) require("./runtime_logging").installTimestampedConsole();
 const {
   NOTIFICATION_RIVALRIES,
   bsdTeamID,

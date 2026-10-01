@@ -336,3 +336,20 @@ test("setRequestObserver ignores non-functions without throwing", () => {
   assert.doesNotThrow(() => setRequestObserver(42));
   setRequestObserver(null);
 });
+
+
+test("request diagnostics count UTF-8 response bytes without retaining bodies", { timeout: 1_000 }, async (t) => {
+  const observed = [];
+  const body = JSON.stringify({ id: 123, name: "Araújo", events: [{ id: 1 }] });
+  mockResponses(t, (res) => {
+    res.emit("data", body);
+    res.complete = true;
+    res.emit("end");
+  });
+  setRequestObserver((event) => observed.push(event));
+  assert.equal((await getEvent(123, { maxAttempts: 1 })).id, 123);
+  assert.equal(observed[0].responseBytes, Buffer.byteLength(body));
+  assert.equal(observed[0].resultCount, 1);
+  assert.equal(observed[0].attempt, 1);
+  assert.equal(Object.hasOwn(observed[0], "data"), false);
+});

@@ -253,6 +253,7 @@ function _fetchJson(url, options = {}) {
     const startedAtMs = Date.now();
     let settled = false;
     let raw = "";
+    let responseBytes = 0;
 
     const complete = ({ statusCode, error, data }) => {
       if (settled) return;
@@ -268,6 +269,10 @@ function _fetchJson(url, options = {}) {
         errorCode: error && error.code ? String(error.code) : null,
         durationMs: Date.now() - startedAtMs,
         timestampMs: Date.now(),
+        attempt: options.attempt || 1,
+        responseBytes,
+        resultCount: Array.isArray(data?.results) ? data.results.length
+          : Array.isArray(data?.events) ? data.events.length : null,
       });
       if (error) {
         reject(error);
@@ -327,7 +332,10 @@ function _fetchJson(url, options = {}) {
         });
         res.setEncoding("utf8");
         res.on("data", (chunk) => {
-          if (!settled) raw += chunk;
+          if (!settled) {
+            responseBytes += Buffer.byteLength(chunk, "utf8");
+            raw += chunk;
+          }
         });
         res.on("end", () => {
           if (settled) return;
@@ -376,7 +384,7 @@ async function _fetchWithRetry(url, options = {}) {
       await _acquireRequestSlot();
       try {
         // eslint-disable-next-line no-await-in-loop
-        return await _fetchJson(url, options);
+        return await _fetchJson(url, { ...options, attempt });
       } finally {
         _releaseRequestSlot();
       }
@@ -455,10 +463,11 @@ async function _collectPages(fetchPage, { pageLimit = BSD_PAGE_LIMIT, maxPages =
 async function _requestAllPages(path, options = {}) {
   const { maxPages = BSD_MAX_PAGES, strict = false, ...requestOptions } = options;
   const baseQuery = { ...(requestOptions.query || {}), limit: BSD_PAGE_LIMIT };
-  return _collectPages(
+  return require("./bsd_diagnostics").run("bsd_pagination", () => _collectPages(
     (offset) => _request(path, { ...requestOptions, query: { ...baseQuery, offset } }),
     { pageLimit: BSD_PAGE_LIMIT, maxPages, strict }
-  );
+  ), { path, source: options.source, leagueId: baseQuery.league_id || null,
+    teamId: baseQuery.team_id || null }, { quiet: true });
 }
 
 // ---------------------------------------------------------------------------
