@@ -929,7 +929,7 @@ struct APIClient {
         return try JSONDecoder().decode(TeamRankingEntry.self, from: data)
     }
 
-    func fetchTeamRankings(type: String? = "club") async throws -> [TeamRankingEntry] {
+    func fetchTeamRankings(type: String? = nil) async throws -> [TeamRankingEntry] {
         var queryItems: [URLQueryItem] = []
         if let type, !type.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             queryItems.append(URLQueryItem(name: "type", value: type))

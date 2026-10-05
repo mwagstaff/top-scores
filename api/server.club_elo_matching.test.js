@@ -70,6 +70,20 @@ test("Comoros is treated as a national team without blocking the Como club match
   assert.equal(comorosNationalResult.team, comoros);
 });
 
+test("national teams missing from the manual extras retain National Elo ratings", () => {
+  for (const name of ["San Marino", "Malta", "Liechtenstein", "Faroe Islands", "Gibraltar"]) {
+    const nationalTeam = { Rank: 205, Team: name, Country: name, Elo: 821 };
+    const nationalResult = __private.findBestNationalEloMatch(name, [nationalTeam]);
+    assert.equal(nationalResult.accepted, true, name);
+    assert.equal(nationalResult.team, nationalTeam, name);
+    const clubResult = __private.findBestClubEloMatch(
+      name, [{ Club: name, Elo: 1500 }], null, new Map()
+    );
+    assert.equal(clubResult.accepted, false, name);
+    assert.equal(clubResult.method, "excluded_national_team", name);
+  }
+});
+
 test("top teams identity keys collapse the Paris Saint-Germain Club Elo alias", () => {
   const manualMappings = new Map([
     ["paris saint germain", "Paris SG"],

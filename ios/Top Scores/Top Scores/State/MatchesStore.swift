@@ -321,7 +321,7 @@ struct MatchOrderPinning {
     }
 }
 
-private enum MatchGroupingEngine {
+enum MatchGroupingEngine {
     private final class GroupingMemo: @unchecked Sendable {
         private nonisolated(unsafe) var teamRatings: [String: Double] = [:]
         private nonisolated(unsafe) var matchRatings: [String: Double] = [:]
@@ -601,6 +601,7 @@ private enum MatchGroupingEngine {
 final class MatchesModeViewState: ObservableObject {
     @Published fileprivate(set) var matches: [Match] = []
     @Published fileprivate(set) var groupedMatches: [MatchDay] = []
+    @Published fileprivate(set) var teamRatingsRevision = 0
     @Published fileprivate(set) var isLoading = false
     @Published fileprivate(set) var isLoadingMoreMatches = false
     @Published fileprivate(set) var errorMessage: String?
@@ -648,6 +649,7 @@ final class MatchesStore: ObservableObject {
         let sortOrder = preferences.matchGroupSortOrder
         let premierLeagueMatchesFirst = preferences.premierLeagueMatchesFirst
         let ratingLookup = teamRatingLookup
+        let ratingsRevision = fixturesViewState.teamRatingsRevision
         let premierLeagueTeamMatcher = premierLeagueTeamMatcher
         let groupingTask = Task.detached(priority: priority) { () -> FixtureBrowsePageGroupingResult? in
             let signpost = PerformanceSignposter.matches.beginInterval("FixtureBrowseGrouping")
@@ -682,7 +684,9 @@ final class MatchesStore: ObservableObject {
         } onCancel: {
             groupingTask.cancel()
         }
-        guard !Task.isCancelled, let rawResult else { return nil }
+        guard !Task.isCancelled,
+              ratingsRevision == fixturesViewState.teamRatingsRevision,
+              let rawResult else { return nil }
 
         let stabilizedFiltered = rawResult.filtered.mapValues {
             matchOrderPinning.stabilize($0, context: filteredPinningContext)
@@ -2187,7 +2191,7 @@ final class MatchesStore: ObservableObject {
         }
     }
 
-    private func applyTeamRatingSnapshot(
+    func applyTeamRatingSnapshot(
         entries: [TeamRankingEntry],
         defaultElo: Double
     ) async {
@@ -2225,7 +2229,12 @@ final class MatchesStore: ObservableObject {
         lastAppliedTeamRankingEntries = entries
         lastAppliedTeamRatingDefaultElo = defaultElo
         teamRatingLookup = nextLookup
+        // Live-score refreshes keep their order, but newly loaded ratings must
+        // replace the fallback order established before the catalogue arrived.
+        matchOrderPinning = MatchOrderPinning()
         groupingRevision &+= 1
+        fixturesViewState.teamRatingsRevision &+= 1
+        resultsViewState.teamRatingsRevision &+= 1
         publishAllModes(priorityMode: activeMode)
     }
 

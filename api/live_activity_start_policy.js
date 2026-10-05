@@ -1,3 +1,13 @@
+// Eight hours active plus up to four hours retained on the Lock Screen.
+// A missing update-token callback is not evidence that a start failed.
+const UNCONFIRMED_START_WINDOW_MS = 12 * 60 * 60 * 1000;
+
+function unconfirmedRenewalIsBlocking(state = {}, nowMs = Date.now()) {
+  const acceptedAt = Date.parse(state.renewalAcceptedAt || "");
+  return Boolean(state.renewalForActivityId) && Number.isFinite(acceptedAt) &&
+    nowMs - acceptedAt < UNCONFIRMED_START_WINDOW_MS;
+}
+
 const dayFormatter = new Intl.DateTimeFormat("en-CA", {
   timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit",
 });
@@ -20,4 +30,4 @@ function latestPushToStartBudget(states) {
   }, { pushToStartAttempts: 0, pushToStartAttemptsUpdatedAt: null });
 }
 
-module.exports = { pushToStartAttemptsForDay, latestPushToStartBudget };
+module.exports = { UNCONFIRMED_START_WINDOW_MS, unconfirmedRenewalIsBlocking, pushToStartAttemptsForDay, latestPushToStartBudget };

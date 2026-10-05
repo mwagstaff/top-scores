@@ -4,17 +4,17 @@ import Testing
 @testable import Top_Scores
 
 struct LiveActivityLifecycleTests {
-    @Test func acceptedActivityTokenResponseAllowsDuplicateCleanup() {
+    @Test func acceptedActivityTokenResponseConfirmsUpdateTarget() {
         let data = Data(#"{"success":true,"data":{"liveActivity":{}}}"#.utf8)
         #expect(LiveActivitySyncService.activityTokenRegistrationWasAccepted(data))
     }
 
-    @Test func ignoredActivityTokenResponseKeepsOlderActivityAsFallback() {
+    @Test func ignoredActivityTokenResponseDoesNotConfirmUpdateTarget() {
         let data = Data(#"{"success":true,"ignored":true,"reason":"recently_ended_activity"}"#.utf8)
         #expect(!LiveActivitySyncService.activityTokenRegistrationWasAccepted(data))
     }
 
-    @Test func invalidActivityTokenResponseKeepsOlderActivityAsFallback() {
+    @Test func invalidActivityTokenResponseDoesNotConfirmUpdateTarget() {
         #expect(!LiveActivitySyncService.activityTokenRegistrationWasAccepted(Data("not-json".utf8)))
     }
 
@@ -43,4 +43,25 @@ struct LiveActivityLifecycleTests {
         let updatable = states.filter { LiveActivitySyncService.canUpdateActivity(in: $0) }
         #expect(updatable == [.stale, .active])
     }
+    @Test func offlineCleanupKeepsOneRegisteredFallback() {
+        #expect(LiveActivitySyncService.duplicateSurvivorID(
+            newestFirst: ["new", "old", "older"], registeredIDs: ["old", "older"],
+            newestRegistrationAccepted: false
+        ) == "old")
+    }
+
+    @Test func offlineCleanupWithoutRegisteredTokensKeepsOnlyNewest() {
+        #expect(LiveActivitySyncService.duplicateSurvivorID(
+            newestFirst: ["new", "old"], registeredIDs: [],
+            newestRegistrationAccepted: false
+        ) == "new")
+    }
+
+    @Test func acceptedReplacementWinsOverRegisteredFallback() {
+        #expect(LiveActivitySyncService.duplicateSurvivorID(
+            newestFirst: ["new", "old"], registeredIDs: ["old"],
+            newestRegistrationAccepted: true
+        ) == "new")
+    }
+
 }

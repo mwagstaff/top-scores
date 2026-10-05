@@ -870,6 +870,12 @@ struct MatchesView: View {
         .onReceive(fixtureBrowser.pageCache.$matchesByDate) { matchesByDate in
             scheduleFixtureBrowsePageGroupings(from: matchesByDate)
         }
+        .onChange(of: viewState.teamRatingsRevision) { _, _ in
+            scheduleFixtureBrowsePageGroupings(
+                from: fixtureBrowser.cachedMatchesByDate,
+                force: true
+            )
+        }
         .onChange(of: fixtureBrowser.hasLoadedCalendar) { _, _ in
             rebuildFixtureBrowseGrouping()
         }
@@ -3275,9 +3281,18 @@ private extension MatchesView {
     }
 
     private func scheduleFixtureBrowsePageGroupings(
-        from matchesByDate: [String: [Match]]
+        from matchesByDate: [String: [Match]],
+        force: Bool = false
     ) {
         guard mode == .fixtures else { return }
+        if force {
+            // Keep displayed pages while rebuilding, but leave unfinished pages
+            // dirty if a date swipe cancels background grouping.
+            for dateKey in matchesByDate.keys {
+                fixtureBrowsePageSourceMatchesByDate.removeValue(forKey: dateKey)
+                fixtureBrowseUnfilteredPageSourceMatchesByDate.removeValue(forKey: dateKey)
+            }
+        }
         let removedDateKeys = Set(fixtureBrowsePageSourceMatchesByDate.keys)
             .subtracting(matchesByDate.keys)
         let changedDateKeys = Set(matchesByDate.compactMap { dateKey, matches in

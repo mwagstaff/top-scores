@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
-const { pushToStartAttemptsForDay } = require("./live_activity_start_policy");
+const { pushToStartAttemptsForDay, unconfirmedRenewalIsBlocking } = require("./live_activity_start_policy");
 const { __testHooks: hooks } = require("./match_monitor");
 const { __private: { mergedLiveActivityState } } = require("./redis_client");
 
@@ -51,4 +51,12 @@ test("retry budget timestamp persists through unrelated state patches", () => {
   const state = mergedLiveActivityState({}, { pushToStartAttempts: 3, pushToStartAttemptsUpdatedAt: "2026-09-08T08:00:00Z" });
   const updated = mergedLiveActivityState(state, { lastStartAt: "2026-09-08T09:00:00Z" });
   assert.equal(pushToStartAttemptsForDay(updated, Date.parse("2026-09-08T10:00:00Z")), 3);
+});
+
+test("accepted renewal still blocks another start after the old activity expires", () => {
+  const now = Date.parse("2026-10-04T15:00:00Z");
+  const state = { renewalForActivityId: "old", renewalAcceptedAt: new Date(now).toISOString() };
+  assert.equal(unconfirmedRenewalIsBlocking(state, now + 30 * 60000), true);
+  assert.equal(unconfirmedRenewalIsBlocking(state, now + 12 * 3600000), false);
+  assert.equal(unconfirmedRenewalIsBlocking({ ...state, renewalForActivityId: null }, now), false);
 });

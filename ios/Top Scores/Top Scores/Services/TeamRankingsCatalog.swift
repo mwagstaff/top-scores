@@ -512,7 +512,8 @@ actor TeamRankingsCatalog {
     static let shared = TeamRankingsCatalog()
 
     private static let cacheTTL: TimeInterval = 24 * 60 * 60
-    private static let cacheFileName = "team-rankings-cache.json"
+    // The previous cache contained clubs only; fetch national ratings immediately on upgrade.
+    private static let cacheFileName = "team-rankings-all-teams-cache.json"
 
     private var didLoadCache = false
     private var cachedEntriesStore: [TeamRankingEntry] = []
@@ -537,7 +538,7 @@ actor TeamRankingsCatalog {
 
         let task = Task<[TeamRankingEntry], Error> {
             let client = APIClient(baseURL: baseURL)
-            return try await client.fetchTeamRankings(type: "club")
+            return try await client.fetchTeamRankings()
         }
         refreshTask = task
 

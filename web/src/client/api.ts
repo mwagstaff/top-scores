@@ -157,7 +157,7 @@ export function fetchTeamRankings(): Promise<TeamRankingEntry[]> {
     return Promise.resolve(teamRankingsCache);
   }
 
-  teamRankingsPromise ||= requestJson<unknown[]>("/api/v1/teams?type=club")
+  teamRankingsPromise ||= requestJson<unknown[]>("/api/v1/teams")
     .then((items) => items.map(normalizeTeamRanking))
     .then((items) => {
       teamRankingsCache = items;

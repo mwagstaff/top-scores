@@ -7877,14 +7877,18 @@ function getLikelyNationalTeamNames() {
   if (
     typeof Intl === "object" &&
     Intl &&
-    typeof Intl.DisplayNames === "function" &&
-    typeof Intl.supportedValuesOf === "function"
+    typeof Intl.DisplayNames === "function"
   ) {
     try {
-      const displayNames = new Intl.DisplayNames(["en"], { type: "region" });
-      Intl.supportedValuesOf("region").forEach((regionCode) => {
-        addLikelyNationalTeamName(set, displayNames.of(regionCode));
-      });
+      const displayNames = new Intl.DisplayNames(["en"], { type: "region", fallback: "none" });
+      // supportedValuesOf does not support "region". Resolve the two-letter
+      // region codes instead, ignoring unassigned codes via fallback: "none".
+      for (const first of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
+        for (const second of "ABCDEFGHIJKLMNOPQRSTUVWXYZ") {
+          const name = displayNames.of(`${first}${second}`);
+          if (name) addLikelyNationalTeamName(set, name);
+        }
+      }
     } catch (_error) {
       // Ignore ICU/runtime support issues and fall back to extras.
     }

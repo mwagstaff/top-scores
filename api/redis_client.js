@@ -791,7 +791,7 @@ function normalizeLiveActivityStatePatch(patch = {}) {
   if (Object.prototype.hasOwnProperty.call(patch, "testHoldUntil")) {
     normalized.testHoldUntil = normalizeOptionalToken(patch.testHoldUntil);
   }
-  for (const key of ["renewalForActivityId", "renewalRequestedAt", "renewalLastAttemptAt", "currentActivityStartedAt", "retiredActivityId"]) {
+  for (const key of ["renewalForActivityId", "renewalRequestedAt", "renewalLastAttemptAt", "renewalAcceptedAt", "currentActivityStartedAt", "retiredActivityId"]) {
     if (Object.prototype.hasOwnProperty.call(patch, key)) normalized[key] = normalizeOptionalToken(patch[key]);
   }
   if (Object.prototype.hasOwnProperty.call(patch, "renewalAttempts")) {

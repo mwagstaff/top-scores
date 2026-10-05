@@ -1,3 +1,4 @@
+const { unconfirmedRenewalIsBlocking } = require("./live_activity_start_policy");
 // Renew while the old activity still has 30 minutes of its eight-hour lifetime.
 const RENEW_AFTER_MS = 7.5 * 60 * 60 * 1000;
 const RETRY_MS = 5 * 60 * 1000;
@@ -9,6 +10,7 @@ async function renewLiveActivityIfNeeded(user, contentState, nowMs, { persist, s
   if (!state.currentActivityId || !state.currentActivityPushToken || !state.pushToStartToken ||
       !Number.isFinite(startedAt) || nowMs - startedAt < RENEW_AFTER_MS) return;
   const sameActivity = state.renewalForActivityId === state.currentActivityId;
+  if (sameActivity && unconfirmedRenewalIsBlocking(state, nowMs)) return;
   const attempts = sameActivity ? Number(state.renewalAttempts || 0) : 0;
   const lastAttempt = sameActivity ? Date.parse(state.renewalLastAttemptAt || "") : NaN;
   if (attempts >= MAX_ATTEMPTS || (Number.isFinite(lastAttempt) && nowMs - lastAttempt < RETRY_MS)) return;
@@ -20,6 +22,7 @@ async function renewLiveActivityIfNeeded(user, contentState, nowMs, { persist, s
     renewalRequestedAt: sameActivity ? state.renewalRequestedAt : new Date(nowMs).toISOString(),
     renewalLastAttemptAt: new Date(nowMs).toISOString(),
     renewalAttempts: attempts + 1,
+    ...(!sameActivity ? { renewalAcceptedAt: null } : {}),
   });
   const result = await send({
     token: state.pushToStartToken,
@@ -31,6 +34,11 @@ async function renewLiveActivityIfNeeded(user, contentState, nowMs, { persist, s
     alert: { title: "Top Scores", body: "Today’s fixtures and scores" },
     isDevelopmentBuild: Boolean(user.isDevelopmentBuild),
   }).catch(error => ({ success: false, error: error.message }));
+  if (result.success) {
+    // Save only the acceptance timestamp: a fast token callback may already
+    // have completed handover and cleared renewalForActivityId.
+    await persist(user.deviceToken, { renewalAcceptedAt: new Date(nowMs).toISOString() });
+  }
   await record(user, {
     record_type: "push", dispatch_kind: "start", dispatch_reason: "lifetime_renewal",
     status: result.success ? "success" : "failure", mode: contentState.mode,

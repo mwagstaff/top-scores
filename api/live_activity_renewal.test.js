@@ -32,13 +32,13 @@ test("08:00 activity renews at 15:30 without ending or changing its update token
   assert.equal(user.liveActivity.lastPayloadHash, "old-hash");
 });
 
-test("unanswered renewals retry every five minutes with a five-attempt cap", async () => {
+test("accepted renewal is not repeated when the token callback never arrives", async () => {
   const { user, pushes, deps } = fixture();
   for (let minute = 450; minute < 500; minute++) {
     await renewLiveActivityIfNeeded(user, content, start + minute * 60000, deps);
   }
-  assert.equal(pushes.length, 5);
-  assert.equal(user.liveActivity.renewalAttempts, 5);
+  assert.equal(pushes.length, 1);
+  assert.equal(user.liveActivity.renewalAttempts, 1);
 });
 
 test("failed pushes stay bounded and preserve the working activity", async () => {
@@ -52,7 +52,7 @@ test("failed pushes stay bounded and preserve the working activity", async () =>
 test("fast registration is not overwritten after push delivery", async () => {
   const { user, deps } = fixture();
   deps.send = async () => {
-    Object.assign(user.liveActivity, { currentActivityId: "new", currentActivityPushToken: "new-token", renewalAttempts: 0 });
+    Object.assign(user.liveActivity, { currentActivityId: "new", currentActivityPushToken: "new-token", renewalAttempts: 0, renewalForActivityId: null });
     return { success: true };
   };
   await renewLiveActivityIfNeeded(user, content, start + 450 * 60000, deps);
@@ -78,4 +78,14 @@ test("missing start token or unknown lifetime cannot trigger renewal", async () 
     await renewLiveActivityIfNeeded(user, content, start + 450 * 60000, deps);
     assert.equal(pushes.length, 0);
   }
+});
+
+test("rejected renewal pushes still retry with the five-attempt cap", async () => {
+  const { user, pushes, deps } = fixture();
+  deps.send = async payload => { pushes.push(payload); return { success: false, error: "rejected" }; };
+  for (let minute = 450; minute < 500; minute++) {
+    await renewLiveActivityIfNeeded(user, content, start + minute * 60000, deps);
+  }
+  assert.equal(pushes.length, 5);
+  assert.equal(user.liveActivity.renewalAcceptedAt, null);
 });

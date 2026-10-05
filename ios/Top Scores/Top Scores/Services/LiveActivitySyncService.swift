@@ -189,6 +189,8 @@ final class LiveActivitySyncService {
     private var pendingForegroundStartContentState: TopScoresLiveActivityAttributes.ContentState?
     private var pendingForegroundStartRetryTask: Task<Void, Never>?
     private var foregroundReconcileInFlight = false
+    private var duplicateCleanupInFlight = false
+    private var duplicateCleanupRequested = false
     // Three independent call sites can each decide to start a foreground activity
     // around the same time (scene-active retry, delayed retry timer, foreground
     // reconcile) — Activity<...>.activities stays empty until Activity.request()
@@ -231,6 +233,9 @@ final class LiveActivitySyncService {
                 beginObserving(activity)
             }
 
+            Task(priority: .background) {
+                _ = await self.enforceSingleActiveActivity(among: Activity<TopScoresLiveActivityAttributes>.activities)
+            }
             activityUpdatesTask = Task(priority: .background) {
                 for await activity in Activity<TopScoresLiveActivityAttributes>.activityUpdates {
                     self.scheduleSharedWidgetDiagnosticsFlush()
@@ -585,6 +590,29 @@ final class LiveActivitySyncService {
         let signpost = PerformanceSignposter.liveActivity.beginInterval("LiveActivityEnforceSingle")
         defer { PerformanceSignposter.liveActivity.endInterval("LiveActivityEnforceSingle", signpost) }
 
+        let shouldCleanUp = lock.withLock {
+            guard !duplicateCleanupInFlight else {
+                duplicateCleanupRequested = true
+                return false
+            }
+            duplicateCleanupInFlight = true
+            return true
+        }
+        guard shouldCleanUp else { return Self.updatableActivities }
+        defer {
+            let shouldRepeat = lock.withLock {
+                duplicateCleanupInFlight = false
+                let requested = duplicateCleanupRequested
+                duplicateCleanupRequested = false
+                return requested
+            }
+            if shouldRepeat {
+                Task(priority: .background) {
+                    _ = await self.enforceSingleActiveActivity(among: Activity<TopScoresLiveActivityAttributes>.activities)
+                }
+            }
+        }
+
         for activity in activities where activity.activityState == .ended {
             stopObserving(activityID: activity.id, cancelStateTask: true)
             _ = lock.withLock { endedActivityIDs.insert(activity.id) }
@@ -597,15 +625,10 @@ final class LiveActivitySyncService {
             let leftStarted = lhs.attributes.startedAtEpochSeconds ?? 0
             let rightStarted = rhs.attributes.startedAtEpochSeconds ?? 0
             if leftStarted != rightStarted { return leftStarted > rightStarted }
-            let leftState = Self.currentContentState(for: lhs)
-            let rightState = Self.currentContentState(for: rhs)
-            if leftState.generatedAtEpochSeconds != rightState.generatedAtEpochSeconds {
-                return leftState.generatedAtEpochSeconds > rightState.generatedAtEpochSeconds
-            }
             return lhs.id > rhs.id
         }
 
-        guard let survivor = sortedActivities.first else { return [] }
+        guard var survivor = sortedActivities.first else { return [] }
 
         diagnosticLog(
             "[LiveActivitySync] Found %d active activities; keeping %@ and ending duplicates",
@@ -627,18 +650,39 @@ final class LiveActivitySyncService {
             diagnosticLog("[LiveActivitySync] Pre-uploaded survivor token before ending duplicates %@", survivor.id)
         }
 
-        // Keep the old activity as a fallback until the replacement's update
-        // token has been accepted. Once accepted, remove every older generation
-        // locally even if the server's APNs end was delayed or dropped.
-        guard survivorRegistered else { return [survivor] }
-        for duplicate in sortedActivities.dropFirst() {
+        // If registration is unavailable, keep a known update target when possible.
+        // Cleanup must still work offline: retaining every fallback leaves a stack
+        // of stale cards indefinitely. Token observation continues for the survivor.
+        let registeredIDs = lock.withLock {
+            Set(registeredActivityPushTokenHexByActivityID.keys)
+        }
+        let survivorID = Self.duplicateSurvivorID(
+            newestFirst: sortedActivities.map(\.id),
+            registeredIDs: registeredIDs,
+            newestRegistrationAccepted: survivorRegistered
+        )
+        if let fallback = sortedActivities.first(where: { $0.id == survivorID }) {
+            survivor = fallback
+        }
+        guard Self.canUpdateActivity(in: survivor.activityState) else { return Self.updatableActivities }
+        for duplicate in sortedActivities where duplicate.id != survivor.id {
             diagnosticLog("[LiveActivitySync] Ending duplicate activity %@", duplicate.id)
+            _ = lock.withLock { endedActivityIDs.insert(duplicate.id) }
             stopObserving(activityID: duplicate.id, cancelStateTask: true)
             await duplicate.end(nil, dismissalPolicy: .immediate)
             await uploadActivityEnded(activityID: duplicate.id)
         }
 
         return [survivor]
+    }
+
+    static func duplicateSurvivorID(
+        newestFirst: [String],
+        registeredIDs: Set<String>,
+        newestRegistrationAccepted: Bool
+    ) -> String? {
+        if newestRegistrationAccepted { return newestFirst.first }
+        return newestFirst.first(where: { registeredIDs.contains($0) }) ?? newestFirst.first
     }
 
     private func uploadPushToStartToken(_ tokenData: Data) async {

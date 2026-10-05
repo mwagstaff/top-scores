@@ -536,7 +536,7 @@ test("liveActivityTokenlessCurrentActivityIsBlocking waits for a fresh activity 
       {
         currentActivityId: "41DF902B-11B3-4387-93B4-21335F7DDEA3",
         currentActivityPushToken: null,
-        lastStartAt: "2026-04-25T10:05:00.000Z",
+        lastStartAt: "2026-04-24T22:08:30.000Z",
       },
       nowMs
     ),
@@ -578,18 +578,18 @@ test("liveActivityRecentDismissalCooldownIsBlocking suppresses quiet push-to-sta
   );
 });
 
-test("liveActivityPendingStartMaxMsForMode follows stale window by mode", () => {
+test("accepted starts stay protected regardless of content mode or staleness", () => {
   assert.equal(
     __testHooks.liveActivityPendingStartMaxMsForMode("single_upcoming"),
-    4 * 60 * 60 * 1000
+    12 * 60 * 60 * 1000
   );
   assert.equal(
     __testHooks.liveActivityPendingStartMaxMsForMode("multi_finished"),
-    4 * 60 * 60 * 1000
+    12 * 60 * 60 * 1000
   );
   assert.equal(
     __testHooks.liveActivityPendingStartMaxMsForMode("multi_live"),
-    30 * 60 * 1000
+    12 * 60 * 60 * 1000
   );
 });
 

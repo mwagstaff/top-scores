@@ -1,4 +1,4 @@
-const { pushToStartAttemptsForDay, latestPushToStartBudget } = require("./live_activity_start_policy");
+const { pushToStartAttemptsForDay, latestPushToStartBudget, UNCONFIRMED_START_WINDOW_MS, unconfirmedRenewalIsBlocking } = require("./live_activity_start_policy");
 const { renewLiveActivityIfNeeded } = require("./live_activity_renewal");
 const {
   getAllUserPreferences,
@@ -63,9 +63,8 @@ const LIVE_ACTIVITY_MAX_MATCHES = 6;
 const LIVE_ACTIVITY_TEAM_RANKING_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const LIVE_ACTIVITY_TEAM_RANKING_RETRY_MS = 5 * 60 * 1000;
 const LIVE_ACTIVITY_TEAM_RANKING_FETCH_TIMEOUT_MS = 15 * 1000;
-// Short recovery window for changed payloads after APNS accepts a start but the app
-// never reports an activity token.
-const LIVE_ACTIVITY_PENDING_MAX_MS = 2 * 60 * 1000;
+// Do not create another activity merely because its update token is delayed.
+const LIVE_ACTIVITY_PENDING_MAX_MS = UNCONFIRMED_START_WINDOW_MS;
 // Stop firing push-to-start after this many consecutive unanswered attempts on the
 // same token. iOS silently drops push-to-start when Live Activities are disabled or
 // rate-limited; continuing to hammer it wastes APNs budget and can trigger further
@@ -6208,7 +6207,7 @@ function liveActivityHeartbeatThresholdMsForMode(mode) {
 }
 
 function liveActivityPendingStartMaxMsForMode(mode) {
-  return liveActivityStaleAfterSecondsForMode(mode) * 1000;
+  return UNCONFIRMED_START_WINDOW_MS;
 }
 
 function buildLiveActivityApsPayload(event, contentState, options = {}) {
@@ -6593,7 +6592,7 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
       });
       return;
     }
-    if (hasPendingStart) {
+    if (hasPendingStart && pendingAgeMs >= UNCONFIRMED_START_WINDOW_MS) {
       await persistLiveActivityPatch(user, {
         pendingStartAt: null,
         lastPayloadHash: null,
@@ -7003,6 +7002,8 @@ async function dispatchLiveActivityForUser(user, presentation, nowMs = Date.now(
     }
     return;
   }
+  // A renewal may have arrived even if the old activity has since expired.
+  if (unconfirmedRenewalIsBlocking(state, nowMs)) return;
   if (hasFreshTokenlessCurrentActivity) {
     monitorVerboseLog(
       `[MatchMonitor] Live Activity activity token wait ${JSON.stringify({
@@ -8548,6 +8549,7 @@ module.exports = {
     shouldPreserveExistingLiveActivityOnEmpty,
     liveActivityTokenlessCurrentActivityIsBlocking,
     liveActivityRecentDismissalCooldownIsBlocking,
+    dispatchLiveActivityForUser,
     liveActivityPendingStartMaxMsForMode,
     liveActivityStaleAfterSecondsForMode,
   },
