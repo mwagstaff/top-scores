@@ -1152,8 +1152,8 @@ async function ensureLiveActivityTeamRatingCache(nowMs = Date.now()) {
     try {
       const [settings, teams] = await Promise.all([
         fetchJsonWithTimeout(`${apiBaseURL}/teams/config`),
-        // Match the Scores screen's club catalogue and configured ranking source.
-        fetchJsonWithTimeout(`${apiBaseURL}/teams?type=club`),
+        // Match the Scores screen's club and national catalogue and configured ranking source.
+        fetchJsonWithTimeout(`${apiBaseURL}/teams`),
       ]);
       const defaultElo = Number(settings && settings.default_elo);
       liveActivityTeamRatingDefaultElo = Number.isFinite(defaultElo) ? defaultElo : 1000;
@@ -5748,8 +5748,9 @@ function liveActivityModeForMatches(
     const liveAndFinishedCount = liveMatches.length + finishedMatches.length;
     return liveAndFinishedCount > 1 ? "multi_live" : "single_live";
   }
-  if (recentKickoffMatches.length > 1) return "multi_upcoming";
-  if (recentKickoffMatches.length === 1) return "single_upcoming";
+  if (recentKickoffMatches.length > 0) {
+    return recentKickoffMatches.length + upcomingMatches.length > 1 ? "multi_upcoming" : "single_upcoming";
+  }
   if (finishedMatches.length > 1) return "multi_finished";
   if (finishedMatches.length === 1) return "single_finished";
   if (upcomingMatches.length > 1) return "multi_upcoming";
@@ -7490,6 +7491,8 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now(),
     upcomingMatches.map(annotateMatchWithLiveActivityTeamRatings),
     prefs
   ).slice(0, LIVE_ACTIVITY_MAX_MATCHES);
+  const sortedPendingAndUpcoming = [...sortedRecentKickoff, ...sortedUpcoming]
+    .slice(0, LIVE_ACTIVITY_MAX_MATCHES);
   const mode = liveActivityModeForMatches(
     sortedLive,
     sortedFinished,
@@ -7505,12 +7508,12 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now(),
     };
   }
 
-  // For live/finished modes, append today's upcoming matches after the live/finished entries
-  // so the widget always shows the full picture of today's action.
+  // Pending kickoffs lead upcoming fixtures, but must not replace the rest of today's schedule.
+  // Keep both groups in live/finished modes too, within the shared six-match cap.
   const matchesForMode = dedupeLiveActivityMatches(
     mode.includes("upcoming")
-      ? (sortedRecentKickoff.length > 0 ? sortedRecentKickoff : sortedUpcoming)
-      : [...sortedLiveAndFinished, ...sortedUpcoming].slice(0, LIVE_ACTIVITY_MAX_MATCHES)
+      ? sortedPendingAndUpcoming
+      : [...sortedLiveAndFinished, ...sortedPendingAndUpcoming].slice(0, LIVE_ACTIVITY_MAX_MATCHES)
   );
 
   return {

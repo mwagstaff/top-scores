@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { __testHooks } = require("./match_monitor");
 
-test("Live Activity uses Scores club ratings and Premier League priority before the six-match cap", async () => {
+test("Live Activity uses Scores club and national ratings and Premier League priority before the six-match cap", async () => {
   const originalFetch = global.fetch;
   const requestedPaths = [];
   const ratings = [
@@ -15,13 +15,19 @@ test("Live Activity uses Scores club ratings and Premier League priority before 
     ["Viktoria Plzeň", 1550], ["Union Saint-Gilloise", 1700],
     ["Juventus", 1799], ["NEC", 1550],
   ].map(([Name, Points]) => ({ Name, Points, Type: "club", aliases: [] }));
+  ratings.push(...[
+    ["Croatia", 1900], ["Spain", 2200],
+    ["England", 2100], ["Czechia", 1800],
+    ["Albania", 1600], ["San Marino", 800],
+  ].map(([Name, Points]) => ({ Name, Points, Type: "national", aliases: [] })));
 
   global.fetch = async (url) => {
     const { pathname, search } = new URL(url);
     requestedPaths.push(pathname + search);
     return {
       ok: true,
-      json: async () => pathname.endsWith("/config") ? { default_elo: 1000 } : ratings,
+      json: async () => pathname.endsWith("/config") ? { default_elo: 1000 }
+        : search === "?type=club" ? ratings.filter((row) => row.Type === "club") : ratings,
     };
   };
   try {
@@ -29,7 +35,7 @@ test("Live Activity uses Scores club ratings and Premier League priority before 
   } finally {
     global.fetch = originalFetch;
   }
-  assert.deepEqual(requestedPaths, ["/api/v1/teams/config", "/api/v1/teams?type=club"]);
+  assert.deepEqual(requestedPaths, ["/api/v1/teams/config", "/api/v1/teams"]);
 
   const entries = [
     ["sociedad", "20:00", "Real Sociedad", "Bournemouth"],
@@ -95,4 +101,22 @@ test("Live Activity uses Scores club ratings and Premier League priority before 
   assert.ok(__testHooks.compareLiveActivityMatches({ ...ratedBesiktas, time: "17:45" }, ratedPalace) < 0);
   assert.ok(__testHooks.compareLiveActivityMatches(ratedBesiktas,
     { ...ratedPalace, time: "17:45", score_status: "FT" }) < 0);
+
+  const internationalPresentation = __testHooks.buildLiveActivityPresentationForUser(
+    { preferences: { liveActivityDelayMinutes: 0, matchGroupSortOrder: "kickoffThenTeamScore" } },
+    [
+      ["albania", "Albania", "San Marino"],
+      ["england", "England", "Czechia"],
+      ["croatia", "Croatia", "Spain"],
+    ].map(([match_details_id, home_team, away_team]) => ({
+      state: null,
+      match: { match_details_id, date: "2026-10-06", time: "19:45", home_team, away_team,
+        league: "UEFA Nations League", home_score: null, away_score: null, score_status: null },
+    })),
+    Date.parse("2026-10-06T14:03:00Z")
+  );
+  assert.deepEqual(internationalPresentation.matches.map((match) => match.match_details_id),
+    ["croatia", "england", "albania"]);
+  assert.deepEqual(internationalPresentation.matches.map((match) => match.total_team_score),
+    [4100, 3900, 2400]);
 });
