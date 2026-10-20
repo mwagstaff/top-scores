@@ -108,6 +108,14 @@ private struct WatchFantasyPlayerRow: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(player.displayName), \(player.opponent ?? "opponent unavailable"), \(score)\(expected ? " expected points" : " points")\(player.isCaptain ? ", captain" : "")")
         .listRowInsets(EdgeInsets(top: 5, leading: 5, bottom: 5, trailing: 5))
+        .listRowBackground(
+            RoundedRectangle(cornerRadius: 20)
+                .fill(Color.white.opacity(0.12))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 20)
+                        .fill(expected ? Color.clear : WatchFantasyScoreStyle.color(points: player.points).opacity(0.31))
+                }
+        )
     }
 
     private var scoreLabel: some View {
@@ -293,6 +301,50 @@ private struct WatchFantasyStandingRow: View {
                 deadlineTime: "2026-09-18T17:30:00Z", deadlineGameweekID: 5,
                 scorePhase: "expected", expectedPoints: 69.3
             ))
+        }
+        .navigationTitle("FPL")
+    }
+}
+
+struct WatchFantasyMenuLabel: View {
+    var body: some View {
+        HStack(spacing: 10) {
+            Image("FantasyPremierLeagueLionTab")
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 24, height: 28)
+                .accessibilityHidden(true)
+            Text("FPL")
+        }
+    }
+}
+
+enum WatchFantasyScoreStyle {
+    // Match the iPhone's fantasyProvisionalPointsTint thresholds and colours.
+    static func color(points: Int) -> Color {
+        switch points {
+        case ...2: return Color(red: 0.92, green: 0.23, blue: 0.20)
+        case 3...5: return Color(red: 0.95, green: 0.62, blue: 0.16)
+        default: return Color(red: 0.24, green: 0.76, blue: 0.30)
+        }
+    }
+}
+
+#Preview("FPL score colours") {
+    NavigationStack {
+        List {
+            WatchFantasyMenuLabel()
+            ForEach([2, 5, 39], id: \.self) { points in
+                WatchFantasyPlayerRow(
+                    player: WatchFantasyPlayer(
+                        elementID: points, displayName: "Haaland", teamName: "Manchester City",
+                        points: points, isCaptain: true, isViceCaptain: false,
+                        isStarter: true, opponent: "IPS"
+                    ),
+                    expected: false
+                )
+            }
         }
         .navigationTitle("FPL")
     }

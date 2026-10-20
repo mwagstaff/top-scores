@@ -283,4 +283,25 @@ Player portraits use the canonical `cutout_url` response field and the public, l
 
 BSD match projections expose the BSD player identifier as both `id_player` and `bsd_player_id`, allowing clients to pass it directly to the BSD-backed player-details endpoint.
 
+Match-performance statistics come from `/api/v2/events/:id/player-stats/` and are upserted per event into `bsd_player_stats` with `updated_at`. The poller refreshes live matches every 60 seconds and includes stats in its 0/2/15-minute post-match reconciliation. A separate minute cadence processes up to 20 finished matches from the last seven days, retrying each after 24 hours for delayed coverage and corrections. Match-detail reads join the cached stats to starters and substitutes by BSD player ID; they never fetch upstream. The optional lineup `match_stats.rating` is a 1–10 performance score, distinct from the player-profile scouting rating. The pitch defaults to ratings, offers a shirt-number toggle and shows a dash when a rating is unavailable.
+
+`/api/v1/matches/:id/player-stats` loads independently of the match details screen and fills a missing event-stat cache on demand. Concurrent cold requests share a fetch; stale cached data is served while it refreshes. `/api/v1/players/:id/matches` similarly loads independently of the profile and caches the latest 20 played appearances within 90 days in `bsd_player_history`, joining BSD statistics to fixture results. Older fixture metadata is cached separately in `bsd_history_events`, outside the serving fixture collection. Player history retains unrated appearances and avoids assigning a win/loss when the player's team is unknown. Each history response includes an optional canonical `match` only for events currently in `bsd_events`; the app uses this to show a chevron and navigate to match details. Availability is checked even when the history itself is cached.
+
+Grouped standings expose each group's promotion/qualification/relegation bands as `groups[].zones`; flat tables continue to use top-level `zones`. iOS renders and announces the bands within their own group, including promotion and relegation play-offs.
+
 The web and iOS portrait loaders treat decoded 1×1 responses as missing images and fall back to player initials. This is required because the BSD image proxy can return a successful 1×1 missing-image response rather than an HTTP error.
+
+### Ranking sources (October 2026)
+
+Club rankings now come from the published country tables on `https://clubelo.com/Ranking`,
+with precise top-100 scores from its embedded JSON chart. Imports require at least 600 teams,
+10 KiB of HTML, and a publication date no more than seven days old. Failed validation preserves
+the last good dataset. The existing 1,750 Club Elo threshold remains in use. National Elo is unchanged.
+
+The default team ranking source is `clubelo` (which also includes National Elo for national teams).
+FootballDatabase polling is disabled by default (`FOOTBALL_DATABASE_ENABLED=false`); while disabled,
+a configured `merged`/`footballdatabase` default resolves to `clubelo` to avoid stale blends.
+Explicit historical-source queries remain available. Club Elo fixture polling is disabled by default
+(`CLUB_ELO_FIXTURES_ENABLED=false`) because its upstream CSV endpoint was deactivated.
+These switches are exposed in server diagnostics. Legacy `CLUB_ELO_BASE_URL` overrides
+pointing at `api.clubelo.com` automatically migrate to the website ranking route.

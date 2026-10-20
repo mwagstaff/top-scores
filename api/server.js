@@ -8,6 +8,8 @@ const {
   matchHasBSDTeam,
 } = require("./notification_team_subscriptions");
 /* eslint-disable no-console */
+const { createEloImportRunner } = require("./elo_import_job");
+const runEloImport = createEloImportRunner();
 const fs = require("fs");
 const path = require("path");
 const http = require("http");
@@ -43,7 +45,7 @@ const {
   projectBsdMatches,
   projectBsdMatchDetails,
   projectBsdStandings,
-  projectBsdPredictions,
+  bsdPlayerMatchStats,
   BSD_LEAGUE_NAME_MAP,
 } = require("./bsd_adapter");
 const { BSD_LEAGUE_ALLOWLIST } = require("./bsd_config");
@@ -57,7 +59,6 @@ const {
 } = require("./bsd_client");
 const { createEurGbpRateService } = require("./exchange_rates");
 const bsdHttpMetrics = require("./bsd_http_metrics");
-const { refreshAllPredictions } = require("./fetch_bsd_predictions");
 const {
   METADATA_DATASET: LIVE_FOOTBALL_TV_METADATA_DATASET,
   refreshLiveFootballTvListings,
@@ -149,7 +150,6 @@ const {
 } = require("./team_catalog");
 const fantasyScore = require("./fantasy_score");
 const { registerGoalGuesserRoutes } = require("./goal_guesser");
-const { registerPredictionGameRoutes } = require("./prediction_game");
 const { registerGoalGuesserTestHarnessRoutes } = require("./goal_guesser_test_harness");
 const { registerStadiumArtworkRoutes } = require("./stadium_artwork");
 const { calculateWatchability } = require("./watchability");
@@ -242,6 +242,8 @@ const CLUB_ELO_REDIS_TTL_SECONDS = Number.isFinite(parsedClubEloRedisTtlSeconds)
 const CLUB_ELO_MANUAL_MAPPINGS_PATH =
   process.env.CLUB_ELO_MANUAL_MAPPINGS_PATH ||
   path.join(__dirname, "club_elo_manual_mappings.json");
+const CLUB_ELO_FIXTURES_ENABLED = parseEnvBoolean(process.env.CLUB_ELO_FIXTURES_ENABLED, false);
+const FOOTBALL_DATABASE_ENABLED = parseEnvBoolean(process.env.FOOTBALL_DATABASE_ENABLED, false);
 const CLUB_ELO_FIXTURES_URL =
   process.env.CLUB_ELO_FIXTURES_URL || DEFAULT_CLUB_ELO_FIXTURES_URL;
 const CLUB_ELO_FIXTURES_OUTPUT_PATH =
@@ -685,9 +687,11 @@ const parsedMatchDetailsActiveRefreshWindowMs = Number(
 const MATCH_DETAILS_ACTIVE_REFRESH_WINDOW_MS = Number.isFinite(parsedMatchDetailsActiveRefreshWindowMs)
   ? Math.max(30 * 1000, Math.floor(parsedMatchDetailsActiveRefreshWindowMs))
   : 15 * 60 * 1000;
-const TEAM_RANKING_DEFAULT_SOURCE =
-  normalizeTeamRankingSource(SERVER_CONFIG.teamRankingDefaultSource) ||
-  TEAM_RANKING_SOURCE_MERGED;
+const configuredTeamRankingSource = normalizeTeamRankingSource(SERVER_CONFIG.teamRankingDefaultSource);
+const TEAM_RANKING_DEFAULT_SOURCE = !FOOTBALL_DATABASE_ENABLED &&
+  [TEAM_RANKING_SOURCE_MERGED, TEAM_RANKING_SOURCE_FOOTBALLDATABASE].includes(configuredTeamRankingSource)
+  ? TEAM_RANKING_SOURCE_CLUBELO
+  : configuredTeamRankingSource || TEAM_RANKING_SOURCE_CLUBELO;
 const TEAM_RANKING_DEFAULT_ELO = Number.isFinite(SERVER_CONFIG.teamRankingDefaultElo)
   ? SERVER_CONFIG.teamRankingDefaultElo
   : 1000;
@@ -747,10 +751,6 @@ registerGoalGuesserTestHarnessRoutes(app, {
   enabled: goalGuesserTestHarnessEnabled,
   key: process.env.GOAL_GUESSER_TEST_HARNESS_KEY,
   databaseName: process.env.GOAL_GUESSER_TEST_DATABASE,
-});
-registerPredictionGameRoutes(app, {
-  enabled: parseEnvBoolean(process.env.PREDICTION_GAME_ENABLED, true),
-  disableWorker: process.env.NODE_ENV === "test",
 });
 registerStadiumArtworkRoutes(app, { apiPrefix: API_PREFIX });
 require("./reference_api").registerReferenceRoutes(app);
@@ -1131,49 +1131,6 @@ async function getBsdTablesForServing() {
     void refreshBsdTablesCache();
   }
   return cachedBsdTables;
-}
-
-// BSD predictions. Unlike tables, predictions are recomputed upstream only
-// once daily (see fetch_bsd_predictions.js / bsd_poller.js), so a much longer
-// TTL is fine — this just keeps the hot serving path off Mongo on every
-// request. The admin refresh endpoint busts this cache immediately so a
-// manual refresh is reflected without waiting out the TTL.
-const BSD_PREDICTIONS_CACHE_TTL_MS = Number(process.env.BSD_PREDICTIONS_CACHE_TTL_MS || 5 * 60 * 1000);
-let cachedBsdPredictions = [];
-let cachedBsdPredictionsUpdatedAt = null;
-let bsdPredictionsCacheBuiltMs = 0;
-let bsdPredictionsRefreshInFlight = false;
-let bsdPredictionsRefreshPromise = null;
-
-function refreshBsdPredictionsCache() {
-  if (bsdPredictionsRefreshPromise) return bsdPredictionsRefreshPromise;
-  bsdPredictionsRefreshInFlight = true;
-  bsdPredictionsRefreshPromise = (async () => {
-    try {
-      const leagues = await projectBsdPredictions();
-      cachedBsdPredictions = Array.isArray(leagues) ? leagues : [];
-      cachedBsdPredictionsUpdatedAt = newestIsoTimestamp(
-        cachedBsdPredictions.map((league) => String((league && league.updated_at) || "").trim())
-      ) || new Date().toISOString();
-      bsdPredictionsCacheBuiltMs = Date.now();
-    } catch (error) {
-      console.warn("[BSD] predictions projection refresh failed:", error.message || error);
-    } finally {
-      bsdPredictionsRefreshInFlight = false;
-      bsdPredictionsRefreshPromise = null;
-    }
-  })();
-  return bsdPredictionsRefreshPromise;
-}
-
-async function getBsdPredictionsForServing() {
-  const ageMs = bsdPredictionsCacheBuiltMs ? Date.now() - bsdPredictionsCacheBuiltMs : Infinity;
-  if (cachedBsdPredictions.length === 0 && !bsdPredictionsCacheBuiltMs) {
-    await refreshBsdPredictionsCache();
-  } else if (ageMs > BSD_PREDICTIONS_CACHE_TTL_MS && !bsdPredictionsRefreshInFlight) {
-    void refreshBsdPredictionsCache();
-  }
-  return cachedBsdPredictions;
 }
 
 // Overlays IN-PROGRESS BSD match results onto a projected standings table
@@ -9304,6 +9261,9 @@ function normalizeMatchLineupPlayer(value, options = {}) {
   normalized.position = String(value.position || "").trim() || null;
   normalized.position_short = String(value.position_short || "").trim() || null;
   normalized.cutout_url = String(value.cutout_url || "").trim() || null;
+  if (value.match_stats && typeof value.match_stats === "object") {
+    normalized.match_stats = bsdPlayerMatchStats(value.match_stats);
+  }
 
   if (options.includePositionCategory) {
     const positionCategory = String(value.position_category || "").trim().toLowerCase();
@@ -22237,6 +22197,7 @@ async function updateFantasyEventLive(options = {}) {
 }
 
 async function updateClubEloFixtures(options = {}) {
+  if (!CLUB_ELO_FIXTURES_ENABLED) return { success: false, skipped: true, reason: "source_disabled" };
   if (clubEloFixturesUpdating) {
     return {
       success: false,
@@ -22380,6 +22341,10 @@ async function updateClubEloFixtures(options = {}) {
 }
 
 async function updateClubEloTeams(options = {}) {
+  return runEloImport("club_elo_rankings", "Club Elo", () => updateClubEloTeamsAttempt(options));
+}
+
+async function updateClubEloTeamsAttempt(options = {}) {
   if (clubEloUpdating) {
     return {
       success: false,
@@ -22494,6 +22459,7 @@ async function updateClubEloTeams(options = {}) {
 }
 
 async function updateFootballDatabaseTeams(options = {}) {
+  if (!FOOTBALL_DATABASE_ENABLED) return { success: false, skipped: true, reason: "source_disabled" };
   if (footballDatabaseUpdating) {
     return {
       success: false,
@@ -22643,6 +22609,10 @@ async function updateFootballDatabaseTeams(options = {}) {
 }
 
 async function updateNationalEloTeams(options = {}) {
+  return runEloImport("national_elo_rankings", "National Elo", () => updateNationalEloTeamsAttempt(options));
+}
+
+async function updateNationalEloTeamsAttempt(options = {}) {
   if (nationalEloUpdating) {
     return {
       success: false,
@@ -22669,7 +22639,7 @@ async function updateNationalEloTeams(options = {}) {
       minRows: NATIONAL_ELO_MIN_ROWS,
       minBytes: NATIONAL_ELO_MIN_BYTES,
       fallbackTeams: cachedNationalEloTeams,
-      retryAttempts: NATIONAL_ELO_RETRY_ATTEMPTS,
+      retryAttempts: 1, // Full-job retries are handled by runEloImport.
       retryBackoffBaseMs: NATIONAL_ELO_RETRY_BACKOFF_BASE_MS,
       retryBackoffMaxMs: NATIONAL_ELO_RETRY_BACKOFF_MAX_MS,
       retryBackoffFactor: NATIONAL_ELO_RETRY_BACKOFF_FACTOR,
@@ -22747,7 +22717,7 @@ async function updateNationalEloTeams(options = {}) {
       count: teams.length,
       min_rows: NATIONAL_ELO_MIN_ROWS,
       min_bytes: NATIONAL_ELO_MIN_BYTES,
-      retry_attempts: NATIONAL_ELO_RETRY_ATTEMPTS,
+      retry_attempts: 1, // Per-request attempts; job_attempts reports the full-job retry count.
       retry_backoff_base_ms: NATIONAL_ELO_RETRY_BACKOFF_BASE_MS,
       retry_backoff_max_ms: NATIONAL_ELO_RETRY_BACKOFF_MAX_MS,
       retry_backoff_factor: NATIONAL_ELO_RETRY_BACKOFF_FACTOR,
@@ -25927,6 +25897,32 @@ app.get(`${API_PREFIX}/managers/:managerId/career`, async (req, res) => {
   }
 });
 
+// Performance loads independently so upstream cache misses never block the
+// match details or player profile response.
+app.get(`${API_PREFIX}/matches/:matchId/player-stats`, async (req, res) => {
+  const id = String(req.params.matchId || "");
+  if (!/^\d+$/.test(id)) return res.status(400).json({ error: "Invalid match id." });
+  try {
+    const payload = await require("./bsd_player_performance").getMatchPerformance(id);
+    if (!payload) return res.status(404).json({ error: "Match not found." });
+    res.json(payload);
+  } catch (error) {
+    console.warn("[API] Match performance unavailable:", error.message);
+    res.status(502).json({ error: "Match statistics are temporarily unavailable." });
+  }
+});
+
+app.get(`${API_PREFIX}/players/:playerId/matches`, async (req, res) => {
+  const id = String(req.params.playerId || "");
+  if (!/^\d+$/.test(id)) return res.status(400).json({ error: "Invalid player id." });
+  try {
+    res.json(await require("./bsd_player_performance").getPlayerPerformance(id));
+  } catch (error) {
+    console.warn("[API] Player performance unavailable:", error.message);
+    res.status(502).json({ error: "Player match history is temporarily unavailable." });
+  }
+});
+
 app.get(`${API_PREFIX}/players/:playerId`, async (req, res) => {
   setCacheOnlyHeaders(res);
   const playerId = String(req.params.playerId || "").trim();
@@ -26336,43 +26332,6 @@ app.get(`${API_PREFIX}/tables/:leagueId`, async (req, res) => {
   );
   if (baseLeague.updated_at) {
     res.set("X-Last-Updated", baseLeague.updated_at);
-  }
-  res.set("X-Operational-Source", "bsd_projection");
-  res.json(league);
-});
-
-// The app fetches this aggregate endpoint once on startup and hourly rather
-// than hitting /predictions/league once per competition.
-app.get(`${API_PREFIX}/predictions`, async (_req, res) => {
-  setCacheOnlyHeaders(res);
-  const leagues = await getBsdPredictionsForServing();
-  const updatedAt = cachedBsdPredictionsUpdatedAt;
-  if (updatedAt) {
-    res.set("X-Last-Updated", updatedAt);
-  }
-  res.set("X-Operational-Source", "bsd_projection");
-  res.json({
-    updated_at: updatedAt || null,
-    count: leagues.length,
-    leagues,
-  });
-});
-
-app.get(`${API_PREFIX}/predictions/league/:id`, async (req, res) => {
-  setCacheOnlyHeaders(res);
-  const leagues = await getBsdPredictionsForServing();
-  const normalizedId = String(req.params.id || "").trim();
-  const league = leagues.find((item) => String(item.league_id) === normalizedId);
-  if (!league) {
-    res.status(404).json({
-      error: "Predictions not found for league",
-      league_id: normalizedId,
-      available_leagues: leagues.map((item) => item.league_id).filter(Boolean),
-    });
-    return;
-  }
-  if (league.updated_at) {
-    res.set("X-Last-Updated", league.updated_at);
   }
   res.set("X-Operational-Source", "bsd_projection");
   res.json(league);
@@ -27370,6 +27329,7 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
     club_elo_redis_ttl_seconds: CLUB_ELO_REDIS_TTL_SECONDS,
     club_elo_fixtures_count: cachedClubEloFixtures.length,
     club_elo_fixtures_last_updated: clubEloFixturesLastUpdated,
+    club_elo_fixtures_enabled: CLUB_ELO_FIXTURES_ENABLED,
     club_elo_fixtures_base_url: CLUB_ELO_FIXTURES_URL,
     club_elo_fixtures_output_path: path.resolve(CLUB_ELO_FIXTURES_OUTPUT_PATH),
     club_elo_fixtures_interval_ms: CLUB_ELO_FIXTURES_INTERVAL_MS,
@@ -27383,6 +27343,7 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
     football_database_count: footballDatabaseDataset.items.length,
     football_database_last_updated:
       footballDatabaseDataset.updated_at || footballDatabaseLastUpdated,
+    football_database_enabled: FOOTBALL_DATABASE_ENABLED,
     football_database_base_url: FOOTBALL_DATABASE_BASE_URL,
     football_database_output_path: path.resolve(FOOTBALL_DATABASE_OUTPUT_PATH),
     football_database_interval_ms: FOOTBALL_DATABASE_INTERVAL_MS,
@@ -30475,31 +30436,6 @@ app.post(`${API_PREFIX}/admin/tv-listings/refresh`, async (req, res) => {
   }
 });
 
-app.post(`${API_PREFIX}/admin/predictions/refresh`, async (_req, res) => {
-  setCacheOnlyHeaders(res);
-  if (bsdPredictionsRefreshInFlight) {
-    res.status(409).json({ error: "Predictions refresh already in progress." });
-    return;
-  }
-  const startedAtMs = Date.now();
-  try {
-    await refreshAllPredictions();
-    bsdPredictionsCacheBuiltMs = 0;
-    await refreshBsdPredictionsCache();
-    res.status(200).json({
-      success: true,
-      leagues: cachedBsdPredictions.length,
-      updated_at: cachedBsdPredictionsUpdatedAt,
-      duration_ms: Date.now() - startedAtMs,
-    });
-  } catch (error) {
-    res.status(500).json({
-      error: "Failed to refresh predictions.",
-      message: error.message || String(error),
-    });
-  }
-});
-
 // ===== League Tables Admin Endpoints =====
 
 app.post(`${API_PREFIX}/admin/league-tables/refresh`, async (_req, res) => {
@@ -32530,8 +32466,8 @@ async function bootstrapOperationalState(options = {}) {
 
     void updateLeagueTables({ trigger: "startup_bootstrap" });
     void updateClubEloTeams({ trigger: "startup_bootstrap" });
-    void updateClubEloFixtures({ trigger: "startup_bootstrap" });
-    void updateFootballDatabaseTeams({ trigger: "startup_bootstrap" });
+    if (CLUB_ELO_FIXTURES_ENABLED) void updateClubEloFixtures({ trigger: "startup_bootstrap" });
+    if (FOOTBALL_DATABASE_ENABLED) void updateFootballDatabaseTeams({ trigger: "startup_bootstrap" });
     void updateNationalEloTeams({ trigger: "startup_bootstrap" });
     void updateTeamShortNamesCache({ trigger: "startup_bootstrap" });
     void syncTeamShortNamesCacheToRedis({ trigger: "startup_bootstrap" });
@@ -32765,7 +32701,7 @@ function startScraperIntervals() {
     Number.isFinite(CLUB_ELO_FIXTURES_INTERVAL_MS) && CLUB_ELO_FIXTURES_INTERVAL_MS > 0
       ? CLUB_ELO_FIXTURES_INTERVAL_MS
       : 12 * 60 * 60 * 1000;
-  registerRuntimeInterval(() => {
+  if (CLUB_ELO_FIXTURES_ENABLED) registerRuntimeInterval(() => {
     void updateClubEloFixtures({ trigger: "interval" });
   }, clubEloFixturesInterval);
 
@@ -32773,7 +32709,7 @@ function startScraperIntervals() {
     Number.isFinite(FOOTBALL_DATABASE_INTERVAL_MS) && FOOTBALL_DATABASE_INTERVAL_MS > 0
       ? FOOTBALL_DATABASE_INTERVAL_MS
       : 12 * 60 * 60 * 1000;
-  registerRuntimeInterval(() => {
+  if (FOOTBALL_DATABASE_ENABLED) registerRuntimeInterval(() => {
     void updateFootballDatabaseTeams({ trigger: "interval" });
   }, footballDatabaseInterval);
 

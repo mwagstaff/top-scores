@@ -613,13 +613,6 @@ struct APIClient {
         )
     }
 
-    func fetchPredictions() async throws -> [PredictionLeague] {
-        let request = try buildRequest(path: "predictions", queryItems: [])
-        let (data, http) = try await performRequest(request, operation: "predictions")
-        try validateSuccess(http, data: data, operation: "predictions")
-        return try JSONDecoder().decode(PredictionsEnvelope.self, from: data).leagues
-    }
-
     func fetchFantasySeasonActive() async throws -> FantasySeasonStatus {
         var request = try buildRequest(path: "fantasy/season-active", queryItems: [])
         request.timeoutInterval = 4
@@ -805,6 +798,20 @@ struct APIClient {
         let (data, http) = try await performRequest(request, operation: "match_social")
         try validateSuccess(http, data: data, operation: "match_social")
         return try await Self.decodeResponse([MatchSocialItem].self, from: data, operation: "match_social")
+    }
+
+    func fetchMatchPerformance(matchId: String) async throws -> MatchPerformanceResponse {
+        let request = try buildRequest(path: "matches/\(matchId)/player-stats", queryItems: [])
+        let (data, http) = try await performRequest(request, operation: "match_performance")
+        try validateSuccess(http, data: data, operation: "match_performance")
+        return try JSONDecoder().decode(MatchPerformanceResponse.self, from: data)
+    }
+
+    func fetchPlayerMatchHistory(playerId: String) async throws -> PlayerMatchHistoryResponse {
+        let request = try buildRequest(path: "players/\(playerId)/matches", queryItems: [])
+        let (data, http) = try await performRequest(request, operation: "player_history")
+        try validateSuccess(http, data: data, operation: "player_history")
+        return try JSONDecoder().decode(PlayerMatchHistoryResponse.self, from: data)
     }
 
     func fetchPlayerDetails(playerId: String) async throws -> PlayerDetails {

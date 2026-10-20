@@ -63,6 +63,7 @@ const BSD_LEAGUE_NAME_MAP = {
   "31": "International Friendly",
   "58": "World Cup Qualifying UEFA",
   "59": "World Cup Qualifying CONMEBOL",
+  "60": "World Cup Qualifying CAF",
   "62": "World Cup Qualifying CONCACAF",
   "63": "World Cup Qualifying OFC",
 };
@@ -516,7 +517,7 @@ function parseBsdIncidents(incidents) {
 // Lineups
 // ---------------------------------------------------------------------------
 
-function bsdPlayerEntry(player) {
+function bsdPlayerEntry(player, stats) {
   if (!player || typeof player !== "object") return null;
   const name = String(player.name || player.short_name || "").trim();
   if (!name) return null;
@@ -532,7 +533,20 @@ function bsdPlayerEntry(player) {
     position,
     position_short: position,
     cutout_url: bsdPlayerImageUrl(bsdPlayerId),
+    ...(stats ? { match_stats: bsdPlayerMatchStats(stats) } : {}),
   };
+}
+
+// Match performance is separate from the player's overall scouting rating.
+function bsdPlayerMatchStats(stats) {
+  const rating = toNumber(stats.rating);
+  const result = { rating: rating >= 1 && rating <= 10 ? rating : null };
+  for (const key of ["minutes_played", "goals", "goal_assist", "total_shots", "shots_on_target",
+    "accurate_pass", "total_pass", "total_tackle", "saves", "expected_goals"]) {
+    const value = toNumber(stats[key]);
+    result[key] = Number.isFinite(value) && value >= 0 ? value : null;
+  }
+  return result;
 }
 
 function extractBsdSubstitutions(incidents, homeLineup, awayLineup) {
@@ -593,15 +607,18 @@ function buildBsdTeamLineups(lineupsPayload, incidents, options = {}) {
   const lineups = lineupsPayload && lineupsPayload.lineups;
   if (!lineups || typeof lineups !== "object") return null;
 
+  const statsByPlayer = new Map(
+    (options.playerStatsPayload?.player_stats || []).map((stat) => [String(stat.player_id), stat])
+  );
   const out = {};
   ["home", "away"].forEach((side) => {
     const team = lineups[side];
     if (!team) return;
     const starters = (Array.isArray(team.players) ? team.players : [])
-      .map((player) => bsdPlayerEntry(player))
+      .map((player) => bsdPlayerEntry(player, statsByPlayer.get(String(player?.id))))
       .filter(Boolean);
     const substitutes = (Array.isArray(team.substitutes) ? team.substitutes : [])
-      .map((player) => bsdPlayerEntry(player))
+      .map((player) => bsdPlayerEntry(player, statsByPlayer.get(String(player?.id))))
       .filter(Boolean);
     if (starters.length === 0 && substitutes.length === 0) return;
     const formation = String(team.formation || "").trim() || null;
@@ -1001,6 +1018,7 @@ function bsdStandingsPayloadToTable(
       .map((name) => ({
         name,
         rows: (payload.groups[name] || []).map(bsdStandingsRowToCanonical),
+        zones: bsdStandingsZonesToCanonical(payload.zones?.[name]),
       }));
   } else if (Array.isArray(payload.standings)) {
     rows = payload.standings.map(bsdStandingsRowToCanonical);
@@ -1252,87 +1270,12 @@ function bsdEventToCanonicalMatch(event, options = {}) {
     Object.assign(match, parseBsdIncidents(incidents));
     const teamLineups = buildBsdTeamLineups(options.lineupsPayload, incidents, {
       playerImageSource: options.playerImageSource,
+      playerStatsPayload: options.playerStatsPayload,
     });
     if (teamLineups) match.team_lineups = teamLineups;
   }
 
   return match;
-}
-
-// ---------------------------------------------------------------------------
-// Predictions
-// ---------------------------------------------------------------------------
-
-// Projects one /predictions result item ({ event, markets, ... }) into the
-// lean shape the app's prediction algorithm needs: just enough to join onto a
-// canonical match (team names + zoned kickoff) plus the markets payload
-// verbatim — recommendations/model/created_at aren't consumed, so they're
-// dropped to keep the response small.
-function bsdPredictionFixtureToCanonical(item) {
-  if (!item || typeof item !== "object") return null;
-  const event = item.event || {};
-  const id = event.id != null ? String(event.id) : null;
-  if (!id) return null;
-
-  const homeRaw = String(event.home_team || "").trim();
-  const awayRaw = String(event.away_team || "").trim();
-  const home_team = canonicalBsdTeamName(event.home_team_id, homeRaw);
-  const away_team = canonicalBsdTeamName(event.away_team_id, awayRaw);
-  const kickoff = zonedKickoff(event.event_date);
-
-  return {
-    event_id: id,
-    home_team,
-    away_team,
-    date: kickoff.date,
-    time: kickoff.time,
-    markets: item.markets || null,
-  };
-}
-
-// Projects one bsd_predictions payload (the raw /predictions?league_id=:id
-// results array) into the canonical predictions-for-league shape.
-function bsdPredictionsPayloadToLeague(payload, { leagueId, updatedAt, leagueNameById } = {}) {
-  if (!Array.isArray(payload)) return null;
-  const id = String(leagueId != null ? leagueId : "");
-  if (!id) return null;
-  const leagueName = BSD_LEAGUE_NAME_MAP[id] || (leagueNameById && leagueNameById.get(id)) || id;
-  const fixtures = payload.map(bsdPredictionFixtureToCanonical).filter(Boolean);
-
-  return {
-    league_id: id,
-    league_name: leagueName,
-    updated_at: updatedAt || null,
-    fixtures,
-  };
-}
-
-// Projects every allowlisted bsd_predictions doc into the canonical
-// predictions-by-league list.
-async function projectBsdPredictions() {
-  const [predictionDocs, leagues] = await Promise.all([
-    getBsdRecords("bsd_predictions"),
-    getBsdRecords("bsd_leagues"),
-  ]);
-  const leagueNameById = new Map();
-  leagues.forEach((doc) => {
-    const p = doc.payload || {};
-    if (p.id != null && p.name) leagueNameById.set(String(p.id), String(p.name));
-  });
-
-  const allowlist = new Set(BSD_LEAGUE_ALLOWLIST.map(String));
-  const out = [];
-  predictionDocs.forEach((doc) => {
-    const leagueId = doc && doc._id != null ? String(doc._id) : null;
-    if (!leagueId || !allowlist.has(leagueId)) return;
-    const league = bsdPredictionsPayloadToLeague(doc.payload, {
-      leagueId,
-      updatedAt: doc.updated_at,
-      leagueNameById,
-    });
-    if (league) out.push(league);
-  });
-  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -1630,7 +1573,7 @@ async function projectBsdMatchDetails(eventId, options = {}) {
   const teamIds = [eventDoc.payload.home_team_id, eventDoc.payload.away_team_id]
     .filter((teamId) => teamId != null)
     .map(String);
-  const [incidentsDoc, lineupsDoc, broadcastsDoc, supplementaryListings, venueDoc, previousLegDoc, leagues, teamDocs] = await Promise.all([
+  const [incidentsDoc, lineupsDoc, broadcastsDoc, supplementaryListings, venueDoc, previousLegDoc, leagues, teamDocs, playerStatsDoc] = await Promise.all([
     options.incidentsDoc || getBsdRecords("bsd_incidents", { _id: id }).then((r) => r[0] || null),
     options.lineupsDoc || getBsdRecords("bsd_lineups", { _id: id }).then((r) => r[0] || null),
     options.broadcastsDoc || getBsdRecords("bsd_broadcasts", { _id: id }).then((r) => r[0] || null),
@@ -1649,6 +1592,7 @@ async function projectBsdMatchDetails(eventId, options = {}) {
     teamIds.length > 0
       ? getBsdRecords("bsd_teams", { _id: { $in: teamIds } })
       : Promise.resolve([]),
+    options.playerStatsDoc || getBsdRecords("bsd_player_stats", { _id: id }).then((r) => r[0] || null),
   ]);
   const leagueNameById = new Map();
   leagues.forEach((doc) => {
@@ -1659,6 +1603,7 @@ async function projectBsdMatchDetails(eventId, options = {}) {
     detail: true,
     incidentsPayload: incidentsDoc ? incidentsDoc.payload : null,
     lineupsPayload: lineupsDoc ? lineupsDoc.payload : null,
+    playerStatsPayload: playerStatsDoc ? playerStatsDoc.payload : null,
     broadcastsPayload: broadcastsDoc ? broadcastsDoc.payload : null,
     supplementaryChannels: supplementaryChannelsByEventId(supplementaryListings).get(id) || [],
     leagueNameById,
@@ -1676,11 +1621,11 @@ async function projectBsdMatchDetails(eventId, options = {}) {
 }
 
 module.exports = {
+  bsdPlayerMatchStats,
   bsdEventToCanonicalMatch,
   projectBsdMatches,
   projectBsdMatchDetails,
   projectBsdStandings,
-  projectBsdPredictions,
   BSD_LEAGUE_NAME_MAP,
   __private: {
     mapBsdStatus,
@@ -1717,8 +1662,6 @@ module.exports = {
     buildCurrentBsdEventsFilter,
     currentSeasonByLeagueFromDocs,
     currentSeasonContextByLeagueFromDocs,
-    bsdPredictionFixtureToCanonical,
-    bsdPredictionsPayloadToLeague,
     canonicalBsdTeamName,
   },
 };

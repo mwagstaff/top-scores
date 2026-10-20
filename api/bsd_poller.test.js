@@ -315,3 +315,42 @@ test("live event hashes are pruned even when saving the next live snapshot fails
 
   assert.deepEqual([...state.incidentPayloadHashes.keys()], ["102"]);
 });
+
+
+test("finished player stats backfill is bounded, newest first and retries after a day", () => {
+  const now = Date.parse("2026-10-18T16:00:00Z");
+  const events = Array.from({ length: 25 }, (_, i) => ({ _id: String(i), event_date: new Date(now - i * 60000).toISOString() }));
+  const docs = [
+    { _id: "0", updated_at: new Date(now - 1000).toISOString() },
+    { _id: "1", updated_at: new Date(now - 86400000).toISOString() },
+  ];
+  const selected = __private.selectFinishedPlayerStatsIds(events, docs, now);
+  assert.equal(selected.length, 20);
+  assert.equal(selected[0], "1");
+  assert.equal(selected.includes("0"), false);
+  assert.equal(selected.at(-1), "20");
+});
+
+
+test("player stats polling caches valid and empty responses and isolates failures", async () => {
+  const saved = [];
+  const state = isolatedPollerState({
+    "./bsd_client": {
+      setRequestObserver() {},
+      async getEventPlayerStats(id) {
+        if (id === "failed") throw new Error("temporary failure");
+        if (id === "malformed") return {};
+        return { event_id: id, player_stats: id === "empty" ? [] : [{ player_id: 455, rating: 7.1 }] };
+      },
+    },
+    "./mongo_client": { upsertBsdRecord: async (...args) => saved.push(args) },
+  });
+  state.setLiveIds(["rated", "empty", "failed", "malformed"]);
+  await state.poller.pollPlayerStats();
+  assert.deepEqual(saved.map(row => row[1]).sort(), ["empty", "rated"]);
+  assert.ok(saved.every(row => row[0] === "bsd_player_stats"));
+  assert.equal(saved.find(row => row[1] === "rated")[2].player_stats[0].rating, 7.1);
+  state.setLiveIds(["rated"]);
+  await state.poller.pollPlayerStats();
+  assert.equal(saved.length, 3);
+});

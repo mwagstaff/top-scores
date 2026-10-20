@@ -26,8 +26,6 @@ const {
   completeBsdStandingsRowsFromEvents,
   buildBsdStandingsEventsFilter,
   bsdStandingsEventFromDoc,
-  bsdPredictionFixtureToCanonical,
-  bsdPredictionsPayloadToLeague,
   extractBsdPeriodSummary,
   buildCurrentBsdEventsFilter,
   currentSeasonByLeagueFromDocs,
@@ -62,6 +60,7 @@ function loadHelper(name) {
 }
 
 test("default BSD league allowlist includes required competitions", () => {
+  assert.ok(DEFAULT_BSD_LEAGUE_ALLOWLIST.includes("60"), "World Cup Qualifying CAF");
   assert.ok(DEFAULT_BSD_LEAGUE_ALLOWLIST.includes("83"), "UEFA Conference League");
   assert.ok(DEFAULT_BSD_LEAGUE_ALLOWLIST.includes("90"), "UEFA Super Cup");
   assert.ok(DEFAULT_BSD_LEAGUE_ALLOWLIST.includes("86"), "League One");
@@ -1372,74 +1371,35 @@ test("BSD standings event helpers query and unwrap exact league-season fixture t
   );
 });
 
-// ---------------------------------------------------------------------------
-// Predictions
-// ---------------------------------------------------------------------------
 
-test("bsdPredictionFixtureToCanonical: canonicalises names and zones the kickoff, drops recommendations/model", () => {
-  const payload = loadHelper("predictions_world_cup.json");
-  const item = payload.results.find((r) => r.event.id === 8354);
-  const fixture = bsdPredictionFixtureToCanonical(item);
-
-  assert.equal(fixture.event_id, "8354");
-  assert.equal(fixture.home_team, "Panama");
-  assert.equal(fixture.away_team, "England");
-  assert.equal(fixture.date, "2026-06-27");
-  assert.equal(fixture.time, "22:00");
-  assert.deepEqual(fixture.markets, item.markets);
-  assert.equal("recommendations" in fixture, false);
-  assert.equal("model" in fixture, false);
+test("match stats join starters and substitutes by BSD ID without using scouting ratings", () => {
+  const lineups = buildBsdTeamLineups({ lineups: { home: {
+    players: [{ id: 1, name: "Same name", rating: 150 }, { id: 2, name: "Same name" }],
+    substitutes: [{ id: 3, name: "Substitute" }],
+  } } }, [], { playerStatsPayload: { player_stats: [
+    { player_id: 2, rating: 7.1, minutes_played: 90, goals: 0, expected_goals: null },
+    { player_id: 3, rating: null, minutes_played: 5 },
+  ] } });
+  const starters = lineups.home.starting_lineup;
+  assert.equal(starters.find(p => p.id_player === "1").match_stats, undefined);
+  const stats = starters.find(p => p.id_player === "2").match_stats;
+  assert.equal(stats.rating, 7.1);
+  assert.equal(stats.goals, 0);
+  assert.equal(stats.expected_goals, null);
+  assert.equal(lineups.home.substitutes[0].match_stats.rating, null);
+  assert.equal(lineups.home.substitutes[0].match_stats.minutes_played, 5);
+  for (const rating of [0, 93, -1, "invalid", null]) {
+    assert.equal(bsdPlayerEntry({ id: 4, name: "Player" }, { rating }).match_stats.rating, null);
+  }
 });
 
-test("bsdPredictionFixtureToCanonical: resolves team identity by BSD ID", () => {
-  const fixture = bsdPredictionFixtureToCanonical({
-    event: {
-      id: 601024,
-      home_team_id: 57,
-      home_team: "Real Madrid",
-      away_team_id: 77,
-      away_team: "Inter Club d'Escaldes",
-      event_date: "2026-09-08T19:00:00Z",
-    },
-    markets: {},
+test("grouped standings preserve different zone legends without leaking across groups", () => {
+  const promotion = { key: "promo", label: "Promotion", type: "promotion", from: 1, to: 1 };
+  const relegation = { key: "rel", label: "Relegation", type: "relegation", from: 4, to: 4 };
+  const table = bsdStandingsPayloadToTable({ league_id: 64, grouped: true,
+    groups: { "League A": [], "League B": [], "League C": [] },
+    zones: { "League A": [relegation], "League B": [promotion] },
   });
-
-  assert.equal(fixture.home_team, "Real Madrid");
-  assert.equal(fixture.away_team, "Inter Milan");
-});
-
-test("bsdPredictionFixtureToCanonical: returns null without an event id", () => {
-  assert.equal(bsdPredictionFixtureToCanonical({ markets: {} }), null);
-  assert.equal(bsdPredictionFixtureToCanonical(null), null);
-});
-
-test("bsdPredictionsPayloadToLeague: maps fixtures, league name from BSD_LEAGUE_NAME_MAP", () => {
-  const payload = loadHelper("predictions_world_cup.json").results;
-  const league = bsdPredictionsPayloadToLeague(payload, {
-    leagueId: "27",
-    updatedAt: "2026-06-27T12:00:00.000Z",
-  });
-
-  assert.equal(league.league_id, "27");
-  assert.equal(league.league_name, "FIFA World Cup 2026");
-  assert.equal(league.updated_at, "2026-06-27T12:00:00.000Z");
-  assert.equal(league.fixtures.length, payload.length);
-  assert.ok(league.fixtures.every((f) => f.event_id && f.markets));
-});
-
-test("bsdPredictionsPayloadToLeague: falls back to leagueNameById, then the raw id, when unmapped", () => {
-  const leagueNameById = new Map([["999", "Some Cup"]]);
-  assert.equal(
-    bsdPredictionsPayloadToLeague([], { leagueId: "999", leagueNameById }).league_name,
-    "Some Cup"
-  );
-  assert.equal(
-    bsdPredictionsPayloadToLeague([], { leagueId: "12345" }).league_name,
-    "12345"
-  );
-});
-
-test("bsdPredictionsPayloadToLeague: returns null for a non-array payload or missing leagueId", () => {
-  assert.equal(bsdPredictionsPayloadToLeague(null, { leagueId: "27" }), null);
-  assert.equal(bsdPredictionsPayloadToLeague([], {}), null);
+  assert.deepEqual(table.zones, []);
+  assert.deepEqual(table.groups.map(g => g.zones), [[relegation], [promotion], []]);
 });

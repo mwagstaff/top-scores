@@ -1,0 +1,482 @@
+{
+  "rule_files": [
+    "top-scores-bsd.yml"
+  ],
+  "evaluation_interval": "1m",
+  "tests": [
+    {
+      "name": "first 429 failure is detected without a zero baseline and resolves",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "top_scores_bsd_http_requests_total{job=\"top-scores\",status_code=\"429\",source=\"bsd_events_live\",instance=\"bsd\"}",
+          "values": "_ 1+0x15"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "1m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "2m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "job": "top-scores",
+                "status_code": "429",
+                "service_name": "top-scores",
+                "severity": "warning"
+              },
+              "exp_annotations": {
+                "summary": "Top Scores: BSD upstream failures (status 429)",
+                "description": "BSD requests failed within the last 10 minutes. Status 0 means a connection failure or timeout; 429 means throttling or quota exhaustion; 401/403 means authentication or access failure; 5xx means an upstream server error. Scores and Live Activities may be stale. Check BSD account quota and top-scores-bsd.error.log; break down top_scores_bsd_http_requests_total by source. HTTP 404 is excluded because optional lookups may be missing."
+              }
+            }
+          ]
+        },
+        {
+          "eval_time": "12m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": []
+        }
+      ]
+    },
+    {
+      "name": "first 500 failure is detected without a zero baseline and resolves",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "top_scores_bsd_http_requests_total{job=\"top-scores\",status_code=\"500\",source=\"bsd_events_live\",instance=\"bsd\"}",
+          "values": "_ 1+0x15"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "1m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "2m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "job": "top-scores",
+                "status_code": "500",
+                "service_name": "top-scores",
+                "severity": "warning"
+              },
+              "exp_annotations": {
+                "summary": "Top Scores: BSD upstream failures (status 500)",
+                "description": "BSD requests failed within the last 10 minutes. Status 0 means a connection failure or timeout; 429 means throttling or quota exhaustion; 401/403 means authentication or access failure; 5xx means an upstream server error. Scores and Live Activities may be stale. Check BSD account quota and top-scores-bsd.error.log; break down top_scores_bsd_http_requests_total by source. HTTP 404 is excluded because optional lookups may be missing."
+              }
+            }
+          ]
+        },
+        {
+          "eval_time": "12m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": []
+        }
+      ]
+    },
+    {
+      "name": "first 502 failure is detected without a zero baseline and resolves",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "top_scores_bsd_http_requests_total{job=\"top-scores\",status_code=\"502\",source=\"bsd_events_live\",instance=\"bsd\"}",
+          "values": "_ 1+0x15"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "1m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "2m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "job": "top-scores",
+                "status_code": "502",
+                "service_name": "top-scores",
+                "severity": "warning"
+              },
+              "exp_annotations": {
+                "summary": "Top Scores: BSD upstream failures (status 502)",
+                "description": "BSD requests failed within the last 10 minutes. Status 0 means a connection failure or timeout; 429 means throttling or quota exhaustion; 401/403 means authentication or access failure; 5xx means an upstream server error. Scores and Live Activities may be stale. Check BSD account quota and top-scores-bsd.error.log; break down top_scores_bsd_http_requests_total by source. HTTP 404 is excluded because optional lookups may be missing."
+              }
+            }
+          ]
+        },
+        {
+          "eval_time": "12m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": []
+        }
+      ]
+    },
+    {
+      "name": "first 503 failure is detected without a zero baseline and resolves",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "top_scores_bsd_http_requests_total{job=\"top-scores\",status_code=\"503\",source=\"bsd_events_live\",instance=\"bsd\"}",
+          "values": "_ 1+0x15"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "1m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "2m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "job": "top-scores",
+                "status_code": "503",
+                "service_name": "top-scores",
+                "severity": "warning"
+              },
+              "exp_annotations": {
+                "summary": "Top Scores: BSD upstream failures (status 503)",
+                "description": "BSD requests failed within the last 10 minutes. Status 0 means a connection failure or timeout; 429 means throttling or quota exhaustion; 401/403 means authentication or access failure; 5xx means an upstream server error. Scores and Live Activities may be stale. Check BSD account quota and top-scores-bsd.error.log; break down top_scores_bsd_http_requests_total by source. HTTP 404 is excluded because optional lookups may be missing."
+              }
+            }
+          ]
+        },
+        {
+          "eval_time": "12m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": []
+        }
+      ]
+    },
+    {
+      "name": "first 401 failure is detected without a zero baseline and resolves",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "top_scores_bsd_http_requests_total{job=\"top-scores\",status_code=\"401\",source=\"bsd_events_live\",instance=\"bsd\"}",
+          "values": "_ 1+0x15"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "1m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "2m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "job": "top-scores",
+                "status_code": "401",
+                "service_name": "top-scores",
+                "severity": "warning"
+              },
+              "exp_annotations": {
+                "summary": "Top Scores: BSD upstream failures (status 401)",
+                "description": "BSD requests failed within the last 10 minutes. Status 0 means a connection failure or timeout; 429 means throttling or quota exhaustion; 401/403 means authentication or access failure; 5xx means an upstream server error. Scores and Live Activities may be stale. Check BSD account quota and top-scores-bsd.error.log; break down top_scores_bsd_http_requests_total by source. HTTP 404 is excluded because optional lookups may be missing."
+              }
+            }
+          ]
+        },
+        {
+          "eval_time": "12m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": []
+        }
+      ]
+    },
+    {
+      "name": "first 403 failure is detected without a zero baseline and resolves",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "top_scores_bsd_http_requests_total{job=\"top-scores\",status_code=\"403\",source=\"bsd_events_live\",instance=\"bsd\"}",
+          "values": "_ 1+0x15"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "1m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "2m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "job": "top-scores",
+                "status_code": "403",
+                "service_name": "top-scores",
+                "severity": "warning"
+              },
+              "exp_annotations": {
+                "summary": "Top Scores: BSD upstream failures (status 403)",
+                "description": "BSD requests failed within the last 10 minutes. Status 0 means a connection failure or timeout; 429 means throttling or quota exhaustion; 401/403 means authentication or access failure; 5xx means an upstream server error. Scores and Live Activities may be stale. Check BSD account quota and top-scores-bsd.error.log; break down top_scores_bsd_http_requests_total by source. HTTP 404 is excluded because optional lookups may be missing."
+              }
+            }
+          ]
+        },
+        {
+          "eval_time": "12m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": []
+        }
+      ]
+    },
+    {
+      "name": "first 400 failure is detected without a zero baseline and resolves",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "top_scores_bsd_http_requests_total{job=\"top-scores\",status_code=\"400\",source=\"bsd_events_live\",instance=\"bsd\"}",
+          "values": "_ 1+0x15"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "1m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "2m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "job": "top-scores",
+                "status_code": "400",
+                "service_name": "top-scores",
+                "severity": "warning"
+              },
+              "exp_annotations": {
+                "summary": "Top Scores: BSD upstream failures (status 400)",
+                "description": "BSD requests failed within the last 10 minutes. Status 0 means a connection failure or timeout; 429 means throttling or quota exhaustion; 401/403 means authentication or access failure; 5xx means an upstream server error. Scores and Live Activities may be stale. Check BSD account quota and top-scores-bsd.error.log; break down top_scores_bsd_http_requests_total by source. HTTP 404 is excluded because optional lookups may be missing."
+              }
+            }
+          ]
+        },
+        {
+          "eval_time": "12m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": []
+        }
+      ]
+    },
+    {
+      "name": "first 408 failure is detected without a zero baseline and resolves",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "top_scores_bsd_http_requests_total{job=\"top-scores\",status_code=\"408\",source=\"bsd_events_live\",instance=\"bsd\"}",
+          "values": "_ 1+0x15"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "1m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "2m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "job": "top-scores",
+                "status_code": "408",
+                "service_name": "top-scores",
+                "severity": "warning"
+              },
+              "exp_annotations": {
+                "summary": "Top Scores: BSD upstream failures (status 408)",
+                "description": "BSD requests failed within the last 10 minutes. Status 0 means a connection failure or timeout; 429 means throttling or quota exhaustion; 401/403 means authentication or access failure; 5xx means an upstream server error. Scores and Live Activities may be stale. Check BSD account quota and top-scores-bsd.error.log; break down top_scores_bsd_http_requests_total by source. HTTP 404 is excluded because optional lookups may be missing."
+              }
+            }
+          ]
+        },
+        {
+          "eval_time": "12m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": []
+        }
+      ]
+    },
+    {
+      "name": "first 0 failure is detected without a zero baseline and resolves",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "top_scores_bsd_http_requests_total{job=\"top-scores\",status_code=\"0\",source=\"bsd_events_live\",instance=\"bsd\"}",
+          "values": "_ 1+0x15"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "1m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": []
+        },
+        {
+          "eval_time": "2m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "job": "top-scores",
+                "status_code": "0",
+                "service_name": "top-scores",
+                "severity": "warning"
+              },
+              "exp_annotations": {
+                "summary": "Top Scores: BSD upstream failures (status 0)",
+                "description": "BSD requests failed within the last 10 minutes. Status 0 means a connection failure or timeout; 429 means throttling or quota exhaustion; 401/403 means authentication or access failure; 5xx means an upstream server error. Scores and Live Activities may be stale. Check BSD account quota and top-scores-bsd.error.log; break down top_scores_bsd_http_requests_total by source. HTTP 404 is excluded because optional lookups may be missing."
+              }
+            }
+          ]
+        },
+        {
+          "eval_time": "12m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": []
+        }
+      ]
+    },
+    {
+      "name": "healthy traffic and optional missing resources do not alert",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "top_scores_bsd_http_requests_total{job=\"top-scores\",status_code=\"200\",source=\"bsd_events_live\",instance=\"bsd\"}",
+          "values": "0+50x15"
+        },
+        {
+          "series": "top_scores_bsd_http_requests_total{job=\"top-scores\",status_code=\"404\",source=\"bsd_events_live\",instance=\"bsd\"}",
+          "values": "0+5x15"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "5m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": []
+        }
+      ]
+    },
+    {
+      "name": "five minute retries remain firing and instances aggregate",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "top_scores_bsd_http_requests_total{job=\"top-scores\",status_code=\"429\",source=\"bsd_events_live\",instance=\"bsd\"}",
+          "values": "10 10 11 11 11 11 11 12 12 12 12 12 13 13 13 13"
+        },
+        {
+          "series": "top_scores_bsd_http_requests_total{job=\"top-scores\",status_code=\"429\",source=\"bsd_events_live\",instance=\"api\"}",
+          "values": "0+1x15"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "12m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "job": "top-scores",
+                "status_code": "429",
+                "service_name": "top-scores",
+                "severity": "warning"
+              },
+              "exp_annotations": {
+                "summary": "Top Scores: BSD upstream failures (status 429)",
+                "description": "BSD requests failed within the last 10 minutes. Status 0 means a connection failure or timeout; 429 means throttling or quota exhaustion; 401/403 means authentication or access failure; 5xx means an upstream server error. Scores and Live Activities may be stale. Check BSD account quota and top-scores-bsd.error.log; break down top_scores_bsd_http_requests_total by source. HTTP 404 is excluded because optional lookups may be missing."
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "old failures do not alert",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "top_scores_bsd_http_requests_total{job=\"top-scores\",status_code=\"500\",source=\"bsd_events_live\",instance=\"bsd\"}",
+          "values": "7+0x20"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "15m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": []
+        }
+      ]
+    },
+    {
+      "name": "counter reset with a new failure alerts",
+      "interval": "1m",
+      "input_series": [
+        {
+          "series": "top_scores_bsd_http_requests_total{job=\"top-scores\",status_code=\"503\",source=\"bsd_events_live\",instance=\"bsd\"}",
+          "values": "10+0x11 1 1 1"
+        }
+      ],
+      "alert_rule_test": [
+        {
+          "eval_time": "14m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": [
+            {
+              "exp_labels": {
+                "job": "top-scores",
+                "status_code": "503",
+                "service_name": "top-scores",
+                "severity": "warning"
+              },
+              "exp_annotations": {
+                "summary": "Top Scores: BSD upstream failures (status 503)",
+                "description": "BSD requests failed within the last 10 minutes. Status 0 means a connection failure or timeout; 429 means throttling or quota exhaustion; 401/403 means authentication or access failure; 5xx means an upstream server error. Scores and Live Activities may be stale. Check BSD account quota and top-scores-bsd.error.log; break down top_scores_bsd_http_requests_total by source. HTTP 404 is excluded because optional lookups may be missing."
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "missing metrics do not invent failures",
+      "interval": "1m",
+      "input_series": [],
+      "alert_rule_test": [
+        {
+          "eval_time": "5m",
+          "alertname": "TopScoresBSDUpstreamErrors",
+          "exp_alerts": []
+        }
+      ]
+    }
+  ]
+}

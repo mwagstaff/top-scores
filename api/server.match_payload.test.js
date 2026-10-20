@@ -4872,3 +4872,17 @@ test("buildFallbackMatchDetailsPayload synthesizes a details response from in-me
     },
   });
 });
+
+
+test("match detail normalization preserves match ratings separately from scouting ability", () => {
+  const payload = normalizeMatchDetailsPayload({
+    id: "209585", home_team: "Arsenal", away_team: "Liverpool", date: "2026-10-01", time: "15:00",
+    team_lineups: { home: { starting_lineup: [{ name: "Saka", id_player: "455", number: 7,
+      match_stats: { rating: 7.1, minutes_played: 96, goals: 0, expected_goals: null } }], substitutes: [] } },
+  });
+  const stats = payload.team_lineups.home.starting_lineup[0].match_stats;
+  assert.equal(stats.rating, 7.1);
+  assert.equal(stats.minutes_played, 96);
+  assert.equal(stats.goals, 0);
+  assert.equal(stats.expected_goals, null);
+});

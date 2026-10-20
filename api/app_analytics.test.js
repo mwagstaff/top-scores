@@ -37,7 +37,7 @@ test("validation bounds identifiers, event names, timestamps and duration metada
 });
 
 test("request metrics cover early routes and collapse dynamic paths without identifiers", () => {
-  assert.equal(routeFamily("/api/v1/prediction-game/fixtures/secret"), "prediction-game");
+  assert.equal(routeFamily("/api/v1/prediction-game/fixtures/secret"), "other");
   assert.equal(routeFamily("/api/v1/anything/private"), "other");
   const analytics = createAppAnalytics();
   const res = new EventEmitter(); res.statusCode = 200;

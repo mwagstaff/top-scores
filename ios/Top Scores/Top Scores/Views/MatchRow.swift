@@ -12,22 +12,6 @@ enum MatchRowPresentationStyle {
     case embedded
 }
 
-/// What a row's predicted-score chip should show. Rows compute this from a shared,
-/// on-disk prediction store (see `FixturePredictionStore` in MatchesView.swift) that
-/// freezes each match's prediction the first time it's generated, so `.available`
-/// stays valid — and comparable to the eventual result — for the lifetime of the match.
-enum FixturePredictionDisplayState: Hashable, Sendable {
-    case hidden
-    case pending
-    case available(
-        homeGoals: Int,
-        awayGoals: Int,
-        homeWinProbability: Double,
-        drawProbability: Double,
-        awayWinProbability: Double
-    )
-}
-
 struct MatchRowPreferences: Equatable {
     let hasFantasyManagerEntry: Bool
     let showFantasyExpectedPoints: Bool
@@ -35,7 +19,6 @@ struct MatchRowPreferences: Equatable {
     let showFantasyFixtureLogos: Bool
     let showCompactFixtureFantasyLogo: Bool
     let showCompactFixtureTvLogo: Bool
-    let showPredictedScores: Bool
 
     init(preferences: PreferencesStore, hasFantasyManagerEntry: Bool) {
         self.hasFantasyManagerEntry = hasFantasyManagerEntry
@@ -44,7 +27,6 @@ struct MatchRowPreferences: Equatable {
         showFantasyFixtureLogos = preferences.showFantasyFixtureLogos
         showCompactFixtureFantasyLogo = preferences.showCompactFixtureFantasyLogo
         showCompactFixtureTvLogo = preferences.showCompactFixtureTvLogo
-        showPredictedScores = preferences.showPredictedScores
     }
 
     static let disabledFantasy = MatchRowPreferences(
@@ -53,8 +35,7 @@ struct MatchRowPreferences: Equatable {
         showFantasyRealTimePoints: false,
         showFantasyFixtureLogos: false,
         showCompactFixtureFantasyLogo: false,
-        showCompactFixtureTvLogo: false,
-        showPredictedScores: false
+        showCompactFixtureTvLogo: false
     )
 
     private init(
@@ -63,8 +44,7 @@ struct MatchRowPreferences: Equatable {
         showFantasyRealTimePoints: Bool,
         showFantasyFixtureLogos: Bool,
         showCompactFixtureFantasyLogo: Bool,
-        showCompactFixtureTvLogo: Bool,
-        showPredictedScores: Bool
+        showCompactFixtureTvLogo: Bool
     ) {
         self.hasFantasyManagerEntry = hasFantasyManagerEntry
         self.showFantasyExpectedPoints = showFantasyExpectedPoints
@@ -72,7 +52,6 @@ struct MatchRowPreferences: Equatable {
         self.showFantasyFixtureLogos = showFantasyFixtureLogos
         self.showCompactFixtureFantasyLogo = showCompactFixtureFantasyLogo
         self.showCompactFixtureTvLogo = showCompactFixtureTvLogo
-        self.showPredictedScores = showPredictedScores
     }
 }
 
@@ -102,7 +81,6 @@ struct MatchRow: View {
     var broadcastRegionCode: String? = nil
     var fantasyContext: FantasyMatchRowContext = .empty
     var rowPreferences: MatchRowPreferences = .disabledFantasy
-    var predictionDisplay: FixturePredictionDisplayState = .hidden
     var homeTeamSummary: MatchRowTeamSummary? = nil
     var awayTeamSummary: MatchRowTeamSummary? = nil
     var enablesTeamDetailsNavigation: Bool = false
@@ -727,44 +705,18 @@ struct MatchRow: View {
             .fixedSize(horizontal: true, vertical: false)
     }
 
+    @ViewBuilder
     private var compactFixtureSecondRow: some View {
-        PredictionGameMatchAvailability(match: match) { hasGamePrediction in
-            let showsPrediction = rowPreferences.showPredictedScores && (predictionDisplay != .hidden || hasGamePrediction)
-            if showsPrediction || compactPrimaryBroadcastChannel != nil {
-                compactFixtureAccessories(showsPrediction: showsPrediction)
-            }
-        }
-    }
-
-    private func compactFixtureAccessories(showsPrediction: Bool) -> some View {
-        MatchFixtureAccessoryLayout(
-            maximumWidth: dynamicTypeSize.isAccessibilitySize ? 420 : 300,
-            predictionWidthFraction: dynamicTypeSize.isAccessibilitySize ? 0.65 : 0.7,
-            centersPrediction: compactPrimaryBroadcastChannel == nil,
-            centersBroadcast: !showsPrediction
-        ) {
-            if showsPrediction {
-                PredictionStripView(match: match, predictionDisplay: predictionDisplay, fillsAvailableWidth: true)
+        if let channel = compactPrimaryBroadcastChannel {
+            if let logo = compactPrimaryBroadcastLogo {
+                Image(uiImage: logo)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(height: dynamicTypeSize.isAccessibilitySize ? 32 : 24)
+                    .scaleEffect(0.8)
+                    .accessibilityLabel("Watch on \(channel.name)")
             } else {
-                Color.clear.frame(height: 28).accessibilityHidden(true)
-            }
-
-            if let channel = compactPrimaryBroadcastChannel {
-                if let logo = compactPrimaryBroadcastLogo {
-                    Image(uiImage: logo)
-                        .resizable()
-                        .scaledToFit()
-                        .frame(height: dynamicTypeSize.isAccessibilitySize ? 32 : 24)
-                        .frame(maxWidth: .infinity)
-                        .scaleEffect(0.8)
-                        .accessibilityLabel("Watch on \(channel.name)")
-                } else {
-                    compactBroadcastLabel(channel)
-                        .frame(maxWidth: .infinity)
-                }
-            } else {
-                // Keep the broadcast column even when there is no broadcast.
-                Color.clear.frame(height: 28).accessibilityHidden(true)
+                compactBroadcastLabel(channel)
             }
         }
     }
@@ -852,270 +804,6 @@ struct MatchRow: View {
             awayAssists: match.awayAssists,
             awayRedCards: match.awayRedCards
         )
-    }
-}
-
-/// Two stable columns within the space between the team crests. When only one
-/// accessory is visible, it can be centered without changing its column width.
-struct MatchFixtureAccessoryLayout: Layout {
-    var maximumWidth: CGFloat = 300
-    var predictionWidthFraction: CGFloat = 0.7
-    var centersPrediction = false
-    var centersBroadcast = false
-    private let spacing: CGFloat = 8
-
-    private func columnWidths(in width: CGFloat) -> [CGFloat] {
-        let usable = max(0, min(width, maximumWidth) - spacing)
-        return [usable * predictionWidthFraction, usable * (1 - predictionWidthFraction)]
-    }
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let width = proposal.width.flatMap { $0.isFinite ? $0 : nil } ?? maximumWidth
-        let columns = columnWidths(in: width)
-        let height = zip(subviews, columns).map { view, columnWidth in
-            view.sizeThatFits(ProposedViewSize(width: columnWidth, height: nil)).height
-        }.max() ?? 28
-        return CGSize(width: width, height: max(28, height))
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let columns = columnWidths(in: bounds.width)
-        let groupWidth = columns.reduce(0, +) + spacing
-        var x = bounds.midX - groupWidth / 2
-        for (index, pair) in zip(subviews, columns).enumerated() {
-            let (view, width) = pair
-            let centersSubview = (centersPrediction && index == 0) || (centersBroadcast && index == 1)
-            view.place(
-                at: CGPoint(x: centersSubview ? bounds.midX : x + width / 2, y: bounds.midY),
-                anchor: .center,
-                proposal: ProposedViewSize(width: width, height: nil)
-            )
-            x += width + spacing
-        }
-    }
-}
-
-/// A predicted-score chip shown beneath a fixture row (or with a home/draw/away
-/// probability breakdown on a match's scoreboard). Indigo while the match is still
-/// to be decided; green once finished and the prediction matched the final score;
-/// muted once finished and it missed.
-struct PredictionStripView: View {
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-    let match: Match
-    let predictionDisplay: FixturePredictionDisplayState
-    var isLargePresentation: Bool = false
-    var showsProbabilities: Bool = false
-    var fillsAvailableWidth = false
-
-    @State private var isShowingProbabilityInfo = false
-
-    var body: some View {
-        Group {
-            switch predictionDisplay {
-            case .hidden:
-                PredictionGameMatchControl(match: match, isLargePresentation: isLargePresentation, fillsAvailableWidth: fillsAvailableWidth) {
-                    EmptyView()
-                }
-            case .pending:
-                PredictionGameMatchControl(match: match, isLargePresentation: isLargePresentation, fillsAvailableWidth: fillsAvailableWidth) {
-                    HStack(spacing: 6) {
-                        ProgressView()
-                            .controlSize(.mini)
-                        Text("Calculating prediction…")
-                            .font(labelFont)
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            case .available(let homeGoals, let awayGoals, let homeWinProbability, let drawProbability, let awayWinProbability):
-                if showsProbabilities {
-                    HStack(spacing: isLargePresentation ? 10 : 8) {
-                        interactiveScoreChip(homeGoals: homeGoals, awayGoals: awayGoals)
-                        PredictionProbabilityBar(
-                            homeWinProbability: homeWinProbability,
-                            drawProbability: drawProbability,
-                            awayWinProbability: awayWinProbability
-                        )
-                        .frame(height: isLargePresentation ? 5 : 4)
-                        PredictionProbabilityLabel(
-                            homeWinProbability: homeWinProbability,
-                            drawProbability: drawProbability,
-                            awayWinProbability: awayWinProbability,
-                            font: labelFont
-                        )
-                        probabilityInfoButton
-                    }
-                } else {
-                    interactiveScoreChip(homeGoals: homeGoals, awayGoals: awayGoals)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .center)
-        .alert("Chances of victory", isPresented: $isShowingProbabilityInfo) {
-            Button("OK") {}
-        } message: {
-            Text(
-                "The purple, grey and teal bars show the model's estimated chances of a home win, draw and away win. A higher H/D/A percentage means that outcome is considered more likely. These are probabilities, not betting odds or guarantees."
-            )
-        }
-    }
-
-    private var probabilityInfoButton: some View {
-        Button {
-            isShowingProbabilityInfo = true
-        } label: {
-            Image(systemName: "info.circle")
-                .font(.system(size: isLargePresentation ? 15 : 13, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 44, height: 44)
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("About chances of victory")
-        .accessibilityHint("Explains the prediction probabilities")
-    }
-
-    private func interactiveScoreChip(homeGoals: Int, awayGoals: Int) -> some View {
-        PredictionGameMatchControl(
-            match: match, isLargePresentation: isLargePresentation,
-            previewScore: PredictionGameScore(homeScore: homeGoals, awayScore: awayGoals),
-            fillsAvailableWidth: fillsAvailableWidth
-        ) {
-            scoreChip(homeGoals: homeGoals, awayGoals: awayGoals)
-        }
-    }
-
-    private func scoreChip(homeGoals: Int, awayGoals: Int) -> some View {
-        Group {
-            if fillsAvailableWidth && dynamicTypeSize.isAccessibilitySize {
-                VStack(spacing: 3) {
-                    Text("Predicted")
-                    HStack(spacing: 3) {
-                        scoreChipSymbol
-                        Text("\(homeGoals)–\(awayGoals)")
-                    }
-                }
-            } else {
-                HStack(spacing: 3) {
-                    scoreChipSymbol
-                    Text("Predicted: \(homeGoals)–\(awayGoals)")
-                }
-            }
-        }
-        .font(scoreFont)
-        .monospacedDigit()
-        .foregroundStyle(accentColor)
-        .padding(.horizontal, isLargePresentation ? 7 : 6)
-        .padding(.vertical, isLargePresentation ? 3 : 2)
-        .frame(maxWidth: fillsAvailableWidth ? .infinity : nil, minHeight: fillsAvailableWidth ? 28 : nil)
-        .background(
-            Capsule(style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [accentColor.opacity(0.22), accentColor.opacity(0.10)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-        )
-        .overlay(
-            Capsule(style: .continuous)
-                .stroke(accentColor.opacity(0.42), lineWidth: 1)
-        )
-        .shadow(color: isResolved ? .clear : accentColor.opacity(0.18), radius: 5)
-        .fixedSize(horizontal: !fillsAvailableWidth, vertical: true)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(accessibilityLabel(homeGoals: homeGoals, awayGoals: awayGoals))
-    }
-
-    private var scoreChipSymbol: some View {
-        Image(systemName: isResolved ? (wasCorrect ? "checkmark.seal.fill" : "sparkles") : "sparkles")
-            .font(.system(size: isLargePresentation ? 9 : 8, weight: .bold))
-    }
-
-    private var isResolved: Bool {
-        match.isFinished
-    }
-
-    private var wasCorrect: Bool {
-        guard case .available(let homeGoals, let awayGoals, _, _, _) = predictionDisplay else { return false }
-        return match.homeScore == homeGoals && match.awayScore == awayGoals
-    }
-
-    private var accentColor: Color {
-        guard isResolved else { return .predictedScore }
-        return wasCorrect ? .liveMatch : Color(.tertiaryLabel)
-    }
-
-    private var scoreFont: Font {
-        (isLargePresentation ? Font.caption : .caption2).weight(.semibold)
-    }
-
-    private var labelFont: Font {
-        isLargePresentation ? .caption2 : .system(size: 9.5, weight: .semibold)
-    }
-
-    private func accessibilityLabel(homeGoals: Int, awayGoals: Int) -> String {
-        guard isResolved else {
-            return "Predicted score \(homeGoals) to \(awayGoals)"
-        }
-        return wasCorrect
-            ? "Predicted score \(homeGoals) to \(awayGoals), correct"
-            : "Predicted score \(homeGoals) to \(awayGoals), final score was different"
-    }
-}
-
-private struct PredictionProbabilityBar: View {
-    let homeWinProbability: Double
-    let drawProbability: Double
-    let awayWinProbability: Double
-
-    var body: some View {
-        GeometryReader { geometry in
-            HStack(spacing: 1.5) {
-                segment(color: .predictedScore, fraction: homeWinProbability, totalWidth: geometry.size.width)
-                segment(color: Color(.tertiaryLabel), fraction: drawProbability, totalWidth: geometry.size.width)
-                segment(color: .predictedAwayWin, fraction: awayWinProbability, totalWidth: geometry.size.width)
-            }
-        }
-    }
-
-    private func segment(color: Color, fraction: Double, totalWidth: CGFloat) -> some View {
-        let total = max(homeWinProbability + drawProbability + awayWinProbability, 0.0001)
-        return Capsule(style: .continuous)
-            .fill(color.opacity(0.85))
-            .frame(width: max(2, totalWidth * CGFloat(fraction / total)))
-    }
-}
-
-private struct PredictionProbabilityLabel: View {
-    let homeWinProbability: Double
-    let drawProbability: Double
-    let awayWinProbability: Double
-    let font: Font
-
-    var body: some View {
-        HStack(spacing: 3) {
-            Text("H \(percentText(homeWinProbability))")
-                .foregroundStyle(Color.predictedScore)
-            Text("·").foregroundStyle(.secondary)
-            Text("D \(percentText(drawProbability))")
-                .foregroundStyle(.secondary)
-            Text("·").foregroundStyle(.secondary)
-            Text("A \(percentText(awayWinProbability))")
-                .foregroundStyle(Color.predictedAwayWin)
-        }
-        .font(font)
-        .fixedSize()
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(
-            "Home win \(percentText(homeWinProbability)) percent, "
-                + "draw \(percentText(drawProbability)) percent, "
-                + "away win \(percentText(awayWinProbability)) percent"
-        )
-    }
-
-    private func percentText(_ value: Double) -> String {
-        "\(Int((value * 100).rounded()))"
     }
 }
 
@@ -1686,10 +1374,6 @@ extension Color {
     static let finishedMatchStatus = liveMatch
     /// Gold used to highlight Final-round fixtures (e.g. World Cup Final).
     static let finalMatch = Color(red: 0.85, green: 0.68, blue: 0.21)
-    /// Indigo used for predicted-score chips, matched to the website's `--predict` token.
-    static let predictedScore = Color(red: 0.49, green: 0.48, blue: 1.0)
-    /// Teal used for the "away win" segment of a prediction's probability bar.
-    static let predictedAwayWin = Color(red: 0.24, green: 0.75, blue: 0.69)
 }
 
 /// Card background + border for a match row. In-progress matches get an elegant

@@ -89,14 +89,32 @@ nonisolated struct StadiumParallaxAttitudeProjection {
     }
 }
 
+/// Ignore subpixel sensor noise before scheduling work on the main actor.
+nonisolated struct StadiumParallaxPublicationGate {
+    private(set) var lastTranslation: CGSize
+
+    init(initialTranslation: CGSize = .zero) {
+        lastTranslation = initialTranslation
+    }
+
+    mutating func accepts(_ translation: CGSize) -> Bool {
+        guard abs(translation.width - lastTranslation.width) >= 0.5 ||
+                abs(translation.height - lastTranslation.height) >= 0.5 else { return false }
+        lastTranslation = translation
+        return true
+    }
+}
+
 private nonisolated final class StadiumParallaxMotionProcessor: @unchecked Sendable {
     private let orientation: StadiumParallaxScreenOrientation
     private var referenceAttitude: CMAttitude?
     private var filter: StadiumParallaxFilter
+    private var publicationGate: StadiumParallaxPublicationGate
 
     init(orientation: StadiumParallaxScreenOrientation, initialTranslation: CGSize) {
         self.orientation = orientation
         filter = StadiumParallaxFilter(translation: initialTranslation)
+        publicationGate = StadiumParallaxPublicationGate(initialTranslation: initialTranslation)
     }
 
     func translation(for motion: CMDeviceMotion) -> CGSize? {
@@ -111,11 +129,12 @@ private nonisolated final class StadiumParallaxMotionProcessor: @unchecked Senda
             quaternion: relativeAttitude.quaternion,
             orientation: orientation
         )
-        return filter.update(
+        let translation = filter.update(
             horizontalAngle: angles.horizontal,
             verticalAngle: angles.vertical,
             timestamp: motion.timestamp
         )
+        return publicationGate.accepts(translation) ? translation : nil
     }
 }
 
@@ -185,7 +204,7 @@ private nonisolated final class CoreMotionStadiumParallaxBackend: StadiumParalla
     init() {
         let startedAt = DispatchTime.now().uptimeNanoseconds
         motionManager = CMMotionManager()
-        motionManager.deviceMotionUpdateInterval = 1.0 / 60.0
+        motionManager.deviceMotionUpdateInterval = 1.0 / 30.0
         log(stage: "initialize", startedAt: startedAt)
     }
 
@@ -259,8 +278,7 @@ final class StadiumParallaxMotionModel: ObservableObject {
     }
 
     func deactivate(viewID: UUID) {
-        activeViews.remove(viewID)
-        guard activeViews.isEmpty else { return }
+        guard activeViews.remove(viewID) != nil, activeViews.isEmpty else { return }
         stopUpdates()
     }
 
@@ -303,7 +321,9 @@ final class StadiumParallaxMotionModel: ObservableObject {
 private struct StadiumParallaxMotionLifecycleModifier: ViewModifier {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
-    @ObservedObject private var motion = StadiumParallaxMotionModel.shared
+    // Lifecycle ownership must not subscribe the wrapped view tree to every motion sample.
+    private let motion = StadiumParallaxMotionModel.shared
+    @State private var isPowerConstrained = Self.powerIsConstrained
     @State private var isVisible = false
     @State private var viewID = UUID()
 
@@ -311,6 +331,7 @@ private struct StadiumParallaxMotionLifecycleModifier: ViewModifier {
         content
             .onAppear {
                 isVisible = true
+                isPowerConstrained = Self.powerIsConstrained
                 updateMotionActivity()
             }
             .onDisappear {
@@ -321,6 +342,15 @@ private struct StadiumParallaxMotionLifecycleModifier: ViewModifier {
                 updateMotionActivity()
             }
             .onChange(of: scenePhase) { _, _ in
+                isPowerConstrained = Self.powerIsConstrained
+                updateMotionActivity()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .NSProcessInfoPowerStateDidChange)) { _ in
+                isPowerConstrained = Self.powerIsConstrained
+                updateMotionActivity()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: ProcessInfo.thermalStateDidChangeNotification)) { _ in
+                isPowerConstrained = Self.powerIsConstrained
                 updateMotionActivity()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
@@ -330,7 +360,12 @@ private struct StadiumParallaxMotionLifecycleModifier: ViewModifier {
     }
 
     private var motionIsEnabled: Bool {
-        isVisible && scenePhase == .active && !reduceMotion
+        isVisible && scenePhase == .active && !reduceMotion && !isPowerConstrained
+    }
+
+    private static var powerIsConstrained: Bool {
+        let process = ProcessInfo.processInfo
+        return process.isLowPowerModeEnabled || process.thermalState == .serious || process.thermalState == .critical
     }
 
     private var currentInterfaceOrientation: UIInterfaceOrientation {

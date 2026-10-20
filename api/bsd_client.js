@@ -588,6 +588,20 @@ function getLineups(id, options = {}) {
   });
 }
 
+function getEventPlayerStats(id, options = {}) {
+  return _request(`/events/${encodeURIComponent(id)}/player-stats`, {
+    source: "bsd_event_player_stats",
+    reason: "event_player_stats_fetch",
+    ...options,
+  });
+}
+
+function getPlayerStats(id, options = {}) {
+  return _requestAllPages(`/players/${encodeURIComponent(id)}/stats`, {
+    source: "bsd_player_stats_history", reason: "player_stats_history", ...options,
+  });
+}
+
 function getPlayer(id, options = {}) {
   return _request(`/players/${encodeURIComponent(id)}`, {
     source: "bsd_player",
@@ -634,16 +648,6 @@ function getManagerCareer(id, options = {}) {
   });
 }
 
-// Predictions for a league (paginated). Returns the flat results array.
-function getPredictions({ leagueId } = {}, options = {}) {
-  return _requestAllPages("/predictions", {
-    source: "bsd_predictions",
-    reason: "predictions_fetch",
-    ...options,
-    query: { ...(options.query || {}), league_id: leagueId },
-  });
-}
-
 function getSocial({ eventId } = {}, options = {}) {
   return _requestAllPages("/social", {
     source: "bsd_social",
@@ -670,12 +674,13 @@ module.exports = {
   getEvent,
   getIncidents,
   getLineups,
+  getEventPlayerStats,
+  getPlayerStats,
   getPlayer,
   getPlayers,
   getManagers,
   getManager,
   getManagerCareer,
-  getPredictions,
   getSocial,
 
   __private: {

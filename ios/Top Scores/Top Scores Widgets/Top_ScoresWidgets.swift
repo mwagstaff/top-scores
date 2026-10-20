@@ -2964,9 +2964,10 @@ private final class WidgetTvLogoResolver {
 private struct TopScoresLiveActivityWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: TopScoresLiveActivityAttributes.self) { context in
-            TopScoresLiveActivityMinimalLockScreenView(state: context.state, isStale: context.isStale)
+            TopScoresLiveActivityPresentation(state: context.state, isStale: context.isStale)
                 .activityBackgroundTint(Color(red: 0.03, green: 0.04, blue: 0.09))
                 .activitySystemActionForegroundColor(.white)
+                .widgetURL(liveActivityURL(state: context.state))
         } dynamicIsland: { context in
             return DynamicIsland {
                 DynamicIslandExpandedRegion(.center) {
@@ -3000,7 +3001,28 @@ private struct TopScoresLiveActivityWidget: Widget {
                 Text("TS")
                     .font(.caption2.weight(.bold))
             }
+            .widgetURL(liveActivityURL(state: context.state))
         }
+        .supplementalActivityFamilies([.small])
+    }
+
+    private func liveActivityURL(state: TopScoresLiveActivityAttributes.ContentState) -> URL? {
+        guard let match = LiveActivityMatchDisplayFilter.displayMatches(for: state).first else { return nil }
+        var components = URLComponents()
+        components.scheme = "topscores"
+        components.host = "match"
+        components.queryItems = [
+            URLQueryItem(name: "id", value: match.matchId),
+            URLQueryItem(name: "date", value: match.date),
+            URLQueryItem(name: "time", value: match.time),
+            URLQueryItem(name: "league", value: match.league),
+            URLQueryItem(name: "home", value: match.homeTeam),
+            URLQueryItem(name: "away", value: match.awayTeam),
+            URLQueryItem(name: "homeScore", value: match.homeScore.map(String.init)),
+            URLQueryItem(name: "awayScore", value: match.awayScore.map(String.init)),
+            URLQueryItem(name: "status", value: match.matchTime)
+        ]
+        return components.url
     }
 
     private func compactTrailingText(state: TopScoresLiveActivityAttributes.ContentState) -> String {
@@ -3026,6 +3048,63 @@ private struct TopScoresLiveActivityWidget: Widget {
             return 1.0
         }
         return LiveActivityScoreStyle.finishedOpacity
+    }
+}
+
+private struct TopScoresLiveActivityPresentation: View {
+    @Environment(\.activityFamily) private var activityFamily
+    let state: TopScoresLiveActivityAttributes.ContentState
+    let isStale: Bool
+
+    var body: some View {
+        if activityFamily == .small {
+            if let match = LiveActivityMatchDisplayFilter.displayMatches(for: state).first {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 4) {
+                        Text(match.league)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        Spacer(minLength: 2)
+                        Text(match.matchTime.flatMap { $0.isEmpty ? nil : $0 } ?? match.time)
+                            .fontWeight(match.isInProgress ? .bold : .regular)
+                            .foregroundStyle(match.isInProgress ? Color.white : Color.secondary)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 2)
+                            .background {
+                                if match.isInProgress {
+                                    RoundedRectangle(cornerRadius: 5)
+                                        .fill(Color(red: 0.89, green: 0.024, blue: 0.239))
+                                }
+                            }
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                    .font(.caption2)
+                    HStack(spacing: 5) {
+                        LiveActivityPrecomputedTeamLogo(logoKey: match.homeLogoKey, teamName: match.displayHomeTeam, size: 18)
+                        Text(match.displayHomeTeam)
+                        Spacer(minLength: 4)
+                        Text(match.homeScore.map(String.init) ?? "–")
+                    }
+                    HStack(spacing: 5) {
+                        LiveActivityPrecomputedTeamLogo(logoKey: match.awayLogoKey, teamName: match.displayAwayTeam, size: 18)
+                        Text(match.displayAwayTeam)
+                        Spacer(minLength: 4)
+                        Text(match.awayScore.map(String.init) ?? "–")
+                    }
+                    .font(.caption)
+                }
+                .font(.caption)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .monospacedDigit()
+                .accessibilityElement(children: .combine)
+                .accessibilityHint("Open \(match.league)")
+            } else {
+                Text("Top Scores")
+            }
+        } else {
+            TopScoresLiveActivityMinimalLockScreenView(state: state, isStale: isStale)
+        }
     }
 }
 

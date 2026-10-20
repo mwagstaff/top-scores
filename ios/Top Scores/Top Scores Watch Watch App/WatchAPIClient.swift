@@ -14,6 +14,75 @@ struct WatchAPIClient {
         self.baseURL = baseURL
     }
 
+    func fetchTables() async throws -> WatchTablesPayload {
+        try await fetchResource(path: "tables")
+    }
+
+    func fetchTableCompetitionCatalog() async throws -> WatchTableCompetitionCatalog {
+        try await fetchResource(path: "competitions/catalog")
+    }
+
+    func fetchCurrentOrLatestMatch(team: String, now: Date = Date()) async throws -> WatchMatch? {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        var page = 1
+        while true {
+            let matches: [WatchMatch] = try await fetchResource(path: "matches", queryItems: [
+                URLQueryItem(name: "start", value: "1970-01-01"),
+                URLQueryItem(name: "end", value: formatter.string(from: now)),
+                URLQueryItem(name: "team", value: team),
+                URLQueryItem(name: "mode", value: "results"),
+                URLQueryItem(name: "sort", value: "desc"),
+                URLQueryItem(name: "filter_mode", value: "intersection"),
+                URLQueryItem(name: "page", value: String(page)),
+                URLQueryItem(name: "page_size", value: "200"),
+                URLQueryItem(name: "time_zone", value: TimeZone.current.identifier)
+            ])
+            if let match = WatchTableMatchSelection.currentOrLatest(in: matches) { return match }
+            guard matches.count == 200 else { return nil }
+            try Task.checkCancellation()
+            page += 1
+        }
+    }
+
+    private func fetchResource<T: Decodable>(
+        path: String,
+        queryItems: [URLQueryItem] = []
+    ) async throws -> T {
+        var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)
+        if !queryItems.isEmpty { components?.queryItems = queryItems }
+        guard let url = components?.url else { throw WatchAPIClientError.invalidHTTPResponse }
+        var request = URLRequest(url: url, timeoutInterval: 15)
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("watch", forHTTPHeaderField: "X-Client-Surface")
+        request.setValue("foreground", forHTTPHeaderField: "X-Client-State")
+        #if DEBUG
+        request.setValue("debug", forHTTPHeaderField: "X-Build-Type")
+        #else
+        request.setValue("production", forHTTPHeaderField: "X-Build-Type")
+        #endif
+        for attempt in 0..<3 {
+            do {
+                let (data, response) = try await Self.session.data(for: request)
+                guard let http = response as? HTTPURLResponse else {
+                    throw WatchAPIClientError.invalidHTTPResponse
+                }
+                guard (200...299).contains(http.statusCode) else {
+                    throw WatchAPIClientError.badStatus(statusCode: http.statusCode)
+                }
+                try Task.checkCancellation()
+                return try JSONDecoder().decode(T.self, from: data)
+            } catch {
+                guard attempt < 2, isRetryable(error) else { throw error }
+                try await Task.sleep(for: .seconds(Double(1 << attempt)))
+            }
+        }
+        throw WatchAPIClientError.invalidHTTPResponse
+    }
+
     func fetchMatches(on date: String) async throws -> [WatchMatch] {
         var components = URLComponents(
             url: baseURL.appendingPathComponent("matches"),

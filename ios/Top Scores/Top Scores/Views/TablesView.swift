@@ -10,6 +10,7 @@ enum TableCompetitionOrdering {
         case europeanClub
         case otherClub
         case international
+        case worldCup
     }
 
     private static let englishDomesticKeys: Set<String> = [
@@ -79,6 +80,36 @@ enum TableCompetitionOrdering {
         "worldcupqualifyingofc"
     ]
 
+    private static let qualifierRegions = [
+        (id: "58", name: "UEFA"),
+        (id: "59", name: "CONMEBOL"),
+        (id: "62", name: "CONCACAF"),
+        (id: "60", name: "CAF"),
+        (id: "61", name: "AFC"),
+        (id: "63", name: "OFC")
+    ]
+
+    static func qualifierRegion(for league: LeagueTable) -> String? {
+        let keys = [normalizedKey(league.leagueID), normalizedKey(league.leagueName)]
+        return qualifierRegions.first { region in
+            league.leagueID == region.id || keys.contains {
+                $0.contains("worldcupqual") && $0.hasSuffix(region.name.lowercased())
+            }
+        }?.name
+    }
+
+    private static func worldCupOrder(for league: LeagueTable) -> Int? {
+        if let region = qualifierRegion(for: league),
+           let index = qualifierRegions.firstIndex(where: { $0.name == region }) {
+            return index + 1
+        }
+        let keys = [normalizedKey(league.leagueID), normalizedKey(league.leagueName)]
+        if league.leagueID == "27" || keys.contains(where: { $0.contains("worldcup") && !$0.contains("qual") }) {
+            return 0
+        }
+        return nil
+    }
+
     static func sorted(
         _ leagues: [LeagueTable],
         competitionWeight: (LeagueTable) -> Double
@@ -88,6 +119,12 @@ enum TableCompetitionOrdering {
             let rightTier = tier(for: right)
             if leftTier != rightTier {
                 return leftTier.rawValue < rightTier.rawValue
+            }
+
+            if leftTier == .worldCup {
+                let leftOrder = worldCupOrder(for: left) ?? 0
+                let rightOrder = worldCupOrder(for: right) ?? 0
+                if leftOrder != rightOrder { return leftOrder < rightOrder }
             }
 
             let leftWeight = competitionWeight(left)
@@ -100,6 +137,7 @@ enum TableCompetitionOrdering {
     }
 
     private static func tier(for league: LeagueTable) -> Tier {
+        if worldCupOrder(for: league) != nil { return .worldCup }
         let keys = [normalizedKey(league.leagueID), normalizedKey(league.leagueName)]
         if keys.contains(where: englishDomesticKeys.contains) {
             return .englishDomestic
@@ -145,6 +183,8 @@ struct TablesView: View {
     @State private var highlightedRowID: String?
     @State private var showsStats = false
     @State private var catalogCompetitionWeights: [String: Double] = [:]
+    @State private var scoreMatchesByLeagueID: [String: [Match]] = [:]
+    @State private var scoreDisplayDate = Date()
     @State private var matchSectionsByLeagueID: [String: TableMatchesSection] = [:]
     @State private var loadedMatchSectionLeagueIDs: Set<String> = []
     @State private var loadingMatchSectionLeagueIDs: Set<String> = []
@@ -207,6 +247,7 @@ struct TablesView: View {
         .environment(\.colorScheme, .dark)
         .onAppear {
             isVisible = true
+            scoreDisplayDate = Date()
             consumePendingNavigationIfNeeded()
             guard !hasLoaded else {
                 AppMetricsService.shared.fireScreenView(screen: "tables", apiBaseURL: preferences.apiBaseURL)
@@ -243,6 +284,7 @@ struct TablesView: View {
             highlightedRowID = nil
         }
         .onChange(of: preferences.apiBaseURL) { _, newValue in
+            scoreMatchesByLeagueID.removeAll()
             matchSectionsByLeagueID.removeAll()
             loadedMatchSectionLeagueIDs.removeAll()
             loadingMatchSectionLeagueIDs.removeAll()
@@ -254,6 +296,7 @@ struct TablesView: View {
         }
         .onReceive(liveRefreshTimer) { _ in
             guard isVisible, hasLoaded else { return }
+            scoreDisplayDate = Date()
             Task {
                 await liveRefreshTables()
                 await refreshSelectedCompetitionMatchesIfLive()
@@ -444,7 +487,8 @@ struct TablesView: View {
                     LeagueTableCard(
                         league: league,
                         showsStats: showsStats,
-                        highlightedRowID: highlightedRowID
+                        highlightedRowID: highlightedRowID,
+                        liveScores: TableLiveScore.scoresByTeam(from: scoreMatchesByLeagueID[league.leagueID] ?? [], now: scoreDisplayDate)
                     )
                     .id("\(league.id)-\(shortNameRefreshVersion)")
 
@@ -575,6 +619,7 @@ struct TablesView: View {
             )
             guard !Task.isCancelled, preferences.apiBaseURL == apiBaseURL else { return }
 
+            scoreMatchesByLeagueID[league.leagueID] = matches
             loadedMatchSectionLeagueIDs.insert(league.leagueID)
             if let section = TableMatchesSection.resolve(from: matches) {
                 matchSectionsByLeagueID[league.leagueID] = section
@@ -855,8 +900,7 @@ private struct TableMatchesSectionView: View {
                                 match: match,
                                 isFixtureMode: false,
                                 rowPreferences: .disabledFantasy,
-                                fantasyContext: .empty,
-                                predictionDisplay: .hidden
+                                fantasyContext: .empty
                             )
                             .equatable()
 
@@ -986,7 +1030,9 @@ private struct CompetitionPickerItem: View {
         if name.localizedCaseInsensitiveContains("Europa League") { return "Europa" }
         if name.localizedCaseInsensitiveContains("Conference League") { return "Conference" }
         if name.localizedCaseInsensitiveContains("World Cup 2026") { return "World Cup" }
-        if name.localizedCaseInsensitiveContains("World Cup Qualifying") { return "World Cup Qual." }
+        if let region = TableCompetitionOrdering.qualifierRegion(for: league) {
+            return "WC Qual.\n\(region)"
+        }
         if name.localizedCaseInsensitiveContains("International Friendly") { return "Friendlies" }
         if name.localizedCaseInsensitiveContains("English League Cup") { return "EFL Cup" }
         return name
@@ -1102,12 +1148,51 @@ private struct LiveCompetitionDot: View {
     }
 }
 
+struct TableLiveScore: Equatable {
+    let scored: Int
+    let conceded: Int
+    let match: Match
+
+    var isLive: Bool { match.isInProgress }
+    var text: String { "\(scored)-\(conceded)" }
+    var result: String {
+        if isLive { return scored > conceded ? "Winning" : scored < conceded ? "Losing" : "Drawing" }
+        return scored > conceded ? "Won" : scored < conceded ? "Lost" : "Drew"
+    }
+
+    static func teamKey(_ name: String) -> String {
+        TeamIdentityStore.shared.canonicalName(for: name).lowercased()
+    }
+
+    static func scoresByTeam(from matches: [Match], now: Date = Date(), calendar: Calendar = .current) -> [String: TableLiveScore] {
+        var scores: [String: TableLiveScore] = [:]
+        // Process live matches last so they take priority over an earlier result.
+        let eligible = matches.filter { match in
+            match.isInProgress || (match.isFinished && match.dateTime.map {
+                calendar.isDate($0, inSameDayAs: now)
+            } == true)
+        }.sorted {
+            if $0.isInProgress != $1.isInProgress { return !$0.isInProgress }
+            return ($0.dateTime ?? .distantPast) < ($1.dateTime ?? .distantPast)
+        }
+        for match in eligible {
+            guard let home = match.homeScore, let away = match.awayScore else { continue }
+            scores[teamKey(match.homeTeam)] = TableLiveScore(scored: home, conceded: away, match: match)
+            scores[teamKey(match.awayTeam)] = TableLiveScore(scored: away, conceded: home, match: match)
+        }
+        return scores
+    }
+}
+
 private struct LeagueTableCard: View {
     @EnvironmentObject private var preferences: PreferencesStore
 
     let league: LeagueTable
     let showsStats: Bool
     var highlightedRowID: String?
+    var liveScores: [String: TableLiveScore] = [:]
+
+    @ScaledMetric(relativeTo: .caption2) private var liveScoreWidth: CGFloat = 42
 
     private var accentColor: Color {
         CompetitionAccentRole.resolve(
@@ -1122,44 +1207,44 @@ private struct LeagueTableCard: View {
                 LiveInPlayStandingsNote()
             }
             if league.hasRows {
-                VStack(spacing: 0) {
-                    headingRow
-                    tableSeparator(isThick: false)
-                    ForEach(Array(displayGroups.enumerated()), id: \.element.id) { groupIndex, group in
-                        if let heading = groupHeading(for: group) {
-                            groupHeadingRow(heading)
-                        }
-
-                        ForEach(Array(group.rows.enumerated()), id: \.element.id) { index, row in
+                VStack(spacing: 14) {
+                    ForEach(displayGroups) { group in
+                        tableLayout {
                             VStack(spacing: 0) {
-                                ForEach(lookDownZonesStarting(at: row.position)) { zone in
-                                    zoneBoundary(zone)
+                                if let heading = groupHeading(for: group) {
+                                    groupHeadingRow(heading)
                                 }
+                                headingRow
+                                tableSeparator(isThick: false)
 
-                                rowView(row)
+                                ForEach(Array(group.rows.enumerated()), id: \.element.id) { index, row in
+                                    VStack(spacing: 0) {
+                                        ForEach(lookDownZonesStarting(at: row.position, zones: group.zones)) { zone in
+                                            zoneBoundary(zone)
+                                        }
 
-                                ForEach(lookUpZonesEnding(at: row.position)) { zone in
-                                    zoneBoundary(zone)
-                                }
+                                        rowView(row, zones: group.zones)
 
-                                if shouldShowStandardSeparator(in: group.rows, after: index) {
-                                    tableSeparator(isThick: isBenefitBoundary(in: group.rows, after: index))
+                                        ForEach(lookUpZonesEnding(at: row.position, zones: group.zones)) { zone in
+                                            zoneBoundary(zone)
+                                        }
+
+                                        if shouldShowStandardSeparator(in: group.rows, after: index, zones: group.zones) {
+                                            tableSeparator(isThick: isBenefitBoundary(in: group.rows, after: index))
+                                        }
+                                    }
                                 }
                             }
-                        }
-
-                        if groupIndex < displayGroups.count - 1 {
-                            tableSeparator(isThick: true)
+                            .background {
+                                FootballCardSurface(accentColor: accentColor, showsPitchMarkings: true)
+                            }
+                            .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                    .stroke(FootballVisualStyle.border, lineWidth: 1)
+                            }
                         }
                     }
-                }
-                .background {
-                    FootballCardSurface(accentColor: accentColor, showsPitchMarkings: true)
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-                .overlay {
-                    RoundedRectangle(cornerRadius: 20, style: .continuous)
-                        .stroke(FootballVisualStyle.border, lineWidth: 1)
                 }
             } else {
                 Text("This table will be populated once the season is underway.")
@@ -1181,12 +1266,58 @@ private struct LeagueTableCard: View {
         }
     }
 
+    @ViewBuilder
+    private func tableLayout<Content: View>(@ViewBuilder content: () -> Content) -> some View {
+        if showsStats && !liveScores.isEmpty {
+            ScrollView(.horizontal) {
+                content()
+            }
+        } else {
+            content()
+        }
+    }
+
+    @ViewBuilder
+    private func liveScoreCell(for row: LeagueTableRow) -> some View {
+        if !liveScores.isEmpty {
+            Group {
+                if let score = liveScores[TableLiveScore.teamKey(row.team)] {
+                    NavigationLink {
+                        MatchDetailView(match: score.match, showFantasyBadge: false)
+                    } label: {
+                        Text(score.text)
+                            .font(.caption2.weight(.semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 3)
+                            .background(
+                                score.scored > score.conceded ? Color(red: 0.02, green: 0.43, blue: 0.25)
+                                    : score.scored < score.conceded ? Color(red: 0.75, green: 0.12, blue: 0.16)
+                                    : Color(white: 0.36),
+                                in: Capsule()
+                            )
+                            .fixedSize()
+                            .frame(minHeight: 44)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(row.team), \(score.isLive ? "Live" : "Full time"): \(score.result) \(score.scored) to \(score.conceded)")
+                    .accessibilityHint("View match details")
+                } else {
+                    Color.clear.frame(height: 44)
+                }
+            }
+            .frame(width: liveScoreWidth)
+        }
+    }
+
     private var displayGroups: [LeagueTableGroup] {
         let groupsWithRows = league.groups.filter { !$0.rows.isEmpty }
         if !groupsWithRows.isEmpty {
             return groupsWithRows
         }
-        return [LeagueTableGroup(name: visibleStageName, rows: league.rows)]
+        return [LeagueTableGroup(name: visibleStageName, rows: league.rows, zones: league.zones)]
     }
 
     private var visibleStageName: String? {
@@ -1205,6 +1336,7 @@ private struct LeagueTableCard: View {
                     statsHeading("#", width: 30, alignment: .leading)
                     Color.clear.frame(width: 8)
                     Color.clear.frame(width: 24)
+                    if !liveScores.isEmpty { statsHeading("Today", width: liveScoreWidth) }
                     statsHeading("P", width: 24)
                     statsHeading("W", width: 24)
                     statsHeading("D", width: 24)
@@ -1223,6 +1355,11 @@ private struct LeagueTableCard: View {
                         .frame(width: 24)
                     Text("Team")
                         .frame(maxWidth: .infinity, alignment: .leading)
+                    if !liveScores.isEmpty {
+                        shortHeading("Today", width: liveScoreWidth, alignment: .center)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
+                    }
                     shortHeading("P", width: 30)
                     shortHeading("GD", width: 34)
                     shortHeading("Pts", width: 38)
@@ -1236,6 +1373,7 @@ private struct LeagueTableCard: View {
 
     private func groupHeadingRow(_ title: String) -> some View {
         Text(title)
+            .accessibilityAddTraits(.isHeader)
             .font(.footnote.weight(.semibold))
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1244,18 +1382,48 @@ private struct LeagueTableCard: View {
             .padding(.bottom, 4)
     }
 
-    private func rowView(_ row: LeagueTableRow) -> some View {
-        let destinationContext = teamDetailsContext(for: row)
-        return NavigationLink {
-            TeamDetailsView(context: destinationContext)
+    private func teamLink<Content: View>(
+        for row: LeagueTableRow,
+        zones: [LeagueTableZone],
+        @ViewBuilder content: () -> Content
+    ) -> some View {
+        NavigationLink {
+            TeamDetailsView(context: teamDetailsContext(for: row))
         } label: {
-            Group {
-                if showsStats {
-                    HStack(spacing: 0) {
-                        compactPositionCell(row)
+            content()
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(row.team)
+        .accessibilityValue(accessibilityStats(for: row, zones: zones))
+        .accessibilityHint("View team details")
+    }
+
+    private func rowView(_ row: LeagueTableRow, zones: [LeagueTableZone]) -> some View {
+        let score = liveScores[TableLiveScore.teamKey(row.team)]
+        return HStack(spacing: showsStats ? 0 : 6) {
+            teamLink(for: row, zones: zones) {
+                HStack(spacing: showsStats ? 0 : 6) {
+                    if showsStats {
+                        compactPositionCell(row, zones: zones)
                         Color.clear.frame(width: 8)
+                        TableTeamLogo(name: row.team).frame(width: 24)
+                    } else {
+                        positionCell(row, zones: zones)
                         TableTeamLogo(name: row.team)
-                            .frame(width: 24)
+                        Text(displayTeamName(for: row))
+                            .font(.subheadline)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+            liveScoreCell(for: row)
+            teamLink(for: row, zones: zones) {
+                HStack(spacing: showsStats ? 0 : 6) {
+                    if showsStats {
                         statsCell(row.played, width: 24)
                         statsCell(row.won, width: 24)
                         statsCell(row.drawn, width: 24)
@@ -1265,38 +1433,21 @@ private struct LeagueTableCard: View {
                         statsCell(row.goalDifference, width: 27, signed: true)
                         statsCell(row.points, width: 30, weight: .semibold)
                         compactForm(row.form)
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 10)
-                } else {
-                    HStack(spacing: 6) {
-                        positionCell(row)
-                        TableTeamLogo(name: row.team)
-                        Text(displayTeamName(for: row))
-                            .font(.subheadline)
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
                         cell(String(row.played), width: 30)
                         subtleCell(signedNumber(row.goalDifference), width: 34)
                         cell(String(row.points), width: 38, weight: .semibold)
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 10)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, showsStats ? 8 : 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(HighlightedTableRowBackground(isActive: highlightedRowID == row.id))
-        .background(LiveStandingsRowBackground(isActive: row.live))
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(row.team)
-        .accessibilityValue(accessibilityStats(for: row))
-        .accessibilityHint("View team details")
+        .background(LiveStandingsRowBackground(isActive: score?.isLive ?? row.live))
         .id(row.id)
         .prewarmTeamStadiumPhoto(
-            for: destinationContext,
+            for: teamDetailsContext(for: row),
             apiBaseURL: preferences.apiBaseURL
         )
     }
@@ -1349,10 +1500,10 @@ private struct LeagueTableCard: View {
             .lowercased()
     }
 
-    private func shortHeading(_ text: String, width: CGFloat) -> some View {
+    private func shortHeading(_ text: String, width: CGFloat, alignment: Alignment = .trailing) -> some View {
         Text(text)
             .font(.subheadline.weight(.semibold))
-            .frame(width: width, alignment: .trailing)
+            .frame(width: width, alignment: alignment)
     }
 
     private func statsHeading(
@@ -1375,7 +1526,7 @@ private struct LeagueTableCard: View {
             .frame(width: width, alignment: .trailing)
     }
 
-    private func positionCell(_ row: LeagueTableRow) -> some View {
+    private func positionCell(_ row: LeagueTableRow, zones: [LeagueTableZone]) -> some View {
         HStack(spacing: 2) {
             trendIcon(for: row)
             Text(String(row.position))
@@ -1385,29 +1536,29 @@ private struct LeagueTableCard: View {
         }
         .frame(width: 40, alignment: .trailing)
         .overlay(alignment: .leading) {
-            positionRail(for: row, height: 28)
+            positionRail(for: row, height: 28, zones: zones)
         }
     }
 
-    private func compactPositionCell(_ row: LeagueTableRow) -> some View {
+    private func compactPositionCell(_ row: LeagueTableRow, zones: [LeagueTableZone]) -> some View {
         HStack(spacing: 1) {
             trendIcon(for: row)
             Text(String(row.position))
                 .font(.caption.monospacedDigit())
                 .lineLimit(1)
         }
-        .padding(.leading, league.zones.isEmpty ? 0 : 6)
+        .padding(.leading, zones.isEmpty ? 0 : 6)
         .frame(width: 30, alignment: .leading)
         .overlay(alignment: .leading) {
-            positionRail(for: row, height: 26)
+            positionRail(for: row, height: 26, zones: zones)
         }
     }
 
     @ViewBuilder
-    private func positionRail(for row: LeagueTableRow, height: CGFloat) -> some View {
-        if !league.zones.isEmpty {
+    private func positionRail(for row: LeagueTableRow, height: CGFloat, zones: [LeagueTableZone]) -> some View {
+        if !zones.isEmpty {
             RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-                .fill(zone(at: row.position).map(zoneColor) ?? Color.secondary.opacity(0.52))
+                .fill(zone(at: row.position, zones: zones).map(zoneColor) ?? Color.secondary.opacity(0.52))
                 .frame(width: 3, height: height)
                 .accessibilityHidden(true)
         }
@@ -1467,10 +1618,12 @@ private struct LeagueTableCard: View {
         return "Recent form: \(results.joined(separator: ", "))"
     }
 
-    private func accessibilityStats(for row: LeagueTableRow) -> String {
-        let zoneDescription = zone(at: row.position)
+    private func accessibilityStats(for row: LeagueTableRow, zones: [LeagueTableZone]) -> String {
+        let zoneDescription = zone(at: row.position, zones: zones)
             .map { " \(zoneDisplayLabel($0)) zone." } ?? ""
-        return "Position \(row.position), played \(row.played), won \(row.won), drawn \(row.drawn), lost \(row.lost), goals for \(row.goalsFor), goals against \(row.goalsAgainst), goal difference \(signedNumber(row.goalDifference)), \(row.points) points.\(zoneDescription) \(formAccessibilityLabel(Array(row.form.prefix(5))))"
+        let liveDescription = liveScores[TableLiveScore.teamKey(row.team)]
+            .map { " \($0.isLive ? "Live" : "Full time"): \($0.result) \($0.scored) to \($0.conceded)." } ?? ""
+        return "Position \(row.position), played \(row.played), won \(row.won), drawn \(row.drawn), lost \(row.lost), goals for \(row.goalsFor), goals against \(row.goalsAgainst), goal difference \(signedNumber(row.goalDifference)), \(row.points) points.\(zoneDescription)\(liveDescription) \(formAccessibilityLabel(Array(row.form.prefix(5))))"
     }
 
     @ViewBuilder
@@ -1527,22 +1680,22 @@ private struct LeagueTableCard: View {
         )
     }
 
-    private func zone(at position: Int) -> LeagueTableZone? {
-        league.zones.first { $0.contains(position: position) }
+    private func zone(at position: Int, zones: [LeagueTableZone]) -> LeagueTableZone? {
+        zones.first { $0.contains(position: position) }
     }
 
-    private func lookDownZonesStarting(at position: Int) -> [LeagueTableZone] {
-        league.zones.filter { $0.usesLookDownBoundary && $0.from == position }
+    private func lookDownZonesStarting(at position: Int, zones: [LeagueTableZone]) -> [LeagueTableZone] {
+        zones.filter { $0.usesLookDownBoundary && $0.from == position }
     }
 
-    private func lookUpZonesEnding(at position: Int) -> [LeagueTableZone] {
-        league.zones.filter { !$0.usesLookDownBoundary && $0.to == position }
+    private func lookUpZonesEnding(at position: Int, zones: [LeagueTableZone]) -> [LeagueTableZone] {
+        zones.filter { !$0.usesLookDownBoundary && $0.to == position }
     }
 
-    private func shouldShowStandardSeparator(in rows: [LeagueTableRow], after index: Int) -> Bool {
+    private func shouldShowStandardSeparator(in rows: [LeagueTableRow], after index: Int, zones: [LeagueTableZone]) -> Bool {
         guard index >= 0, index < rows.count - 1 else { return false }
-        guard lookUpZonesEnding(at: rows[index].position).isEmpty else { return false }
-        return lookDownZonesStarting(at: rows[index + 1].position).isEmpty
+        guard lookUpZonesEnding(at: rows[index].position, zones: zones).isEmpty else { return false }
+        return lookDownZonesStarting(at: rows[index + 1].position, zones: zones).isEmpty
     }
 
     private func zoneColor(_ zone: LeagueTableZone) -> Color {
@@ -1562,7 +1715,8 @@ private struct LeagueTableCard: View {
     private func zoneDisplayLabel(_ zone: LeagueTableZone) -> String {
         let descriptor = "\(zone.key) \(zone.label) \(zone.type)".lowercased()
         if descriptor.contains("playoff") || descriptor.contains("play-off") {
-            return descriptor.contains("releg") ? "Relegation play-off" : "Play-offs"
+            return descriptor.contains("releg") ? "Relegation play-off"
+                : descriptor.contains("promo") ? "Promotion play-offs" : "Play-offs"
         }
         return zone.label
     }

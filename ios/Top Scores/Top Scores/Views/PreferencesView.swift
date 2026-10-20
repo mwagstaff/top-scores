@@ -93,7 +93,6 @@ struct PreferencesView: View {
     @State private var isSendingTestNotification = false
     @State private var testNotificationStatusMessage: String?
     @State private var testNotificationStatusIsError = false
-    @State private var predictionDebugStatusMessage: String?
     @State private var deviceIDDebugStatusMessage: String?
     @State private var isMajorTeamsExpanded = false
     @State private var isEditingCustomFixtureView = false
@@ -241,7 +240,7 @@ struct PreferencesView: View {
                             .foregroundStyle(.secondary)
 
                         Toggle("TV channel logo", isOn: showCompactFixtureTvLogoBinding)
-                        Text("Shows the primary TV channel beneath the match time and alongside the prediction.")
+                        Text("Shows the primary TV channel beneath the match time.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
@@ -255,10 +254,6 @@ struct PreferencesView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
-                        Toggle("Predicted scores", isOn: showPredictedScoresBinding)
-                        Text("Shows a predicted scoreline on upcoming fixtures, and how it compared once the match finishes. Can also be toggled from the Fixtures screen.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
                     }
 
                     Section("Notifications") {
@@ -443,28 +438,6 @@ struct PreferencesView: View {
                             )
 
                             Text("Base URL: \(preferences.apiBaseURL)")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(.vertical, 4)
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            Text("Predictions")
-                                .font(.subheadline)
-                                .fontWeight(.semibold)
-
-                            Button("Clear saved predictions", role: .destructive) {
-                                FixturePredictionStore.clearAll()
-                                predictionDebugStatusMessage = "Cleared all saved predictions."
-                            }
-
-                            if let predictionDebugStatusMessage {
-                                Text(predictionDebugStatusMessage)
-                                    .font(.footnote)
-                                    .foregroundStyle(.secondary)
-                            }
-
-                            Text("Predictions are frozen once computed so they stay comparable to the eventual result. Clearing removes all saved predictions from this device.")
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                         }
@@ -716,13 +689,6 @@ struct PreferencesView: View {
         Binding(
             get: { preferences.showCompactFixtureFantasyLogo },
             set: { preferences.showCompactFixtureFantasyLogo = $0 }
-        )
-    }
-
-    private var showPredictedScoresBinding: Binding<Bool> {
-        Binding(
-            get: { preferences.showPredictedScores },
-            set: { preferences.showPredictedScores = $0 }
         )
     }
 

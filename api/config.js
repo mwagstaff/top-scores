@@ -124,7 +124,7 @@ const SERVER_CONFIG = {
       ? envCompetitionAllowlist
       : DEFAULT_COMPETITION_ALLOWLIST,
   teamRankingDefaultSource:
-    envTeamRankingDefaultSource || TEAM_RANKING_SOURCE_MERGED,
+    envTeamRankingDefaultSource || TEAM_RANKING_SOURCE_CLUBELO,
   teamRankingDefaultElo: envTeamRankingDefaultElo,
   teamLogoSource: "bundled",
   playerImageSource: PLAYER_IMAGE_SOURCE_BSD,

@@ -1676,17 +1676,22 @@ struct FantasyView: View {
         ]
 
         let rivalSquadsByEntryID = Dictionary(
-            uniqueKeysWithValues: fantasyViewModel.rivalSquads.map { ($0.entryID, $0) }
+            uniqueKeysWithValues: fantasyViewModel.rivalSquads
+                .filter { $0.squad.gameweekID == mySquad.gameweekID }
+                .map { ($0.entryID, $0) }
         )
         rows.append(contentsOf: rivalManagers.map { rival in
             let rivalSquad = rivalSquadsByEntryID[rival.entryID]
+            let savedScore = fantasyViewModel.rivalScoreGameweekID == mySquad.gameweekID
+                ? fantasyViewModel.rivalScoreSnapshots[rival.entryID] : nil
             return FantasyLeagueTableEntry(
                 entryID: rival.entryID,
                 teamName: rival.teamName,
                 managerName: rival.managerDisplayName,
-                currentGameweekScore: rivalSquad?.currentScore,
+                currentGameweekScore: rivalSquad?.currentScore ?? savedScore?.currentPoints,
                 allGameweeksScore: rivalSquad?.squad.seasonTotalPoints
                     ?? rivalSquad?.allGameweeksPoints
+                    ?? savedScore?.seasonPoints
                     ?? rival.overallPoints,
                 projectedGameweekPoints: rivalSquad?.projectedGameweekPoints,
                 isExpectedPointsLoading: rivalSquad?.isExpectedPointsLoading ?? false,
@@ -1834,33 +1839,32 @@ struct FantasyView: View {
                     .frame(height: 1)
 
                 ForEach(Array(rankedEntries.enumerated()), id: \.element.id) { index, entry in
-                    if entry.canOpenDetails {
-                        Button {
-                            openLeagueTableEntry(entry)
-                        } label: {
+                    ZStack(alignment: .trailing) {
+                        if entry.canOpenDetails {
+                            Button {
+                                openLeagueTableEntry(entry)
+                            } label: {
+                                rivalTableRow(rank: index + 1, entry: entry, scoreMode: rivalsScoreMode)
+                            }
+                            .buttonStyle(.plain)
+                        } else {
                             rivalTableRow(rank: index + 1, entry: entry, scoreMode: rivalsScoreMode)
                         }
-                        .buttonStyle(.plain)
-                        .contextMenu {
-                            if !entry.isUser {
-                                Button(role: .destructive) {
-                                    removeRival(entryID: entry.entryID)
-                                } label: {
-                                    Label("Remove", systemImage: "trash")
-                                }
+                        if !entry.isUser, fantasyViewModel.staleRivalEntryIDs.contains(entry.entryID) {
+                            FantasyRivalStaleIndicator(
+                                updatedAt: fantasyViewModel.rivalScoreSnapshots[entry.entryID]?.updatedAt
+                            )
+                            .padding(.trailing, 10)
+                        }
+                    }
+                    .contextMenu {
+                        if !entry.isUser {
+                            Button(role: .destructive) {
+                                removeRival(entryID: entry.entryID)
+                            } label: {
+                                Label("Remove", systemImage: "trash")
                             }
                         }
-                    } else {
-                        rivalTableRow(rank: index + 1, entry: entry, scoreMode: rivalsScoreMode)
-                            .contextMenu {
-                                if !entry.isUser {
-                                    Button(role: .destructive) {
-                                        removeRival(entryID: entry.entryID)
-                                    } label: {
-                                        Label("Remove", systemImage: "trash")
-                                    }
-                                }
-                            }
                     }
 
                     if index < rankedEntries.count - 1 {
@@ -2093,7 +2097,9 @@ struct FantasyView: View {
             .frame(width: 24)
 
             Group {
-                if entry.showsScoreLoadingIndicator(for: scoreMode) {
+                if entry.showsScoreLoadingIndicator(for: scoreMode),
+                   fantasyViewModel.loadingRivalEntryIDs.contains(entry.entryID),
+                   !fantasyViewModel.staleRivalEntryIDs.contains(entry.entryID) {
                     ProgressView()
                         .controlSize(.small)
                         .tint(.secondary)
@@ -2120,6 +2126,8 @@ struct FantasyView: View {
                 }
             }
             .frame(width: 44, alignment: .trailing)
+            .opacity(fantasyViewModel.staleRivalEntryIDs.contains(entry.entryID) ? 0 : 1)
+            .accessibilityHidden(fantasyViewModel.staleRivalEntryIDs.contains(entry.entryID))
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 10)
@@ -5014,12 +5022,8 @@ private struct FantasyPitchDetailToggleButton: View {
 }
 
 private struct FantasyPitchLivePill: View {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { context in
-            livePill(pulse: fantasyLivePulseIntensity(at: context.date, reduceMotion: reduceMotion))
-        }
+        livePill(pulse: 0)
     }
 
     private func livePill(pulse: Double) -> some View {
@@ -5055,12 +5059,8 @@ private struct FantasyPitchLivePill: View {
 private struct FantasyPlayerLiveScorePill: View {
     let points: Int
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { context in
-            liveScorePill(pulse: fantasyLivePulseIntensity(at: context.date, reduceMotion: reduceMotion))
-        }
+        liveScorePill(pulse: 0)
     }
 
     private func liveScorePill(pulse: Double) -> some View {
@@ -5095,23 +5095,11 @@ private struct FantasyPlayerLiveScorePill: View {
     }
 }
 
-private func fantasyLivePulseIntensity(at date: Date, reduceMotion: Bool) -> Double {
-    guard !reduceMotion else { return 0 }
-    let cycleDuration = 1.44
-    let cyclePosition = date.timeIntervalSinceReferenceDate
-        .truncatingRemainder(dividingBy: cycleDuration) / cycleDuration
-    return (1 - cos(cyclePosition * 2 * .pi)) / 2
-}
-
 private struct FantasyPlayerLiveOutline: View {
     let cornerRadius: CGFloat
 
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: reduceMotion)) { context in
-            outline(pulse: fantasyLivePulseIntensity(at: context.date, reduceMotion: reduceMotion))
-        }
+        outline(pulse: 0)
     }
 
     private func outline(pulse: Double) -> some View {
@@ -5893,6 +5881,34 @@ struct FantasyLeagueTableEntry: Identifiable, Hashable {
 
     func showsScoreLoadingIndicator(for mode: RivalsScoreMode) -> Bool {
         isLoadingDetails && scoreValue(for: mode) == nil
+    }
+}
+
+private struct FantasyRivalStaleIndicator: View {
+    let updatedAt: Date?
+    @State private var showsExplanation = false
+
+    var body: some View {
+        Button {
+            showsExplanation = true
+        } label: {
+            Image(systemName: "exclamationmark.triangle")
+                .foregroundStyle(.orange)
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Rival score may be out of date")
+        .accessibilityHint("Explains the update status")
+        .alert("Score update delayed", isPresented: $showsExplanation) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            if let updatedAt {
+                Text("This score may be out of date. Last updated \(updatedAt.formatted(date: .abbreviated, time: .shortened)). We’ll keep retrying automatically while the app is active.")
+            } else {
+                Text("We haven’t been able to load this rival’s score yet. We’ll keep retrying automatically while the app is active.")
+            }
+        }
     }
 }
 

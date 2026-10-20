@@ -3,6 +3,23 @@ import Testing
 @testable import Top_Scores
 
 struct LeagueTableZoneTests {
+    @Test func groupedZonesRoundTripAndOldCachesRemainReadable() throws {
+        let payload = #"""
+        {"league_id":"64","league_name":"UEFA Nations League","groups":[
+          {"name":"League A","rows":[],"zones":[{"key":"rel","label":"Relegation","type":"relegation","from":4,"to":4}]},
+          {"name":"League B","rows":[],"zones":[{"key":"promo","label":"Promotion","type":"promotion","from":1,"to":1}]},
+          {"name":"Old cache","rows":[]}
+        ],"rows":[]}
+        """#
+        let table = try JSONDecoder().decode(LeagueTable.self, from: Data(payload.utf8))
+        #expect(table.zones.isEmpty)
+        #expect(table.groups[0].zones[0].usesLookDownBoundary)
+        #expect(table.groups[1].zones[0].contains(position: 1))
+        #expect(table.groups[2].zones.isEmpty)
+        let restored = try JSONDecoder().decode(LeagueTable.self, from: JSONEncoder().encode(table))
+        #expect(restored == table)
+    }
+
     @Test func tableDecodesBSDZones() throws {
         let payload = """
         {

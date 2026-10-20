@@ -1840,6 +1840,17 @@ struct FantasyInitialSetupPayload: Hashable {
     let rivalCandidates: [FantasySetupRivalCandidate]
 }
 
+/// Only score summaries are persisted; full squad details are fetched on demand.
+struct FantasyRivalScoreSnapshot: Codable, Equatable {
+    let currentPoints: Int
+    let seasonPoints: Int?
+    let updatedAt: Date
+
+    static func storageKey(accountID: Int, season: String, gameweekID: Int) -> String {
+        "fantasy.rivalScores.v1.\(accountID).\(season).\(gameweekID)"
+    }
+}
+
 struct FantasyRivalSquad: Identifiable, Hashable {
     let entryID: Int
     let teamName: String

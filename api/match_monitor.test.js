@@ -1,6 +1,13 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
+const eplSeasonStatus = require("./epl_season_status");
+let eplSeasonActive = false;
+test.mock.method(eplSeasonStatus, "isEplSeasonActiveCached", () => eplSeasonActive);
+test.beforeEach(() => {
+  eplSeasonActive = false;
+});
+
 const matchMonitor = require("./match_monitor");
 const { __testHooks } = matchMonitor;
 
@@ -4007,6 +4014,7 @@ test("calculateFantasyCurrentScore recomputes from server live data for zero-min
 });
 
 test("buildLiveActivityPresentationForUser includes synced fantasy score when available", () => {
+  eplSeasonActive = true;
   const nowMs = Date.now();
   const kickoffMs = nowMs + 10 * 60 * 1000;
   const kickoff = formatLocalDateTimeParts(kickoffMs);
@@ -4055,6 +4063,7 @@ test("buildLiveActivityPresentationForUser includes synced fantasy score when av
 });
 
 test("buildLiveActivityPresentationForUser omits fantasy score when no fantasy team is connected", () => {
+  eplSeasonActive = true;
   const nowMs = Date.now();
   const kickoffMs = nowMs + 10 * 60 * 1000;
   const kickoff = formatLocalDateTimeParts(kickoffMs);
@@ -4092,6 +4101,16 @@ test("buildLiveActivityPresentationForUser omits fantasy score when no fantasy t
   );
 
   assert.equal(presentation.mode, "single_upcoming");
+  assert.equal(presentation.fantasyCurrentScore, null);
+});
+
+test("buildLiveActivityPresentationForUser omits synced fantasy score outside the active season", () => {
+  eplSeasonActive = false;
+  const presentation = __testHooks.buildLiveActivityPresentationForUser(
+    liveActivityUserWithFantasyScore(29, 0),
+    []
+  );
+
   assert.equal(presentation.fantasyCurrentScore, null);
 });
 
@@ -6620,6 +6639,42 @@ test("evaluateUserNotificationDecision uses the Fixtures current-season category
   } finally {
     __testHooks.setNotificationFixtureCategoryFilter(null);
   }
+});
+
+test("evaluateUserNotificationDecision bypasses the viewing delay only for kick-off", () => {
+  const user = {
+    apnsToken: "apns-token",
+    preferences: {
+      notificationsEnabled: true,
+      notificationDelayMinutes: 5,
+      notificationAllMajorMatchesEnabled: false,
+      selectedNotificationLeagues: ["Premier League"],
+    },
+  };
+  const match = { home_team: "Arsenal", away_team: "Chelsea", league: "Premier League" };
+
+  for (const type of ["kickoff", "goal", "redcard", "var", "halftime", "fulltime"]) {
+    const decision = __testHooks.evaluateUserNotificationDecision(user, match, { type });
+    assert.equal(decision.shouldNotify, true, type);
+    assert.equal(decision.delayMinutes, type === "kickoff" ? 0 : 5, type);
+  }
+});
+
+test("evaluateUserNotificationDecision still respects kick-off notification opt-out", () => {
+  const decision = __testHooks.evaluateUserNotificationDecision(
+    {
+      apnsToken: "apns-token",
+      preferences: {
+        notificationsEnabled: true,
+        notificationDelayMinutes: 5,
+        notificationEventTypes: ["goal"],
+      },
+    },
+    { home_team: "Arsenal", away_team: "Chelsea", league: "Premier League" },
+    { type: "kickoff" }
+  );
+  assert.equal(decision.shouldNotify, false);
+  assert.equal(decision.reason, "event_type_filtered_out");
 });
 
 test("evaluateUserNotificationDecision uses the Fixtures current-season EPL filter for legacy preferences", () => {

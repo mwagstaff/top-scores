@@ -6,9 +6,9 @@ const { zonedDateTimeToUtcMs } = require("./match_time");
 
 const DAY = 86400000;
 const RETENTION_DAYS = 45;
-const SCREENS = new Set(["fixtures", "results", "scores", "match_detail", "tables", "fantasy", "predictions", "profile", "preferences", "about", "tv_listings"]);
+const SCREENS = new Set(["fixtures", "results", "scores", "match_detail", "tables", "fantasy", "profile", "preferences", "about", "tv_listings"]);
 const EVENTS = new Set([
-  "app_open", "screen_view", "match_details_loaded", "manual_refresh", "prediction_submitted", "live_activity_started",
+  "app_open", "screen_view", "match_details_loaded", "manual_refresh", "live_activity_started",
   "fixture_teams_changed", "fixture_competition_changed", "fixture_competition_favourites", "fixture_competition_all",
   "fixture_competition_favourites_saved", "fixture_premier_league_matches_preset", "fixture_top_teams_preset",
   "pref_epl_only_toggle", "pref_home_nations_toggle", "pref_major_uefa_toggle", "pref_major_tournaments_toggle",
@@ -95,7 +95,7 @@ function summaryPipeline(now, buildType = "production") {
 
 function routeFamily(path) {
   const part = String(path).replace(/^\/api\/v1\/?/, "").split("/")[0];
-  return new Set(["matches", "tables", "teams", "players", "competitions", "channels", "fantasy", "prediction-game", "goal-guesser", "preferences", "live-activity", "live-activities", "app-metrics", "reference", "notifications", "device-token", "stadium-artwork"]).has(part) ? part : "other";
+  return new Set(["matches", "tables", "teams", "players", "competitions", "channels", "fantasy", "goal-guesser", "preferences", "live-activity", "live-activities", "app-metrics", "reference", "notifications", "device-token", "stadium-artwork"]).has(part) ? part : "other";
 }
 
 function createAppAnalytics({ database = getDb, clock = Date.now } = {}) {

@@ -21,7 +21,6 @@ struct ContentView: View {
     @State private var fantasyTabNeedsAuthentication = false
     @StateObject private var fixturesCoordinator = FixturesViewCoordinator()
     @ObservedObject private var tablesNavigationCoordinator = TablesNavigationCoordinator.shared
-    @ObservedObject private var leagueInvitations = PredictionLeagueInvitationRouter.shared
 
     private static let tablesTabIndex = 1
 
@@ -113,20 +112,12 @@ struct ContentView: View {
         .onChange(of: selectedTab) { _, tab in CrashBreadcrumbs.record("tab \(tab)") }
         .background(FootballVisualStyle.pageBackground)
         .tint(Color.accentColor)
-        .environment(\.returnFromPredictionGameToFixtures) {
-            selectedTab = 0
-            fixturesCoordinator.requestReturnToFixtures()
-        }
         .onChange(of: tablesNavigationCoordinator.pendingTarget) { _, newValue in
             guard newValue != nil else { return }
             if selectedTab != Self.tablesTabIndex {
                 tablesNavigationCoordinator.setReturnTabIndex(selectedTab)
             }
             selectedTab = Self.tablesTabIndex
-        }
-        .onChange(of: leagueInvitations.pendingInvitation, initial: true) { _, invitation in
-            guard invitation != nil else { return }
-            selectedTab = 0
         }
         .onChange(of: tablesNavigationCoordinator.returnRequestToken) { _, _ in
             if let originTab = tablesNavigationCoordinator.consumeReturnTabIndex() {

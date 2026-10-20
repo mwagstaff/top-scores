@@ -11,7 +11,6 @@ struct MatchDetailView: View {
 
     let match: Match
     var showFantasyBadge: Bool = true
-    var predictionDisplay: FixturePredictionDisplayState = .hidden
 
     @State private var actionAlert: MatchActionAlert?
     @State private var showCalendarPicker = false
@@ -232,7 +231,6 @@ struct MatchDetailView: View {
                     MatchDetailScoreboardHero(
                         match: activeMatch,
                         kickoffText: kickoffText,
-                        predictionDisplay: predictionDisplay,
                         teamCompetitionEntries: teamCompetitionEntries
                     )
 
@@ -362,8 +360,13 @@ struct MatchDetailView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active, screenOpenedAt != nil {
                 loadDiagnostics.start(matchID: match.matchDetailsID ?? match.id)
+                if let baseURL = URL(string: preferences.apiBaseURL) {
+                    launchDetailsRefreshLoop(baseURL: baseURL)
+                }
             } else {
                 loadDiagnostics.stop()
+                detailsRefreshTask?.cancel()
+                detailsRefreshTask = nil
             }
         }
         .onChange(of: preferences.apiBaseURL) { _, _ in
@@ -529,6 +532,8 @@ struct MatchDetailView: View {
 
     private func launchDetailsRefreshLoop(baseURL: URL, loadCache: Bool = false) {
         detailsRefreshTask?.cancel()
+        detailsRefreshTask = nil
+        guard scenePhase == .active, screenOpenedAt != nil else { return }
         detailsRefreshTask = Task {
             if loadCache, let detailsID = match.matchDetailsID {
                 loadDiagnostics.mark(stage: "cache_load_started")
@@ -1022,22 +1027,18 @@ private struct MatchHeroStadiumImage: View {
 
 struct MatchDetailScoreboardHero: View {
     @EnvironmentObject private var preferences: PreferencesStore
-    @Environment(\.predictionGameStore) private var predictionGame
     let match: Match
     let kickoffText: String
-    let predictionDisplay: FixturePredictionDisplayState
     let teamCompetitionEntries: [MatchTeamCompetitionEntry]
     @ScaledMetric(relativeTo: .headline) private var teamNameRowHeight: CGFloat = 46
 
     init(
         match: Match,
         kickoffText: String,
-        predictionDisplay: FixturePredictionDisplayState,
         teamCompetitionEntries: [MatchTeamCompetitionEntry]
     ) {
         self.match = match
         self.kickoffText = kickoffText
-        self.predictionDisplay = predictionDisplay
         self.teamCompetitionEntries = teamCompetitionEntries
     }
 
@@ -1157,19 +1158,6 @@ struct MatchDetailScoreboardHero: View {
                 }
                 .padding(12)
                 .background(Color.black.opacity(0.32), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-            }
-
-            PredictionGameMatchAvailability(match: match) { hasGamePrediction in
-                if preferences.showPredictedScores && (predictionDisplay != .hidden || hasGamePrediction) {
-                    MatchDetailPredictionPanel(match: match, predictionDisplay: predictionDisplay)
-                }
-            }
-            .background {
-                if let predictionGame, let fixtureID = match.predictionGameFixtureID {
-                    PredictionGameFixtureHydration(
-                        store: predictionGame, fixtureIDs: [fixtureID], apiBaseURL: preferences.apiBaseURL
-                    )
-                }
             }
 
             if let extendedMatchStatusText = match.extendedMatchStatusText {
@@ -1442,207 +1430,6 @@ private struct MatchTeamCompetitionBadge: View {
             cacheVersion &+= 1
         }
         .accessibilityHidden(true)
-    }
-}
-
-private enum MatchPredictionHelpTopic: String, Identifiable {
-    case score
-    case chances
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .score: "How the predicted score works"
-        case .chances: "How predicted chances work"
-        }
-    }
-
-    var message: String {
-        switch self {
-        case .score:
-            "The predicted score is sampled from the model’s expected-goals estimate for each team. It is generated once for the fixture and then kept unchanged, so it can be compared fairly with the final result."
-        case .chances:
-            "Home win, draw and away win percentages come from the model’s outcome probabilities and are normalised to total 100%. They are estimates, not betting odds or guarantees."
-        }
-    }
-}
-
-private struct MatchDetailPredictionPanel: View {
-    @EnvironmentObject private var preferences: PreferencesStore
-    @AppStorage(PredictionGameStore.enabledPreferenceKey) private var isPredictionGameEnabled = false
-    let match: Match
-    let predictionDisplay: FixturePredictionDisplayState
-
-    @State private var helpTopic: MatchPredictionHelpTopic?
-
-    private var previewScore: PredictionGameScore? {
-        guard case let .available(homeGoals, awayGoals, _, _, _) = predictionDisplay else { return nil }
-        return PredictionGameScore(homeScore: homeGoals, awayScore: awayGoals)
-    }
-
-    var body: some View {
-        Group {
-            if isPredictionGameEnabled && match.predictionGameFixtureID != nil {
-                PredictionGameMatchControl(match: match, isLargePresentation: true, previewScore: previewScore) { EmptyView() }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                switch predictionDisplay {
-                case .hidden:
-                    PredictionGameMatchControl(match: match, isLargePresentation: true) { EmptyView() }
-                case .pending:
-                    PredictionGameMatchControl(match: match, isLargePresentation: true) {
-                        HStack(spacing: 8) {
-                            ProgressView().tint(.white)
-                            Text("Calculating prediction…")
-                                .font(.subheadline.weight(.medium))
-                                .foregroundStyle(.white.opacity(0.82))
-                        }
-                    }
-                    .frame(maxWidth: .infinity, minHeight: 66)
-                case let .available(homeGoals, awayGoals, homeWin, draw, awayWin):
-                    HStack(alignment: .top, spacing: 14) {
-                        VStack(alignment: .leading, spacing: 8) {
-                            helpLabel("Predicted", topic: .score)
-                            PredictionGameMatchControl(
-                                match: match, isLargePresentation: true,
-                                previewScore: PredictionGameScore(homeScore: homeGoals, awayScore: awayGoals)
-                            ) {
-                                HStack(spacing: 6) {
-                                    if match.isFinished, predictionWasCorrect(homeGoals: homeGoals, awayGoals: awayGoals) {
-                                        Image(systemName: "checkmark.seal.fill")
-                                            .font(.caption.weight(.bold))
-                                    }
-                                    Text("\(homeGoals) – \(awayGoals)")
-                                        .font(.title2.monospacedDigit().weight(.bold))
-                                }
-                                .foregroundStyle(predictionAccent(homeGoals: homeGoals, awayGoals: awayGoals))
-                                .accessibilityLabel(predictionAccessibilityLabel(homeGoals: homeGoals, awayGoals: awayGoals))
-                            }
-                        }
-                        .frame(width: 112, alignment: .leading)
-
-                        Rectangle()
-                            .fill(Color.white.opacity(0.18))
-                            .frame(width: 1, height: 70)
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            helpLabel("Predicted chances", topic: .chances)
-
-                            HStack(spacing: 10) {
-                                chance(title: "Home", value: homeWin, color: .predictedScore)
-                                chance(title: "Draw", value: draw, color: Color.white.opacity(0.72))
-                                chance(title: "Away", value: awayWin, color: .predictedAwayWin)
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-            }
-        }
-        .padding(14)
-        .background(Color.black.opacity(0.42), in: RoundedRectangle(cornerRadius: 15, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 15, style: .continuous)
-                .stroke(Color.white.opacity(0.16), lineWidth: 1)
-        }
-        .crashBreadcrumb("match_prediction_help", isPresented: helpTopic != nil)
-        .sheet(item: $helpTopic) { topic in
-            NavigationStack {
-                VStack(alignment: .leading, spacing: 18) {
-                    Image(systemName: topic == .score ? "scope" : "chart.bar.xaxis")
-                        .font(.system(size: 34, weight: .semibold))
-                        .foregroundStyle(topic == .score ? Color.predictedScore : Color.predictedAwayWin)
-
-                    Text(topic.title)
-                        .font(.title2.weight(.bold))
-
-                    Text(topic.message)
-                        .font(.body)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-
-                    Spacer(minLength: 0)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(24)
-                .toolbar {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button("Done") { helpTopic = nil }
-                    }
-                }
-            }
-            .presentationDetents([.medium])
-            .presentationDragIndicator(.visible)
-        }
-    }
-
-    private func helpLabel(_ title: String, topic: MatchPredictionHelpTopic) -> some View {
-        HStack(spacing: 0) {
-            Text(title)
-                .font(.caption2.weight(.semibold))
-                .textCase(.uppercase)
-                .foregroundStyle(.white.opacity(0.70))
-                .lineLimit(1)
-                .minimumScaleFactor(0.72)
-
-            Button {
-                helpTopic = topic
-            } label: {
-                Image(systemName: "info.circle")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.78))
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("About \(title.lowercased())")
-        }
-        .frame(height: 44, alignment: .center)
-    }
-
-    private func chance(title: String, value: Double, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.system(size: 9, weight: .semibold))
-                .textCase(.uppercase)
-                .foregroundStyle(.white.opacity(0.58))
-            Text("\(Int((value * 100).rounded()))%")
-                .font(.caption.monospacedDigit().weight(.bold))
-                .foregroundStyle(color)
-            Capsule()
-                .fill(Color.white.opacity(0.14))
-                .frame(height: 4)
-                .overlay(alignment: .leading) {
-                    GeometryReader { proxy in
-                        Capsule()
-                            .fill(color)
-                            .frame(width: proxy.size.width * max(0, min(1, value)))
-                    }
-                }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(title) \(Int((value * 100).rounded())) percent")
-    }
-
-    private func predictionWasCorrect(homeGoals: Int, awayGoals: Int) -> Bool {
-        match.homeScore == homeGoals && match.awayScore == awayGoals
-    }
-
-    private func predictionAccent(homeGoals: Int, awayGoals: Int) -> Color {
-        guard match.isFinished else { return .predictedScore }
-        return predictionWasCorrect(homeGoals: homeGoals, awayGoals: awayGoals)
-            ? .liveMatch
-            : Color.white.opacity(0.62)
-    }
-
-    private func predictionAccessibilityLabel(homeGoals: Int, awayGoals: Int) -> String {
-        let base = "Predicted score \(homeGoals) to \(awayGoals)"
-        guard match.isFinished else { return base }
-        return predictionWasCorrect(homeGoals: homeGoals, awayGoals: awayGoals)
-            ? "\(base), correct"
-            : "\(base), final score was different"
     }
 }
 
@@ -3188,6 +2975,8 @@ private struct MatchLineupPitchSection: View {
                     .foregroundStyle(.primary)
 
                 MatchLineupTeamPanelsView(
+                    matchID: match.matchDetailsID,
+                    isLive: match.isInProgress,
                     homeLineup: home,
                     awayLineup: away,
                     fallbackHomeTeamName: match.homeTeam,
@@ -3213,6 +3002,13 @@ private struct MatchLineupTeamPanelsView: View {
     @ObservedObject private var teamColorCatalog = TeamColorCatalog.shared
     @State private var selectedPlayer: MatchLineupPlayer?
 
+    @State private var showsRatings = true
+    @State private var statsByPlayer: [String: MatchPlayerStats] = [:]
+    @State private var isLoadingStats = false
+    @State private var statsError: String?
+
+    let matchID: String?
+    let isLive: Bool
     let homeLineup: MatchTeamLineup
     let awayLineup: MatchTeamLineup
     let fallbackHomeTeamName: String
@@ -3228,8 +3024,17 @@ private struct MatchLineupTeamPanelsView: View {
     let homeRedCards: [MatchRedCardEvent]
     let awayRedCards: [MatchRedCardEvent]
 
-    private var homeTeamName: String { homeLineup.team ?? fallbackHomeTeamName }
-    private var awayTeamName: String { awayLineup.team ?? fallbackAwayTeamName }
+    private func enriched(_ lineup: MatchTeamLineup) -> MatchTeamLineup {
+        MatchTeamLineup(team: lineup.team, manager: lineup.manager, formation: lineup.formation,
+            startingLineup: lineup.startingLineup.map { $0.withMatchStats(statsByPlayer[$0.idPlayer ?? ""]) },
+            substitutes: lineup.substitutes.map { $0.withMatchStats(statsByPlayer[$0.idPlayer ?? ""]) },
+            substitutions: lineup.substitutions)
+    }
+    private var displayHomeLineup: MatchTeamLineup { enriched(homeLineup) }
+    private var displayAwayLineup: MatchTeamLineup { enriched(awayLineup) }
+
+    private var homeTeamName: String { displayHomeLineup.team ?? fallbackHomeTeamName }
+    private var awayTeamName: String { displayAwayLineup.team ?? fallbackAwayTeamName }
 
     private var homeTeamColors: TeamLineupNumberColors {
         teamColorCatalog.lineupColors(
@@ -3253,7 +3058,7 @@ private struct MatchLineupTeamPanelsView: View {
             assists: homeAssists,
             yellowCards: homeYellowCards,
             redCards: homeRedCards,
-            substitutions: homeLineup.substitutions
+            substitutions: displayHomeLineup.substitutions
         )
     }
 
@@ -3263,15 +3068,32 @@ private struct MatchLineupTeamPanelsView: View {
             assists: awayAssists,
             yellowCards: awayYellowCards,
             redCards: awayRedCards,
-            substitutions: awayLineup.substitutions
+            substitutions: displayAwayLineup.substitutions
         )
     }
 
     var body: some View {
         VStack(spacing: 14) {
+            Picker("Pitch badges", selection: $showsRatings) {
+                Text("Ratings").tag(true)
+                Text("Shirt numbers").tag(false)
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("lineupBadgeMode")
+            if showsRatings {
+                if isLoadingStats && statsByPlayer.isEmpty {
+                    ProgressView("Loading match ratings")
+                } else if let statsError {
+                    Button(statsError + " · Retry") { Task { await loadStats() } }
+                        .font(.caption)
+                } else {
+                    Text("Match ratings out of 10 · – means not available")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             VStack(spacing: 0) {
                 teamHeader(
-                    lineup: homeLineup,
+                    lineup: displayHomeLineup,
                     teamName: homeTeamName,
                     teamID: homeTeamID,
                     side: .home
@@ -3294,18 +3116,20 @@ private struct MatchLineupTeamPanelsView: View {
 
                         VStack(spacing: 0) {
                             MatchLineupCombinedFormationHalf(
-                                lineup: homeLineup,
+                                lineup: displayHomeLineup,
                                 side: .home,
                                 lookup: homeLookup,
                                 teamColors: homeTeamColors,
+                                showsRatings: showsRatings,
                                 onSelectPlayer: { selectedPlayer = $0 }
                             )
 
                             MatchLineupCombinedFormationHalf(
-                                lineup: awayLineup,
+                                lineup: displayAwayLineup,
                                 side: .away,
                                 lookup: awayLookup,
                                 teamColors: awayTeamColors,
+                                showsRatings: showsRatings,
                                 onSelectPlayer: { selectedPlayer = $0 }
                             )
                         }
@@ -3321,24 +3145,24 @@ private struct MatchLineupTeamPanelsView: View {
                 .clipped()
 
                 teamHeader(
-                    lineup: awayLineup,
+                    lineup: displayAwayLineup,
                     teamName: awayTeamName,
                     teamID: awayTeamID,
                     side: .away
                 )
 
-                if !matchLineupBenchPlayers(in: homeLineup).isEmpty {
+                if !matchLineupBenchPlayers(in: displayHomeLineup).isEmpty {
                     substitutes(
-                        lineup: homeLineup,
+                        lineup: displayHomeLineup,
                         teamName: homeTeamName,
                         lookup: homeLookup,
                         teamColors: homeTeamColors
                     )
                 }
 
-                if !matchLineupBenchPlayers(in: awayLineup).isEmpty {
+                if !matchLineupBenchPlayers(in: displayAwayLineup).isEmpty {
                     substitutes(
-                        lineup: awayLineup,
+                        lineup: displayAwayLineup,
                         teamName: awayTeamName,
                         lookup: awayLookup,
                         teamColors: awayTeamColors
@@ -3355,10 +3179,31 @@ private struct MatchLineupTeamPanelsView: View {
 
             MatchLineupMarkerLegend()
         }
+        .task(id: "\(matchID ?? "")|\(isLive)") {
+            repeat {
+                await loadStats()
+                guard isLive else { break }
+                do { try await Task.sleep(for: .seconds(60)) } catch { break }
+            } while !Task.isCancelled
+        }
         .crashBreadcrumb("match_player", isPresented: selectedPlayer != nil)
         .sheet(item: $selectedPlayer) { player in
-            PlayerDetailsSheet(player: player, apiBaseURL: preferences.apiBaseURL)
+            PlayerDetailsSheet(player: player.withMatchStats(statsByPlayer[player.idPlayer ?? ""]), apiBaseURL: preferences.apiBaseURL, matchID: matchID)
         }
+    }
+
+    private func loadStats() async {
+        guard let matchID, let baseURL = URL(string: preferences.apiBaseURL) else { return }
+        isLoadingStats = true
+        defer { isLoadingStats = false }
+        do {
+            let response = try await APIClient(baseURL: baseURL).fetchMatchPerformance(matchId: matchID)
+            try Task.checkCancellation()
+            statsByPlayer = Dictionary(response.players.map { ($0.player_id, $0.stats) }, uniquingKeysWith: { _, new in new })
+            statsError = nil
+        } catch is CancellationError { return }
+        catch let error as URLError where error.code == .cancelled { return }
+        catch { statsError = "Ratings temporarily unavailable" }
     }
 
     private func teamHeader(
@@ -3434,6 +3279,10 @@ private struct MatchLineupTeamPanelsView: View {
                                 borderOutlineColor: teamColors.foreground
                             )
 
+                            if showsRatings, let rating = playerOn.matchStats?.displayRating {
+                                MatchPlayerRatingBadge(rating: rating)
+                            }
+
                             Text(condensedLineupPlayerName(playerOn.name))
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.primary)
@@ -3468,6 +3317,7 @@ private struct MatchLineupCombinedFormationHalf: View {
     let side: MatchLineupDisplaySide
     let lookup: MatchLineupMarkerLookup
     let teamColors: TeamLineupNumberColors
+    let showsRatings: Bool
     let onSelectPlayer: (MatchLineupPlayer) -> Void
 
     private var rows: [[MatchLineupPlayer]] {
@@ -3525,6 +3375,7 @@ private struct MatchLineupCombinedFormationHalf: View {
                                 player: player,
                                 markers: lookup.markers(for: player),
                                 teamColors: teamColors,
+                                showsRatings: showsRatings,
                                 portraitDiameter: portraitDiameter,
                                 nameMaxWidth: nameMaxWidth,
                                 onSelectPlayer: onSelectPlayer
@@ -3585,10 +3436,26 @@ private struct MatchLineupCombinedFormationHalf: View {
     }
 }
 
+private struct MatchPlayerRatingBadge: View {
+    let rating: Double
+
+    var body: some View {
+        Text(rating, format: .number.precision(.fractionLength(1)))
+            .font(.caption2.monospacedDigit().bold())
+            .foregroundStyle(.black)
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(rating >= 8 ? Color.mint : rating >= 6 ? Color.yellow : Color.orange, in: Capsule())
+            .accessibilityLabel("Match rating")
+            .accessibilityValue("\(rating.formatted(.number.precision(.fractionLength(1)))) out of 10")
+    }
+}
+
 private struct MatchLineupPlayerTacticalMarker: View {
     let player: MatchLineupPlayer
     let markers: [MatchLineupMarker]
     let teamColors: TeamLineupNumberColors
+    let showsRatings: Bool
     let portraitDiameter: CGFloat
     let nameMaxWidth: CGFloat
     let onSelectPlayer: (MatchLineupPlayer) -> Void
@@ -3607,7 +3474,19 @@ private struct MatchLineupPlayerTacticalMarker: View {
                         borderLineWidth: 2
                     )
 
-                    if let number = player.number {
+                    if showsRatings {
+                        Group {
+                            if let rating = player.matchStats?.displayRating {
+                                MatchPlayerRatingBadge(rating: rating)
+                            } else {
+                                Text("–").font(.caption2.bold())
+                                    .padding(.horizontal, 6).padding(.vertical, 3)
+                                    .background(.regularMaterial, in: Capsule())
+                                    .accessibilityLabel("Match rating not available")
+                            }
+                        }
+                        .offset(x: -6, y: -2)
+                    } else if let number = player.number {
                         Text("\(number)")
                             .font(.system(size: 9.5, weight: .black, design: .rounded))
                             .foregroundStyle(teamColors.foreground)
@@ -4305,10 +4184,11 @@ private struct PlayerDetailsSheet: View {
 
     let player: MatchLineupPlayer
     let apiBaseURL: String
+    var matchID: String? = nil
 
     var body: some View {
         NavigationStack {
-            PlayerDetailsView(player: player, apiBaseURL: apiBaseURL)
+            PlayerDetailsView(player: player, apiBaseURL: apiBaseURL, matchID: matchID)
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button("Done") { dismiss() }
@@ -4323,15 +4203,20 @@ struct PlayerDetailsView: View {
 
     let player: MatchLineupPlayer
     let apiBaseURL: String
+    let matchID: String?
 
+    @State private var history: [PlayerMatchHistory] = []
+    @State private var isLoadingHistory = true
+    @State private var historyError: String?
     @State private var details: PlayerDetails?
     @State private var errorMessage: String?
     @State private var isLoadingDetails = false
     @State private var heroIsPresented = false
 
-    init(player: MatchLineupPlayer, apiBaseURL: String, initialDetails: PlayerDetails? = nil) {
+    init(player: MatchLineupPlayer, apiBaseURL: String, initialDetails: PlayerDetails? = nil, matchID: String? = nil) {
         self.player = player
         self.apiBaseURL = apiBaseURL
+        self.matchID = matchID
         _details = State(initialValue: initialDetails)
     }
 
@@ -4360,6 +4245,21 @@ struct PlayerDetailsView: View {
         ScrollView {
             VStack(spacing: 14) {
                 hero
+
+                if let stats = player.matchStats ?? history.first(where: { $0.event_id == matchID })?.stats, (stats.minutesPlayed ?? 0) > 0 || stats.displayRating != nil {
+                    matchStatisticsCard(stats)
+                } else if matchID != nil {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("This match").font(.headline)
+                        Text(isLoadingHistory ? "Loading match statistics…" : "Match statistics are not available yet.")
+                            .font(.subheadline)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(16).background(cardBackground)
+                    .foregroundStyle(.white)
+                }
+
+                matchHistoryCard
 
                 if isLoadingDetails {
                     ProgressView("Loading more player details")
@@ -4406,6 +4306,128 @@ struct PlayerDetailsView: View {
         .task(id: player.idPlayer) {
             await loadDetails()
         }
+        .task(id: "history|\(player.idPlayer ?? "")") {
+            await loadHistory()
+        }
+    }
+
+    private var matchHistoryCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Recent matches").font(.headline)
+            if isLoadingHistory { ProgressView("Loading ratings and results") }
+            if let historyError {
+                Text(historyError).font(.subheadline)
+                Button("Try again") { Task { await loadHistory() } }
+            } else if !isLoadingHistory && history.isEmpty {
+                Text("No recent appearances available.").font(.subheadline)
+            }
+            ForEach(history) { entry in
+                if let match = entry.match, match.matchDetailsID != nil {
+                    NavigationLink {
+                        MatchDetailView(match: match, showFantasyBadge: false)
+                    } label: {
+                        matchHistoryRow(entry, canOpen: true)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Opens match details")
+                } else {
+                    matchHistoryRow(entry, canOpen: false)
+                }
+                if entry.id != history.last?.id { Divider() }
+            }
+            Text("Latest appearances in the last 90 days. Ratings shown where available.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16).background(cardBackground)
+        .environment(\.colorScheme, .dark)
+    }
+
+    private func matchHistoryRow(_ entry: PlayerMatchHistory, canOpen: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(historyDate(entry.date)).font(.caption).foregroundStyle(.secondary)
+            HStack(alignment: .top, spacing: 10) {
+                if let result = entry.result {
+                    Text(result).font(.caption.bold())
+                        .foregroundStyle(result == "W" ? .green : result == "L" ? .red : .secondary)
+                        .accessibilityLabel(result == "W" ? "Win" : result == "L" ? "Loss" : "Draw")
+                }
+                Text("\(entry.home_team) \(entry.score) \(entry.away_team)")
+                    .font(.subheadline).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                if let rating = entry.stats.displayRating {
+                    MatchPlayerRatingBadge(rating: rating)
+                } else {
+                    Text("–").accessibilityLabel("Rating not available")
+                }
+                if canOpen {
+                    Image(systemName: "chevron.right")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .accessibilityHidden(true)
+                }
+            }
+            .accessibilityElement(children: .combine)
+            if let note = entry.result_note {
+                Text(note).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+
+    private func historyDate(_ date: String) -> String {
+        ISO8601DateFormatter().date(from: date)?.formatted(date: .abbreviated, time: .omitted) ?? String(date.prefix(10))
+    }
+
+    private func loadHistory() async {
+        guard let id = player.idPlayer, let url = URL(string: apiBaseURL) else {
+            isLoadingHistory = false
+            return
+        }
+        isLoadingHistory = true
+        defer { isLoadingHistory = false }
+        do {
+            let response = try await APIClient(baseURL: url).fetchPlayerMatchHistory(playerId: id)
+            try Task.checkCancellation()
+            history = response.matches
+            historyError = nil
+        } catch is CancellationError { return }
+        catch let error as URLError where error.code == .cancelled { return }
+        catch { historyError = "Recent match ratings are temporarily unavailable." }
+    }
+
+    private func matchStatisticsCard(_ stats: MatchPlayerStats) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("This match").font(.headline)
+                Spacer()
+                if let rating = stats.displayRating {
+                    MatchPlayerRatingBadge(rating: rating)
+                }
+            }
+            if let minutes = stats.minutesPlayed { LabeledContent("Minutes played", value: "\(minutes)") }
+            if let goals = stats.goals { LabeledContent("Goals", value: "\(goals)") }
+            if let assists = stats.assists { LabeledContent("Assists", value: "\(assists)") }
+            if let shots = stats.totalShots { LabeledContent("Shots", value: "\(shots)") }
+            if let shots = stats.shotsOnTarget { LabeledContent("Shots on target", value: "\(shots)") }
+            if let passes = stats.accuratePasses, let total = stats.totalPasses {
+                LabeledContent("Completed passes", value: "\(passes) / \(total)")
+            }
+            if let tackles = stats.tackles { LabeledContent("Tackles", value: "\(tackles)") }
+            if player.positionCategory == "goalkeeper", let saves = stats.saves {
+                LabeledContent("Saves", value: "\(saves)")
+            }
+            if let xg = stats.expectedGoals {
+                LabeledContent("Expected goals", value: xg.formatted(.number.precision(.fractionLength(2))))
+            }
+            Text("BSD match statistics · Updated as data becomes available")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .padding(16)
+        .background(cardBackground)
+        .environment(\.colorScheme, .dark)
     }
 
     private var hero: some View {
@@ -4985,4 +5007,21 @@ private func hasLineupPortrait(_ player: MatchLineupPlayer) -> Bool {
         return false
     }
     return !value.isEmpty
+}
+
+
+#Preview("Match ratings — light and dark") {
+    VStack(spacing: 24) {
+        ForEach([ColorScheme.light, .dark], id: \.self) { scheme in
+            HStack {
+                MatchPlayerRatingBadge(rating: 8.7)
+                MatchPlayerRatingBadge(rating: 7.1)
+                MatchPlayerRatingBadge(rating: 5.4)
+            }
+            .padding()
+            .background(Color(.systemBackground))
+            .environment(\.colorScheme, scheme)
+        }
+    }
+    .environment(\.dynamicTypeSize, .accessibility2)
 }

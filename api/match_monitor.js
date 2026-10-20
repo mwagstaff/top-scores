@@ -3055,12 +3055,17 @@ async function sendNotificationForEvent(matchId, match, event) {
   }
 }
 
+function notificationDelayMinutesForEvent(prefs, event) {
+  // Kick-off alerts cannot spoil the match, so send them without a viewing delay.
+  return event.type === "kickoff" ? 0 : Number(prefs.notificationDelayMinutes || 0);
+}
+
 /**
  * Determine if a user should be notified about a match event
  */
 function evaluateUserNotificationDecision(user, match, event) {
   const prefs = user.preferences || {};
-  const delayMinutes = Number(prefs.notificationDelayMinutes || 0);
+  const delayMinutes = notificationDelayMinutesForEvent(prefs, event);
 
   // Check if notifications are enabled
   if (!prefs.notificationsEnabled) {
@@ -8084,7 +8089,7 @@ async function sendFantasyDeadlineReminderNow(reminderId, options = {}) {
  */
 async function scheduleNotificationForUser(user, matchId, match, event) {
   const prefs = user.preferences || {};
-  const delayMinutes = prefs.notificationDelayMinutes || 0;
+  const delayMinutes = notificationDelayMinutesForEvent(prefs, event);
   const delayMs = delayMinutes * 60 * 1000;
 
   // Create unique notification ID to prevent duplicates

@@ -607,8 +607,6 @@ struct Top_ScoresTests {
         #expect(!store.showFantasyExpectedPoints)
         #expect(!store.showFantasyRealTimePoints)
         #expect(!store.showsFantasyDataInFixtures)
-        #expect(!store.showPredictedScores)
-        #expect(!store.favouriteShowPredictedScores)
         #expect(!store.channelFilterEnabled)
     }
 
@@ -684,20 +682,21 @@ struct Top_ScoresTests {
         #expect(store.favouriteFixtureViewOptionIDs == [FixtureViewOptionID.competition("fa-cup")])
     }
 
-    @Test @MainActor func preferencesStore_persistsFavouritePredictionsSetting() async throws {
+    @Test @MainActor func preferencesStore_ignoresRetiredPredictionSettings() async throws {
         let defaults = UserDefaults(suiteName: #function)!
         defaults.removePersistentDomain(forName: #function)
+        defer { defaults.removePersistentDomain(forName: #function) }
+        defaults.set(true, forKey: "preferences.showPredictedScores")
+        defaults.set(true, forKey: "preferences.favouriteShowPredictedScores")
+        defaults.set(PreferencesStore.defaultFavouriteFixtureViewOptionIDs,
+                     forKey: "preferences.favouriteFixtureViewOptionIDs")
 
         let store = PreferencesStore(userDefaults: defaults)
         #expect(!store.hasUnsavedFixtureViewChanges)
-        store.showPredictedScores = true
-        #expect(store.hasUnsavedFixtureViewChanges)
-        store.favouriteShowPredictedScores = true
-        #expect(!store.hasUnsavedFixtureViewChanges)
-
-        let reloadedStore = PreferencesStore(userDefaults: defaults)
-        #expect(reloadedStore.showPredictedScores)
-        #expect(reloadedStore.favouriteShowPredictedScores)
+        #expect(!store.hasSavedFavouriteFixtureView)
+        let data = try JSONEncoder().encode(store.snapshot)
+        let payload = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(payload["favouriteShowPredictedScores"] == nil)
     }
 
     @Test @MainActor func preferencesStore_persistsCompactFixtureDisplaySettings() async throws {

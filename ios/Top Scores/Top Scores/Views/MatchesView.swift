@@ -256,8 +256,6 @@ final class FixturesViewCoordinator: ObservableObject {
     @Published var isDockEnabled = true
     @Published private(set) var isCompetitionDockExpanded = false
     @Published private(set) var toastMessage: String?
-    @Published private(set) var predictionWarmRequestToken = 0
-    @Published private(set) var returnToFixturesRequestToken = 0
 
     private var toastTask: Task<Void, Never>?
     private var dateSwipeNavigationReleaseTask: Task<Void, Never>?
@@ -384,14 +382,6 @@ final class FixturesViewCoordinator: ObservableObject {
         isFixtureSaveRecoveryButtonVisible = false
     }
 
-    func requestPredictionWarm() {
-        predictionWarmRequestToken &+= 1
-    }
-
-    func requestReturnToFixtures() {
-        returnToFixturesRequestToken &+= 1
-    }
-
     func showToast(_ message: String) {
         toastTask?.cancel()
         withAnimation {
@@ -420,15 +410,11 @@ struct MatchesView: View {
 
     @EnvironmentObject private var preferences: PreferencesStore
     @EnvironmentObject private var fantasyViewModel: FantasyViewModel
-    @Environment(\.predictionGameStore) private var predictionGame
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var openURL
     @AppStorage(AppGroupConfig.fantasyManagerEntryIDKey) private var fantasyManagerEntryID = ""
-    @State private var predictionIndex = FixturePredictionStore.allPredictions()
-    @State private var pendingPredictionDateKeys: Set<String> = []
-    @State private var attemptedPredictionDateKeys: Set<String> = []
     @State private var groupedSideEffectsTask: Task<Void, Never>?
     @State private var fixtureBrowseGroupingTask: Task<Void, Never>?
     @State private var fixtureBrowseGroupingRequestID = UUID()
@@ -456,8 +442,6 @@ struct MatchesView: View {
     @State private var showsCalendarSubscriptionError = false
     @State private var isTVListingsPresented = false
     @State private var isTeamSearchPresented = false
-    @State private var isPredictionMenuPresented = false
-    @ObservedObject private var leagueInvitations = PredictionLeagueInvitationRouter.shared
     @State private var pendingTeamSearchDestination: TeamDetailsContext?
     @State private var navigationTeam: TeamDetailsContext?
     init(
@@ -599,8 +583,7 @@ struct MatchesView: View {
         .navigationDestination(item: $navigationMatch) { nav in
             MatchDetailView(
                 match: nav.match,
-                showFantasyBadge: nav.showFantasyBadge,
-                predictionDisplay: nav.predictionDisplay
+                showFantasyBadge: nav.showFantasyBadge
             )
         }
         .navigationDestination(item: $navigationTeam) { context in
@@ -705,15 +688,6 @@ struct MatchesView: View {
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
-        .crashBreadcrumb("scores_beat_the_ai", isPresented: isPredictionMenuPresented)
-        .sheet(isPresented: $isPredictionMenuPresented) {
-            if let predictionGame {
-                PredictionGameMenuFlow(onPredictionsVisibilityChanged: predictionsVisibilityDidChange)
-                    .environmentObject(predictionGame)
-                    .presentationDetents([.large])
-                    .presentationDragIndicator(.visible)
-            }
-        }
     }
 
     private var activationObservedContent: some View {
@@ -780,20 +754,6 @@ struct MatchesView: View {
 
     private var preferencesObservedContent: some View {
         activationObservedContent
-        .onChange(of: leagueInvitations.pendingInvitation, initial: true) { _, invitation in
-            guard mode == .fixtures, invitation != nil else { return }
-            isPredictionMenuPresented = true
-        }
-        .onChange(of: fixturesCoordinator.predictionWarmRequestToken) { _, _ in
-            guard mode == .fixtures else { return }
-            warmPredictionsForVisibleDays(days: sourceGroupedDays)
-        }
-        .onChange(of: fixturesCoordinator.returnToFixturesRequestToken) { _, _ in
-            navigationMatch = nil
-            navigationTeam = nil
-            isPredictionMenuPresented = false
-            isTVListingsPresented = false
-        }
         .onChange(of: viewState.isLoading) { _, isLoading in
             guard !isLoading else { return }
             sendTimedScreenView()
@@ -841,26 +801,11 @@ struct MatchesView: View {
 
     var body: some View {
         preferencesObservedContent
-        .background {
-            if let predictionGame {
-                PredictionGameFixtureHydration(
-                    store: predictionGame,
-                    fixtureIDs: displayedMatchDays.flatMap(\.leagues).flatMap(\.matches).compactMap(\.predictionGameFixtureID),
-                    apiBaseURL: preferences.apiBaseURL,
-                    isActive: isSelected
-                )
-            }
-        }
         .onChange(of: viewState.groupedMatches) { _, days in
             if !usesFixtureBrowser {
                 refreshVisibleGroupedDays(from: days)
             }
-            // A refreshed fixture payload may now have markets for a day that was
-            // previously unavailable. Keep retries tied to data refreshes, never
-            // to a row appearing again while the list is being scrolled.
-            attemptedPredictionDateKeys.removeAll()
             guard isSelected else { return }
-            warmPredictionsForVisibleDays(days: days)
             scheduleGroupedSideEffects(for: days, immediate: false)
         }
         .onChange(of: fixtureBrowser.visibleMatches) { _, _ in
@@ -887,10 +832,6 @@ struct MatchesView: View {
         }
         .onChange(of: preferences.showFACupEarlyRounds) { _, _ in
             refreshVisibleGroupedDays(from: sourceGroupedDays, force: true)
-        }
-        .onReceive(NotificationCenter.default.publisher(for: FixturePredictionStore.didChangeNotification)) { _ in
-            guard isSelected else { return }
-            predictionIndex = FixturePredictionStore.allPredictions()
         }
         .onDisappear(perform: handleScreenDisappear)
     }
@@ -1041,42 +982,6 @@ struct MatchesView: View {
                     .presentationDragIndicator(.visible)
             }
 
-            Button { isPredictionMenuPresented = true } label: {
-                Image(systemName: "sparkles")
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(
-                        preferences.showPredictedScores
-                            ? Color.primary
-                            : FootballVisualStyle.predictionAccent
-                    )
-                    .frame(width: 44, height: 44)
-                    .background(
-                        FootballVisualStyle.predictionAccent.opacity(
-                            preferences.showPredictedScores ? 0.24 : 0.08
-                        ),
-                        in: Circle()
-                    )
-                    .overlay {
-                        Circle()
-                            .stroke(
-                                FootballVisualStyle.predictionAccent.opacity(
-                                    preferences.showPredictedScores ? 0.90 : 0.36
-                                ),
-                                lineWidth: 1
-                            )
-                    }
-                    .shadow(
-                        color: preferences.showPredictedScores
-                            ? FootballVisualStyle.predictionAccent.opacity(0.28)
-                            : .clear,
-                        radius: 8
-                    )
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Predictions and Beat the AI")
-            .accessibilityValue(preferences.showPredictedScores ? "On" : "Off")
-            .accessibilityHint("Opens prediction settings, your next picks, achievements and Game Center")
-            .accessibilityIdentifier("prediction-game-menu")
         }
     }
 
@@ -1291,18 +1196,6 @@ struct MatchesView: View {
             : .scale(scale: 0.74).combined(with: .opacity)
     }
 
-    private func predictionsVisibilityDidChange() {
-        if preferences.showPredictedScores {
-            fixturesCoordinator.requestPredictionWarm()
-        }
-        fixturesCoordinator.showToast(
-            preferences.showPredictedScores
-                ? "Showing predicted scores"
-                : "Hiding predicted scores"
-        )
-        reconcileFixtureSavePrompt()
-    }
-
     private func restoreFixtureSavePrompt() {
         let animation = Animation.timingCurve(0.22, 1, 0.36, 1, duration: 0.28)
         withAnimation(accessibilityReduceMotion ? nil : animation) {
@@ -1370,8 +1263,7 @@ struct MatchesView: View {
     private func navigateToTVMatch(_ match: Match) {
         navigationMatch = MatchNavigation(
             match: match,
-            showFantasyBadge: false,
-            predictionDisplay: .hidden
+            showFantasyBadge: false
         )
     }
 
@@ -1859,8 +1751,7 @@ struct MatchesView: View {
             }
             navigationMatch = MatchNavigation(
                 match: match,
-                showFantasyBadge: mode == .fixtures,
-                predictionDisplay: predictionDisplayState(for: match, dateKey: day.dateKey)
+                showFantasyBadge: mode == .fixtures
             )
         }
         let rowContent = HStack(spacing: 0) {
@@ -1868,8 +1759,7 @@ struct MatchesView: View {
                 match: match,
                 isFixtureMode: mode == .fixtures,
                 rowPreferences: matchRowPreferences,
-                fantasyContext: fantasyViewModel.matchRowContext,
-                predictionDisplay: predictionDisplayState(for: match, dateKey: day.dateKey)
+                fantasyContext: fantasyViewModel.matchRowContext
             )
             .equatable()
             FixtureMatchNavigationChevron(
@@ -1879,20 +1769,9 @@ struct MatchesView: View {
                 fantasyViewModel: fantasyViewModel
             )
         }
-        Group {
-            if match.predictionGameFixtureID != nil {
-                // A separate chip button must not be nested inside the match button.
-                rowContent
-                    .contentShape(Rectangle())
-                    .onTapGesture(perform: openMatch)
-                    .accessibilityElement(children: .contain)
-                    .accessibilityAction(named: "View match details", openMatch)
-            } else {
-                Button(action: openMatch) { rowContent }
-                    .disabled(match.isPostponed)
-                    .buttonStyle(.plain)
-            }
-        }
+        Button(action: openMatch) { rowContent }
+        .disabled(match.isPostponed)
+        .buttonStyle(.plain)
         .onAppear {
             guard mode == .results else { return }
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
@@ -1908,76 +1787,6 @@ struct MatchesView: View {
 
     private func matchDebugFooterText(for match: Match) -> String? {
         return matchesStore.teamRatingDebugText(for: match)
-    }
-
-    /// Resolves what a row's trailing prediction chip should show. Predictions are
-    /// precomputed in the background (see `warmPredictionsForVisibleDays`), so by the
-    /// time a row scrolls into view its prediction is normally already in `predictionIndex`;
-    /// `.pending` only appears for the brief window where a newly-loaded day is still warming up.
-    private func predictionDisplayState(for match: Match, dateKey: String) -> FixturePredictionDisplayState {
-        guard preferences.showPredictedScores else { return .hidden }
-        if let stored = predictionIndex[match.id], stored.isPredicted {
-            return .available(
-                homeGoals: stored.homeGoals ?? 0,
-                awayGoals: stored.awayGoals ?? 0,
-                homeWinProbability: stored.homeWinProbability ?? 0,
-                drawProbability: stored.drawProbability ?? 0,
-                awayWinProbability: stored.awayWinProbability ?? 0
-            )
-        }
-        guard mode == .fixtures, !match.isPostponed, let kickoff = match.dateTime, kickoff > Date() else {
-            return .hidden
-        }
-        return pendingPredictionDateKeys.contains(dateKey) ? .pending : .hidden
-    }
-
-    /// Precomputes and freezes predictions for any visible day that has upcoming,
-    /// not-yet-predicted fixtures. Idempotent per match: a match that already has a
-    /// stored prediction is never recomputed, so once frozen it stays comparable
-    /// against the eventual real result.
-    private func warmPredictionsForVisibleDays(days: [MatchDay]) {
-        guard mode == .fixtures else { return }
-        let now = Date()
-        var newlyQueued: [(dateKey: String, displayDate: String, matches: [Match])] = []
-        for day in days {
-            guard !pendingPredictionDateKeys.contains(day.dateKey),
-                  !attemptedPredictionDateKeys.contains(day.dateKey)
-            else { continue }
-            let matches = day.leagues.flatMap(\.matches)
-            let needsPrediction = matches.contains { match in
-                guard let kickoff = match.dateTime, kickoff > now, !match.isPostponed else { return false }
-                if let stored = predictionIndex[match.id], stored.isPredicted { return false }
-                return true
-            }
-            guard needsPrediction else { continue }
-            newlyQueued.append((day.dateKey, day.displayDate, matches))
-        }
-        guard !newlyQueued.isEmpty else { return }
-        pendingPredictionDateKeys.formUnion(newlyQueued.map(\.dateKey))
-
-        let apiBaseURL = preferences.apiBaseURL
-        let existingSnapshot = predictionIndex
-        Task {
-            for (dateKey, displayDate, matches) in newlyQueued {
-                guard !Task.isCancelled else { return }
-                let job = PredictionJob(dateKey: dateKey, displayDate: displayDate, matches: matches)
-                let fixtures = try? await FixturePredictionGenerator.generate(
-                    for: job,
-                    apiBaseURL: apiBaseURL,
-                    existingPredictions: existingSnapshot
-                )
-                await MainActor.run {
-                    if let fixtures {
-                        FixturePredictionStore.save(fixtures)
-                        for fixture in fixtures where fixture.isPredicted {
-                            predictionIndex[fixture.id] = fixture
-                        }
-                    }
-                    pendingPredictionDateKeys.remove(dateKey)
-                    attemptedPredictionDateKeys.insert(dateKey)
-                }
-            }
-        }
     }
 
     private var emptyState: some View {
@@ -3076,10 +2885,6 @@ struct FixtureCompetitionDockView: View {
             preferences.homeNationsFilterEnabled = true
             preferences.majorTournamentsFilterEnabled = true
             preferences.showAllMatches = false
-            preferences.showPredictedScores = preferences.favouriteShowPredictedScores
-        }
-        if preferences.showPredictedScores {
-            coordinator.requestPredictionWarm()
         }
         fixtureBrowser.configure(
             preferences: preferences.snapshot,
@@ -3123,7 +2928,6 @@ struct FixtureCompetitionDockView: View {
         let optionIDs = preferences.currentFixtureViewOptionIDs.sorted()
         guard !optionIDs.isEmpty else { return }
         preferences.favouriteFixtureViewOptionIDs = optionIDs
-        preferences.favouriteShowPredictedScores = preferences.showPredictedScores
         preferences.hasSavedFavouriteFixtureView = true
         activateFavouriteFixtureView()
         withAnimation(accessibilityReduceMotion ? nil : FootballVisualStyle.easeOut) {
@@ -3276,7 +3080,6 @@ private extension MatchesView {
         }
         refreshVisibleGroupedDays(from: groupedDays)
         guard groupingChanged else { return }
-        warmPredictionsForVisibleDays(days: groupedDays)
         scheduleGroupedSideEffects(for: groupedDays, immediate: false)
     }
 
@@ -3579,8 +3382,6 @@ private extension MatchesView {
             rebuildFixtureBrowseGrouping()
         }
         let days = sourceGroupedDays
-        predictionIndex = FixturePredictionStore.allPredictions()
-        warmPredictionsForVisibleDays(days: days)
         scheduleGroupedSideEffects(for: days, immediate: false)
     }
 
@@ -5020,7 +4821,6 @@ struct MatchesListRowLabel: View, Equatable {
     let isFixtureMode: Bool
     let rowPreferences: MatchRowPreferences
     let fantasyContext: FantasyMatchRowContext
-    let predictionDisplay: FixturePredictionDisplayState
 
     var body: some View {
         MatchRow(
@@ -5034,7 +4834,6 @@ struct MatchesListRowLabel: View, Equatable {
             presentationStyle: .embedded,
             fantasyContext: fantasyContext,
             rowPreferences: rowPreferences,
-            predictionDisplay: predictionDisplay,
             prefersShortTeamNames: true
         )
     }
@@ -5073,423 +4872,7 @@ private struct FixtureMatchNavigationChevron: View {
 private struct MatchNavigation: Identifiable, Hashable, Sendable {
     let match: Match
     let showFantasyBadge: Bool
-    let predictionDisplay: FixturePredictionDisplayState
     var id: String { match.id }
-}
-
-private struct PredictionJob: Identifiable, Sendable {
-    let id = UUID()
-    let dateKey: String
-    let displayDate: String
-    let matches: [Match]
-}
-
-private struct PredictedFixture: Codable, Identifiable, Sendable {
-    let id: String
-    let date: String
-    let time: String
-    let league: String
-    let leagueSubcategory: String?
-    let homeTeam: String
-    let awayTeam: String
-    let homeShortName: String?
-    let awayShortName: String?
-    let tvChannels: [String]
-    let homeGoals: Int?
-    let awayGoals: Int?
-    let expectedHomeGoals: Double?
-    let expectedAwayGoals: Double?
-    let homeWinProbability: Double?
-    let drawProbability: Double?
-    let awayWinProbability: Double?
-    let unavailableReason: String?
-    let isPostponed: Bool
-
-    var isPredicted: Bool {
-        homeGoals != nil && awayGoals != nil && unavailableReason == nil && !isPostponed
-    }
-}
-
-extension PredictedFixture {
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case date
-        case time
-        case league
-        case leagueSubcategory
-        case homeTeam
-        case awayTeam
-        case homeShortName
-        case awayShortName
-        case tvChannels
-        case homeGoals
-        case awayGoals
-        case expectedHomeGoals
-        case expectedAwayGoals
-        case homeWinProbability
-        case drawProbability
-        case awayWinProbability
-        case unavailableReason
-        case isPostponed
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(String.self, forKey: .id)
-        date = try container.decode(String.self, forKey: .date)
-        time = try container.decode(String.self, forKey: .time)
-        league = try container.decode(String.self, forKey: .league)
-        leagueSubcategory = try container.decodeIfPresent(String.self, forKey: .leagueSubcategory)
-        homeTeam = try container.decode(String.self, forKey: .homeTeam)
-        awayTeam = try container.decode(String.self, forKey: .awayTeam)
-        homeShortName = try container.decodeIfPresent(String.self, forKey: .homeShortName)
-        awayShortName = try container.decodeIfPresent(String.self, forKey: .awayShortName)
-        tvChannels = try container.decodeIfPresent([String].self, forKey: .tvChannels) ?? []
-        homeGoals = try container.decodeIfPresent(Int.self, forKey: .homeGoals)
-        awayGoals = try container.decodeIfPresent(Int.self, forKey: .awayGoals)
-        expectedHomeGoals = try container.decodeIfPresent(Double.self, forKey: .expectedHomeGoals)
-        expectedAwayGoals = try container.decodeIfPresent(Double.self, forKey: .expectedAwayGoals)
-        homeWinProbability = try container.decodeIfPresent(Double.self, forKey: .homeWinProbability)
-        drawProbability = try container.decodeIfPresent(Double.self, forKey: .drawProbability)
-        awayWinProbability = try container.decodeIfPresent(Double.self, forKey: .awayWinProbability)
-        unavailableReason = try container.decodeIfPresent(String.self, forKey: .unavailableReason)
-        isPostponed = try container.decodeIfPresent(Bool.self, forKey: .isPostponed) ?? false
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(id, forKey: .id)
-        try container.encode(date, forKey: .date)
-        try container.encode(time, forKey: .time)
-        try container.encode(league, forKey: .league)
-        try container.encodeIfPresent(leagueSubcategory, forKey: .leagueSubcategory)
-        try container.encode(homeTeam, forKey: .homeTeam)
-        try container.encode(awayTeam, forKey: .awayTeam)
-        try container.encodeIfPresent(homeShortName, forKey: .homeShortName)
-        try container.encodeIfPresent(awayShortName, forKey: .awayShortName)
-        try container.encode(tvChannels, forKey: .tvChannels)
-        try container.encodeIfPresent(homeGoals, forKey: .homeGoals)
-        try container.encodeIfPresent(awayGoals, forKey: .awayGoals)
-        try container.encodeIfPresent(expectedHomeGoals, forKey: .expectedHomeGoals)
-        try container.encodeIfPresent(expectedAwayGoals, forKey: .expectedAwayGoals)
-        try container.encodeIfPresent(homeWinProbability, forKey: .homeWinProbability)
-        try container.encodeIfPresent(drawProbability, forKey: .drawProbability)
-        try container.encodeIfPresent(awayWinProbability, forKey: .awayWinProbability)
-        try container.encodeIfPresent(unavailableReason, forKey: .unavailableReason)
-        try container.encode(isPostponed, forKey: .isPostponed)
-    }
-}
-
-private struct FixturePredictionCachePayload: Codable {
-    // Keyed by match id. Entries are written once (when a prediction is first
-    // computed for an upcoming fixture) and never overwritten, so a finished
-    // match's prediction stays available to compare against the real result.
-    var entries: [String: PredictedFixture]
-}
-
-enum FixturePredictionStore {
-    private static let fileName = "fixture-predictions.json"
-    static let didChangeNotification = Notification.Name("FixturePredictionStore.didChange")
-
-    fileprivate static func allPredictions() -> [String: PredictedFixture] {
-        loadCache().entries
-    }
-
-    /// Persists newly-computed predictions. Only successfully-predicted fixtures
-    /// are stored; matches that couldn't be predicted (no markets yet, postponed,
-    /// etc.) are left out so they're retried on a future warm-up pass.
-    fileprivate static func save(_ fixtures: [PredictedFixture]) {
-        let predicted = fixtures.filter(\.isPredicted)
-        guard !predicted.isEmpty else { return }
-        var cache = loadCache()
-        for fixture in predicted {
-            cache.entries[fixture.id] = fixture
-        }
-        persist(cache)
-    }
-
-    static func clearAll() {
-        let fileManager = FileManager.default
-        try? fileManager.removeItem(at: cacheURL)
-        notifyDidChange()
-    }
-
-    private static func loadCache() -> FixturePredictionCachePayload {
-        guard let data = try? Data(contentsOf: cacheURL) else {
-            return FixturePredictionCachePayload(entries: [:])
-        }
-        let decoder = JSONDecoder()
-        guard let payload = try? decoder.decode(FixturePredictionCachePayload.self, from: data) else {
-            return FixturePredictionCachePayload(entries: [:])
-        }
-        return payload
-    }
-
-    private static func persist(_ payload: FixturePredictionCachePayload) {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        guard let data = try? encoder.encode(payload) else { return }
-        try? data.write(to: cacheURL, options: [.atomic])
-        notifyDidChange()
-    }
-
-    private static func notifyDidChange() {
-        NotificationCenter.default.post(name: didChangeNotification, object: nil)
-    }
-
-    private static var cacheURL: URL {
-        let fileManager = FileManager.default
-        let baseURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let directory = baseURL.appendingPathComponent("TopScores", isDirectory: true)
-        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        return directory.appendingPathComponent(fileName)
-    }
-}
-
-private enum FixturePredictionError: LocalizedError {
-    case invalidAPIBaseURL
-
-    var errorDescription: String? {
-        switch self {
-        case .invalidAPIBaseURL:
-            return "Invalid API base URL for predictions lookup."
-        }
-    }
-}
-
-private enum FixturePredictionGenerator {
-    /// - Parameter existingPredictions: Previously-frozen predictions keyed by match id.
-    ///   Matches already present here are reused verbatim rather than recomputed, since
-    ///   `MarketsScorePredictor` samples randomly and re-running it would silently change
-    ///   a prediction that's supposed to be a fixed, comparable-later snapshot.
-    static func generate(
-        for job: PredictionJob,
-        apiBaseURL: String,
-        existingPredictions: [String: PredictedFixture]
-    ) async throws -> [PredictedFixture] {
-        guard URL(string: apiBaseURL) != nil else {
-            throw FixturePredictionError.invalidAPIBaseURL
-        }
-
-        let now = Date()
-        let sortedMatches = job.matches.sorted { lhs, rhs in
-            (lhs.dateTime ?? .distantFuture) < (rhs.dateTime ?? .distantFuture)
-        }
-        await PredictionsCatalog.shared.ensureFresh(apiBaseURL: apiBaseURL)
-        let leagues = await PredictionsCatalog.shared.cachedLeagues()
-        var marketsByEventID: [String: PredictionMarkets] = [:]
-        var marketsByTeamsAndDate: [String: PredictionMarkets] = [:]
-        for fixture in leagues.flatMap(\.fixtures) {
-            guard let markets = fixture.markets else { continue }
-            marketsByEventID[fixture.eventID] = markets
-            if let date = fixture.date {
-                marketsByTeamsAndDate[joinKey(home: fixture.homeTeam, away: fixture.awayTeam, date: date)] = markets
-            }
-        }
-
-        let computedRows = await withTaskGroup(of: PredictionComputationResult.self) { group in
-            for (index, match) in sortedMatches.enumerated() {
-                let matchID = match.id
-                let matchDate = match.date
-                let matchTime = match.time
-                let matchLeague = match.league
-                let matchLeagueSubcategory = match.leagueSubcategory
-                let matchHomeTeam = match.homeTeam
-                let matchAwayTeam = match.awayTeam
-                let matchHomeShortName = match.homeShortName
-                let matchAwayShortName = match.awayShortName
-                let matchTVChannels = match.tvChannels.map(\.name)
-                let kickoff = match.dateTime
-                let isPostponed = match.isPostponed
-                let isInProgress = match.isInProgress
-                let markets = match.matchDetailsID.flatMap { marketsByEventID[$0] }
-                    ?? marketsByTeamsAndDate[joinKey(home: matchHomeTeam, away: matchAwayTeam, date: matchDate)]
-
-                if let frozen = existingPredictions[matchID], frozen.isPredicted {
-                    group.addTask {
-                        PredictionComputationResult(index: index, fixture: frozen)
-                    }
-                    continue
-                }
-
-                group.addTask {
-                    let unavailableReason: String?
-                    if kickoff == nil {
-                        unavailableReason = "Kick-off time unavailable"
-                    } else if isPostponed {
-                        unavailableReason = "Match postponed"
-                    } else if kickoff! <= now {
-                        unavailableReason = isInProgress ? "Already in progress" : "Already kicked off"
-                    } else if markets == nil {
-                        unavailableReason = "Prediction unavailable"
-                    } else {
-                        unavailableReason = nil
-                    }
-
-                    if let unavailableReason {
-                        return PredictionComputationResult(
-                            index: index,
-                            fixture: PredictedFixture(
-                                id: matchID,
-                                date: matchDate,
-                                time: matchTime,
-                                league: matchLeague,
-                                leagueSubcategory: matchLeagueSubcategory,
-                                homeTeam: matchHomeTeam,
-                                awayTeam: matchAwayTeam,
-                                homeShortName: matchHomeShortName,
-                                awayShortName: matchAwayShortName,
-                                tvChannels: matchTVChannels,
-                                homeGoals: nil,
-                                awayGoals: nil,
-                                expectedHomeGoals: nil,
-                                expectedAwayGoals: nil,
-                                homeWinProbability: nil,
-                                drawProbability: nil,
-                                awayWinProbability: nil,
-                                unavailableReason: unavailableReason,
-                                isPostponed: isPostponed
-                            )
-                        )
-                    }
-
-                    let estimate = MarketsScorePredictor.predict(markets: markets!)
-                    return PredictionComputationResult(
-                        index: index,
-                        fixture: PredictedFixture(
-                            id: matchID,
-                            date: matchDate,
-                            time: matchTime,
-                            league: matchLeague,
-                            leagueSubcategory: matchLeagueSubcategory,
-                            homeTeam: matchHomeTeam,
-                            awayTeam: matchAwayTeam,
-                            homeShortName: matchHomeShortName,
-                            awayShortName: matchAwayShortName,
-                            tvChannels: matchTVChannels,
-                            homeGoals: estimate.homeGoals,
-                            awayGoals: estimate.awayGoals,
-                            expectedHomeGoals: estimate.expectedHomeGoals,
-                            expectedAwayGoals: estimate.expectedAwayGoals,
-                            homeWinProbability: estimate.homeWinProbability,
-                            drawProbability: estimate.drawProbability,
-                            awayWinProbability: estimate.awayWinProbability,
-                            unavailableReason: nil,
-                            isPostponed: false
-                        )
-                    )
-                }
-            }
-
-            var results: [PredictionComputationResult] = []
-            results.reserveCapacity(sortedMatches.count)
-            for await row in group {
-                results.append(row)
-            }
-            return results
-        }
-
-        return computedRows.sorted { $0.index < $1.index }.map(\.fixture)
-    }
-
-    private nonisolated static func joinKey(home: String, away: String, date: String) -> String {
-        "\(normalizedTeamKey(home))|\(normalizedTeamKey(away))|\(date)"
-    }
-
-    private nonisolated static func normalizedTeamKey(_ value: String) -> String {
-        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-    }
-}
-
-private struct PredictionComputationResult: Sendable {
-    let index: Int
-    let fixture: PredictedFixture
-}
-
-private struct ScorelineEstimate: Sendable {
-    let homeGoals: Int
-    let awayGoals: Int
-    let expectedHomeGoals: Double
-    let expectedAwayGoals: Double
-    let homeWinProbability: Double
-    let drawProbability: Double
-    let awayWinProbability: Double
-}
-
-private enum MarketsScorePredictor {
-    // Used only when BSD's expected_goals market is missing for a fixture that
-    // otherwise has markets data (e.g. btts/over_under present, expected_goals not).
-    private nonisolated static let fallbackExpectedGoals = 1.275
-
-    nonisolated static func predict(markets: PredictionMarkets) -> ScorelineEstimate {
-        let baseHome = max(0.15, markets.expectedGoals?.home ?? fallbackExpectedGoals)
-        let baseAway = max(0.15, markets.expectedGoals?.away ?? fallbackExpectedGoals)
-
-        var lambdaHome = baseHome * Double.random(in: 0.88...1.20)
-        var lambdaAway = baseAway * Double.random(in: 0.88...1.20)
-
-        // Inject occasional volatility so underdogs still produce upset scorelines.
-        if Double.random(in: 0...1) < 0.10 {
-            let swing = Double.random(in: 0.12...0.42)
-            if baseHome >= baseAway {
-                lambdaHome *= (1 - swing)
-                lambdaAway *= (1 + swing)
-            } else {
-                lambdaHome *= (1 + swing)
-                lambdaAway *= (1 - swing)
-            }
-        }
-
-        lambdaHome = clamp(lambdaHome, min: 0.12, max: 4.80)
-        lambdaAway = clamp(lambdaAway, min: 0.12, max: 4.80)
-
-        let homeGoals = samplePoisson(lambda: lambdaHome)
-        let awayGoals = samplePoisson(lambda: lambdaAway)
-        // Win/draw/away probabilities come straight from BSD's own match_result
-        // market rather than being recomputed from the sampled Poisson means.
-        let (homeWin, draw, awayWin) = outcomeProbabilities(from: markets.matchResult)
-
-        return ScorelineEstimate(
-            homeGoals: homeGoals,
-            awayGoals: awayGoals,
-            expectedHomeGoals: lambdaHome,
-            expectedAwayGoals: lambdaAway,
-            homeWinProbability: homeWin,
-            drawProbability: draw,
-            awayWinProbability: awayWin
-        )
-    }
-
-    private nonisolated static func clamp(_ value: Double, min lower: Double, max upper: Double) -> Double {
-        Swift.max(lower, Swift.min(value, upper))
-    }
-
-    private nonisolated static func samplePoisson(lambda: Double) -> Int {
-        guard lambda > 0 else { return 0 }
-        let threshold = exp(-lambda)
-        var product = 1.0
-        var count = 0
-
-        repeat {
-            count += 1
-            product *= Double.random(in: 0..<1)
-        } while product > threshold
-
-        return max(0, count - 1)
-    }
-
-    private nonisolated static func outcomeProbabilities(
-        from matchResult: MatchResultMarket?
-    ) -> (Double, Double, Double) {
-        guard let matchResult else { return (0.33, 0.34, 0.33) }
-        let home = max(0, matchResult.probHome) / 100
-        let draw = max(0, matchResult.probDraw) / 100
-        let away = max(0, matchResult.probAway) / 100
-
-        let total = home + draw + away
-        guard total > 0 else { return (0.33, 0.34, 0.33) }
-        return (home / total, draw / total, away / total)
-    }
 }
 
 private struct ToastView: View {

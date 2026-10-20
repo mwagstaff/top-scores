@@ -358,7 +358,11 @@ final class AppDiagnosticsMonitor: NSObject, MXMetricManagerSubscriber, @uncheck
         isStarted = true
         lock.unlock()
         MXMetricManager.shared.add(self)
-        MainRunLoopStallMonitor.shared.start()
+        // Continuous 20 Hz polling is for explicit profiling sessions only.
+        // MetricKit remains enabled for normal crash and hang reporting.
+        if ProcessInfo.processInfo.arguments.contains("-EnableMainRunLoopStallMonitor") {
+            MainRunLoopStallMonitor.shared.start()
+        }
         diagnosticLog("[AppDiagnostics] MetricKit crash and hang monitoring enabled")
     }
 

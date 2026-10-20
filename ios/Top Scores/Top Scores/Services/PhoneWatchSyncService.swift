@@ -1,4 +1,5 @@
 import Foundation
+import ActivityKit
 import WatchConnectivity
 
 final class PhoneWatchSyncService: NSObject {
@@ -84,6 +85,36 @@ extension PhoneWatchSyncService: WCSessionDelegate {
         didReceiveMessage message: [String: Any],
         replyHandler: @escaping ([String: Any]) -> Void
     ) {
+        if let activityID = message["live_activity_route_id"] as? String {
+            DispatchQueue.main.async {
+                let activities = Activity<TopScoresLiveActivityAttributes>.activities
+                guard let activity = activities.first(where: { $0.id == activityID }),
+                      let match = activity.content.state.matches.first(where: {
+                          !["POSTPONED", "MATCH POSTPONED", "MATCH POSTPONED."].contains(
+                              ($0.matchTime ?? "").trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+                          )
+                      }) else {
+                    replyHandler([:])
+                    return
+                }
+                var url = URLComponents()
+                url.scheme = "topscores"
+                url.host = "match"
+                url.queryItems = [
+                    URLQueryItem(name: "id", value: match.matchId),
+                    URLQueryItem(name: "date", value: match.date),
+                    URLQueryItem(name: "time", value: match.time),
+                    URLQueryItem(name: "league", value: match.league),
+                    URLQueryItem(name: "home", value: match.homeTeam),
+                    URLQueryItem(name: "away", value: match.awayTeam),
+                    URLQueryItem(name: "homeScore", value: match.homeScore.map(String.init)),
+                    URLQueryItem(name: "awayScore", value: match.awayScore.map(String.init)),
+                    URLQueryItem(name: "status", value: match.matchTime)
+                ]
+                replyHandler(["live_activity_route_url": url.url?.absoluteString ?? ""])
+            }
+            return
+        }
         guard (message[AppGroupConfig.requestMatchesSyncMessageKey] as? Bool) == true else {
             replyHandler([:])
             return

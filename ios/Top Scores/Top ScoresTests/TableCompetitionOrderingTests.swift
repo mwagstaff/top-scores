@@ -95,9 +95,9 @@ struct TableCompetitionOrderingTests {
             "uefa-europa-league",
             "uefa-conference-league",
             "uefa-super-cup",
-            "fifa-world-cup-2026",
             "uefa-nations-league",
-            "international-friendly"
+            "international-friendly",
+            "fifa-world-cup-2026"
         ])
     }
 
@@ -105,7 +105,8 @@ struct TableCompetitionOrderingTests {
         let excluded = [
             ("39", "FA Cup"), ("40", "EFL Cup"), ("41", "Copa del Rey"),
             ("43", "DFB-Pokal"), ("42", "Coppa Italia"),
-            ("44", "Coupe de France"), ("90", "UEFA Super Cup")
+            ("44", "Coupe de France"), ("90", "UEFA Super Cup"),
+            ("31", "International Friendly")
         ]
         for (id, name) in excluded {
             #expect(!TableCompetitionAvailability.supportsTable(competitionID: id, competitionName: ""))
@@ -129,6 +130,23 @@ struct TableCompetitionOrderingTests {
         ]
         let all = excluded.map { table($0.0, $0.1) } + retained
         #expect(TableCompetitionAvailability.eligibleLeagues(all) == retained)
+    }
+
+    @Test func keepsWorldCupAndRegionalQualifiersTogetherRegardlessOfWeights() {
+        let competitions = [
+            table("63", "World Cup Qualifying OFC"),
+            table("60", "World Cup Qualification CAF"),
+            table("62", "World Cup Qualifying CONCACAF"),
+            table("59", "World Cup Qualifying CONMEBOL"),
+            table("64", "UEFA Nations League"),
+            table("27", "FIFA World Cup 2026"),
+            table("58", "World Cup Qualifying UEFA")
+        ]
+        let ordered = TableCompetitionOrdering.sorted(competitions) { Double($0.leagueID) ?? 0 }
+        #expect(ordered.map(\.leagueID) == ["64", "27", "58", "59", "62", "60", "63"])
+        #expect(TableCompetitionOrdering.qualifierRegion(for: table("legacy", "World Cup Qualification CONCACAF")) == "CONCACAF")
+        #expect(TableCompetitionOrdering.qualifierRegion(for: table("legacy", "World Cup Qualifying CAF")) == "CAF")
+        #expect(TableCompetitionOrdering.qualifierRegion(for: table("legacy", "World Cup Qualifying AFC")) == "AFC")
     }
 
     private func table(

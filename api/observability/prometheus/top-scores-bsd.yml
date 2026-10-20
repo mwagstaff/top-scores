@@ -1,0 +1,14 @@
+groups:
+  - name: top-scores-bsd
+    interval: 1m
+    rules:
+      - alert: TopScoresBSDUpstreamErrors
+        expr: |
+          sum by (job, status_code) (increase(top_scores_bsd_http_requests_total{job="top-scores",status_code=~"0|4..|5..",status_code!="404"}[10m]) > 0 or (top_scores_bsd_http_requests_total{job="top-scores",status_code=~"0|4..|5..",status_code!="404"} unless top_scores_bsd_http_requests_total{job="top-scores",status_code=~"0|4..|5..",status_code!="404"} offset 10m)) > 0
+        for: 1m
+        labels:
+          service_name: top-scores
+          severity: warning
+        annotations:
+          summary: "Top Scores: BSD upstream failures (status {{ $labels.status_code }})"
+          description: "BSD requests failed within the last 10 minutes. Status 0 means a connection failure or timeout; 429 means throttling or quota exhaustion; 401/403 means authentication or access failure; 5xx means an upstream server error. Scores and Live Activities may be stale. Check BSD account quota and top-scores-bsd.error.log; break down top_scores_bsd_http_requests_total by source. HTTP 404 is excluded because optional lookups may be missing."

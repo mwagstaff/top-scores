@@ -1,22 +1,23 @@
 import Foundation
 
-// These knockout-only competitions have no league or group standings.
+// These competitions have no meaningful league or group standings.
 // Share the rule between Tables and the Scores competition heading links.
 enum TableCompetitionAvailability {
-    private static let knockoutOnlyKeys: Set<String> = [
+    private static let unavailableTableKeys: Set<String> = [
         "39", "facup", "englishfacup",
         "40", "eflcup", "englishleaguecup", "carabaocup",
         "41", "copadelrey",
         "43", "dfbpokal",
         "42", "coppaitalia",
         "44", "coupedefrance",
-        "90", "uefasupercup"
+        "90", "uefasupercup",
+        "31", "internationalfriendly", "internationalfriendlies", "friendlies"
     ]
 
     static func supportsTable(competitionID: String?, competitionName: String) -> Bool {
         ![competitionID, competitionName].compactMap { $0 }.contains { value in
             let key = value.lowercased().filter { $0.isLetter || $0.isNumber }
-            return knockoutOnlyKeys.contains(key)
+            return unavailableTableKeys.contains(key)
         }
     }
 
@@ -171,6 +172,7 @@ struct LeagueTableZone: Identifiable, Codable, Hashable, Sendable {
 struct LeagueTableGroup: Identifiable, Codable, Hashable, Sendable {
     let name: String?
     let rows: [LeagueTableRow]
+    let zones: [LeagueTableZone]
 
     nonisolated var id: String {
         let rowIDs = rows.map(\.id).joined(separator: "|")
@@ -180,23 +182,27 @@ struct LeagueTableGroup: Identifiable, Codable, Hashable, Sendable {
     enum CodingKeys: String, CodingKey {
         case name
         case rows
+        case zones
     }
 
-    nonisolated init(name: String?, rows: [LeagueTableRow]) {
+    nonisolated init(name: String?, rows: [LeagueTableRow], zones: [LeagueTableZone] = []) {
         self.name = name
         self.rows = rows
+        self.zones = zones
     }
 
     nonisolated init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         name = try container.decodeIfPresent(String.self, forKey: .name)
         rows = try container.decodeIfPresent([LeagueTableRow].self, forKey: .rows) ?? []
+        zones = try container.decodeIfPresent([LeagueTableZone].self, forKey: .zones) ?? []
     }
 
     nonisolated func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encodeIfPresent(name, forKey: .name)
         try container.encode(rows, forKey: .rows)
+        try container.encode(zones, forKey: .zones)
     }
 }
 

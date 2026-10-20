@@ -8,9 +8,15 @@
 import Foundation
 import OSLog
 import SwiftUI
+import WidgetKit
 
 struct ContentView: View {
     @EnvironmentObject private var matchesStore: WatchMatchesStore
+    @State private var liveActivityDestination: WatchMatch?
+    @State private var routeRequest = UUID()
+    @State private var didReadLaunchRoute = false
+    @State private var pendingMatch: WatchMatch?
+    @State private var activityRequestID: String?
 
     private static let refreshFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -32,7 +38,8 @@ struct ContentView: View {
                         Text("Waiting for phone data")
                             .font(.caption)
                             .multilineTextAlignment(.center)
-                        NavigationLink("FPL") { WatchFantasyView() }
+                        NavigationLink { WatchFantasyView() } label: { WatchFantasyMenuLabel() }
+                        NavigationLink("Tables") { WatchTablesView() }
                     }
                     .padding()
                 } else {
@@ -89,9 +96,15 @@ struct ContentView: View {
                             }
 
                             NavigationLink {
+                                WatchTablesView()
+                            } label: {
+                                Label("Tables", systemImage: "tablecells")
+                            }
+
+                            NavigationLink {
                                 WatchFantasyView()
                             } label: {
-                                Label("FPL", systemImage: "person.3.fill")
+                                WatchFantasyMenuLabel()
                             }
                         }
 
@@ -114,8 +127,54 @@ struct ContentView: View {
                 }
             }
             .navigationTitle("Top Scores")
+            .navigationDestination(item: $liveActivityDestination) { match in
+                WatchLiveActivityCompetitionView(selectedMatch: match)
+            }
+        }
+        .onOpenURL { url in
+            activityRequestID = nil
+            pendingMatch = WatchLiveActivityLink.match(from: url)
+            routeRequest = UUID()
+            WatchPerformanceDiagnostics.logger.notice("Live Activity URL received; matched=\(pendingMatch != nil)")
+        }
+        .onContinueUserActivity(NSUserActivityTypeLiveActivity) { activity in
+            if let url = activity.webpageURL, let match = WatchLiveActivityLink.match(from: url) {
+                pendingMatch = match
+                routeRequest = UUID()
+            } else {
+                activityRequestID = activity.userInfo?[WidgetCenter.UserInfoKey.activityID] as? String
+            }
+            WatchPerformanceDiagnostics.logger.notice("Live Activity continuation received; id=\(activityRequestID ?? "none", privacy: .public)")
+        }
+        .task(id: activityRequestID) {
+            guard let id = activityRequestID else { return }
+            let match = await matchesStore.liveActivityMatch(activityID: id)
+            guard !Task.isCancelled else { return }
+            pendingMatch = match
+            routeRequest = UUID()
+            activityRequestID = nil
+        }
+        .task(id: routeRequest) {
+            guard let match = pendingMatch else { return }
+            // Let the navigation stack mount before applying a cold-launch route.
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            var transaction = Transaction()
+            transaction.disablesAnimations = true
+            withTransaction(transaction) {
+                liveActivityDestination = match
+            }
         }
         .onAppear {
+            #if DEBUG
+            if !didReadLaunchRoute, let index = ProcessInfo.processInfo.arguments.firstIndex(of: "-live-activity-url"),
+               ProcessInfo.processInfo.arguments.indices.contains(index + 1),
+               let url = URL(string: ProcessInfo.processInfo.arguments[index + 1]) {
+                didReadLaunchRoute = true
+                pendingMatch = WatchLiveActivityLink.match(from: url)
+                routeRequest = UUID()
+            }
+            #endif
             WatchMainThreadStallMonitor.shared.start()
             let todayMatchCount = home.todaySections.reduce(0) { $0 + $1.matches.count }
             WatchPerformanceDiagnostics.logger.notice(
@@ -420,30 +479,82 @@ private struct WatchCompetitionLogo: View {
 }
 
 private struct WatchCompetitionMatchesView: View {
+    @EnvironmentObject private var matchesStore: WatchMatchesStore
+    @Environment(\.scenePhase) private var scenePhase
+    @StateObject private var refreshStore = WatchCompetitionRefreshStore()
     let competition: WatchCompetition
     let groupIntoTodaySections: Bool
+    var focusedMatchID: String?
 
-    init(competition: WatchCompetition, groupIntoTodaySections: Bool = true) {
+    init(competition: WatchCompetition, groupIntoTodaySections: Bool = true, focusedMatchID: String? = nil) {
         self.competition = competition
         self.groupIntoTodaySections = groupIntoTodaySections
+        self.focusedMatchID = focusedMatchID
+    }
+
+    private var displayCompetition: WatchCompetition {
+        guard let matches = refreshStore.matches, let selected = competition.matches.first else { return competition }
+        return WatchLiveActivityLink.competition(for: selected, matches: matches)
     }
 
     var body: some View {
-        List {
-            if groupIntoTodaySections {
-                ForEach(WatchMatchCollections.todaySections(from: competition.matches)) { section in
-                    Section(section.title) {
-                        WatchMatchRows(matches: section.matches)
+        ScrollViewReader { proxy in
+            List {
+                if groupIntoTodaySections {
+                    ForEach(WatchMatchCollections.todaySections(from: displayCompetition.matches)) { section in
+                        Section(section.title) {
+                            WatchMatchRows(matches: section.matches)
+                        }
+                    }
+                } else {
+                    Section {
+                        WatchMatchRows(matches: displayCompetition.matches)
                     }
                 }
-            } else {
-                Section {
-                    WatchMatchRows(matches: competition.matches)
+                if refreshStore.isLoading && refreshStore.matches == nil {
+                    ProgressView("Loading competition…")
+                } else if let loadError = refreshStore.loadError {
+                    Text(loadError)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
             }
+            .listStyle(.plain)
+            .navigationTitle(competition.name)
+            .task(id: displayCompetition.matches.map(\.id) + [focusedMatchID ?? ""]) {
+                guard let focusedMatchID else { return }
+                await Task.yield()
+                guard !Task.isCancelled else { return }
+                proxy.scrollTo(focusedMatchID, anchor: .top)
+            }
         }
-        .listStyle(.plain)
-        .navigationTitle(competition.name)
+        .task(id: scenePhase) {
+            guard scenePhase == .active, let date = competition.matches.first?.date,
+                  let baseURL = URL(string: matchesStore.apiBaseURL) else { return }
+            await refreshStore.run(date: date, baseURL: baseURL)
+        }
+        .refreshable {
+            guard let date = competition.matches.first?.date,
+                  let baseURL = URL(string: matchesStore.apiBaseURL) else { return }
+            await refreshStore.refresh(date: date, baseURL: baseURL)
+        }
+    }
+}
+
+private struct WatchLiveActivityCompetitionView: View {
+    @EnvironmentObject private var matchesStore: WatchMatchesStore
+    let selectedMatch: WatchMatch
+
+    var body: some View {
+        let competition = WatchLiveActivityLink.competition(
+            for: selectedMatch,
+            matches: matchesStore.unfilteredGroupedDays.flatMap(\.matches)
+        )
+        WatchCompetitionMatchesView(
+            competition: competition,
+            groupIntoTodaySections: selectedMatch.dateTime.map { Calendar.current.isDateInToday($0) } ?? false,
+            focusedMatchID: selectedMatch.matchDetailsIDValue ?? selectedMatch.id
+        )
     }
 }
 
@@ -635,6 +746,7 @@ private struct WatchMatchRows: View {
             } label: {
                 WatchMatchLozenge(match: match)
             }
+            .id(match.matchDetailsIDValue ?? match.id)
             .buttonStyle(.plain)
             .listRowBackground(Color.clear)
             .listRowInsets(EdgeInsets(top: 4, leading: 0, bottom: 4, trailing: 0))
@@ -915,7 +1027,7 @@ private struct WatchPrimaryChannelLogo: View {
     }
 }
 
-private struct WatchMatchDetailView: View {
+struct WatchMatchDetailView: View {
     @EnvironmentObject private var matchesStore: WatchMatchesStore
 
     let match: WatchMatch

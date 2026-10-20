@@ -15,7 +15,6 @@ struct Top_ScoresApp: App {
     @StateObject private var preferences = PreferencesStore()
     @StateObject private var matchesStore = MatchesStore()
     @StateObject private var fantasyViewModel = FantasyViewModel()
-    @StateObject private var predictionGame = PredictionGameStore()
     @StateObject private var stadiumBackdropStore = StadiumBackdropStore()
     @StateObject private var stadiumArtworkStore = StadiumArtworkStore()
     @State private var deferredStartupWorkTask: Task<Void, Never>?
@@ -38,14 +37,9 @@ struct Top_ScoresApp: App {
                 .onAppear {
                     performanceDiagnosticSetSceneState(String(describing: scenePhase))
                 }
-                .onOpenURL { url in
-                    PredictionLeagueInvitationRouter.shared.handle(url)
-                }
                 .environmentObject(preferences)
                 .environmentObject(matchesStore)
                 .environmentObject(fantasyViewModel)
-                .environmentObject(predictionGame)
-                .environment(\.predictionGameStore, predictionGame)
                 .environmentObject(stadiumArtworkStore)
                 .environment(\.stadiumBackdropAssetName, stadiumBackdropStore.assetName)
                 .task {
@@ -172,16 +166,6 @@ struct Top_ScoresApp: App {
             ) else { return }
             PerformanceSignposter.startup.emitEvent("DeferredStartupTeamRatings")
             await TeamRankingsCatalog.shared.ensureFresh(apiBaseURL: snapshot.apiBaseURL)
-            guard !Task.isCancelled else { return }
-
-            try? await Task.sleep(nanoseconds: startupDeferredSpacingNanos)
-            guard !Task.isCancelled else { return }
-
-            guard await InteractiveMotionGate.shared.waitUntilIdle(
-                operation: "startup_predictions"
-            ) else { return }
-            PerformanceSignposter.startup.emitEvent("DeferredStartupPredictions")
-            await PredictionsCatalog.shared.ensureFresh(apiBaseURL: snapshot.apiBaseURL)
             guard !Task.isCancelled else { return }
 
             try? await Task.sleep(nanoseconds: startupDeferredSpacingNanos)

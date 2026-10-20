@@ -108,7 +108,23 @@ final class FantasyViewModel: ObservableObject {
 
     private var matchRowContextVersion = 0
 
-    private let fantasyPublicClient = FantasyPublicAPIClient()
+    private let fantasyPublicClient: FantasyPublicAPIClient
+    private let rivalScoreDefaults: UserDefaults
+    @Published private(set) var rivalScoreSnapshots: [Int: FantasyRivalScoreSnapshot] = [:]
+    @Published private(set) var staleRivalEntryIDs: Set<Int> = []
+    @Published private(set) var loadingRivalEntryIDs: Set<Int> = []
+    private var configuredRivals: [FantasyRivalManager] = []
+    private var rivalScoreStorageKey: String?
+    @Published private(set) var rivalScoreGameweekID: Int?
+
+    init(
+        fantasyPublicClient: FantasyPublicAPIClient = FantasyPublicAPIClient(),
+        rivalScoreDefaults: UserDefaults = .standard
+    ) {
+        self.fantasyPublicClient = fantasyPublicClient
+        self.rivalScoreDefaults = rivalScoreDefaults
+    }
+
     private let fantasyAuthenticatedClient = FantasyAuthenticatedAPIClient()
     private var cachedBootstrapLookup: FantasyBootstrapLookup?
     private var cachedBootstrapFetchedAt: Date?
@@ -243,6 +259,12 @@ final class FantasyViewModel: ObservableObject {
         data = nil
         previousTeamData = nil
         rivalSquads = []
+        configuredRivals = []
+        rivalScoreSnapshots = [:]
+        staleRivalEntryIDs = []
+        loadingRivalEntryIDs = []
+        rivalScoreStorageKey = nil
+        rivalScoreGameweekID = nil
         trackedLeagueStandings = []
         leagueChipsByEntryID = [:]
         leagueInPlayStatusByEntryID = [:]
@@ -278,6 +300,8 @@ final class FantasyViewModel: ObservableObject {
     }
 
     func cancelBackgroundRefreshWork() {
+        staleRivalEntryIDs.formUnion(loadingRivalEntryIDs)
+        loadingRivalEntryIDs = []
         rivalRefreshToken = UUID()
         leagueRefreshToken = UUID()
         rivalRefreshTask?.cancel()
@@ -475,6 +499,7 @@ final class FantasyViewModel: ObservableObject {
     }
 
     var automaticScoreRefreshMinimumInterval: TimeInterval {
+        if !staleRivalEntryIDs.isEmpty { return 30 }
         guard let data, let snapshot = currentSquadSnapshot else { return 15 * 60 }
         let hasAnyLiveFixture = snapshot.fixtures.contains { fixture in
             FantasyFixtureLiveStateResolver.isLive(fixture)
@@ -525,6 +550,7 @@ final class FantasyViewModel: ObservableObject {
 
         isRefreshingCurrentScores = true
         defer { isRefreshingCurrentScores = false }
+        let refreshToken = rivalRefreshToken
 
         do {
             async let refreshedProfileTask = fetchMyProfile(entryID: entryID)
@@ -568,6 +594,7 @@ final class FantasyViewModel: ObservableObject {
                 liveResponse: refreshedLive,
                 fixtures: refreshedFixtures
             )
+            guard !Task.isCancelled, rivalRefreshToken == refreshToken else { return false }
             currentSquadSnapshot = refreshedSnapshot
             currentSquadBootstrap = refreshedBootstrap
             currentSquadSeasonFixtures = mergedSeasonFixtures
@@ -576,23 +603,28 @@ final class FantasyViewModel: ObservableObject {
             cachedSeasonFixtures = mergedSeasonFixtures
             cachedSeasonFixturesFetchedAt = Date()
             let refreshedProfile = await refreshedProfileTask
+            guard !Task.isCancelled, rivalRefreshToken == refreshToken else { return false }
             myProfile = fantasyStableEntryProfile(
                 existing: myProfile,
                 candidate: refreshedProfile,
                 gameweekDataChecked: refreshedGameweek.dataChecked == true
             )
-            if refreshedGameweek.isCurrent == true,
-               refreshedGameweek.dataChecked != true,
-               !rivalSquads.isEmpty {
-                await refreshRivalScores(
-                    gameweek: refreshedGameweek,
-                    liveResponse: refreshedLive,
-                    fixtures: refreshedFixtures,
-                    seasonFixtures: mergedSeasonFixtures,
-                    bootstrapLookup: refreshedBootstrap
-                )
-            }
             data = refreshedData
+            if !configuredRivals.isEmpty, rivalRefreshTask == nil {
+                let rivalSnapshot = (FantasyTeamGameweekResolver.isLiveScoringGameweek(refreshedGameweek)
+                    || refreshedGameweek.dataChecked == true) ? refreshedSnapshot : previousSquadSnapshot
+                if let rivalSnapshot {
+                    prepareRivalScores(accountID: entryID, gameweekID: rivalSnapshot.gameweek.id, rivals: configuredRivals)
+                    await refreshRivalScores(
+                        rivals: configuredRivals,
+                        gameweek: rivalSnapshot.gameweek,
+                        liveResponse: rivalSnapshot.liveResponse,
+                        fixtures: rivalSnapshot.fixtures,
+                        seasonFixtures: mergedSeasonFixtures,
+                        bootstrapLookup: refreshedBootstrap
+                    )
+                }
+            }
             lastUpdated = Date()
             await persistHistoricalSnapshot(
                 managerEntryID: entryID,
@@ -604,7 +636,8 @@ final class FantasyViewModel: ObservableObject {
 
             return !previousDataChecked && refreshedGameweek.dataChecked == true
         } catch {
-            if !Self.isCancellationError(error) {
+            if !Self.isCancellationError(error), rivalRefreshToken == refreshToken {
+                staleRivalEntryIDs.formUnion(configuredRivals.map(\.entryID))
                 logPerf("current_score_refresh_failed error=\"\(error.localizedDescription)\"")
             }
             return false
@@ -1108,6 +1141,7 @@ final class FantasyViewModel: ObservableObject {
 
         do {
             cancelBackgroundRefreshWork()
+            configuredRivals = deduplicatedRivals(rivalManagers: rivalManagers, excludingEntryID: entryID)
             let serverClient = APIClient(baseURL: baseURL)
             logPerf("refresh_start entry_id=\(entryID) rivals=\(rivalManagers.count) leagues=\(trackedLeagues.count)")
 
@@ -1168,6 +1202,13 @@ final class FantasyViewModel: ObservableObject {
             currentSquadSnapshot = currentSnapshot
             currentSquadBootstrap = bootstrapLookup
             currentSquadSeasonFixtures = mergedSeasonFixtures
+            if FantasyTeamGameweekResolver.isLiveScoringGameweek(currentTeamGameweek) {
+                prepareRivalScores(
+                    accountID: activeEntryID,
+                    gameweekID: currentTeamGameweek.id,
+                    rivals: deduplicatedRivals(rivalManagers: rivalManagers, excludingEntryID: activeEntryID)
+                )
+            }
             await persistHistoricalSnapshot(
                 managerEntryID: activeEntryID,
                 snapshot: currentSnapshot,
@@ -1227,14 +1268,18 @@ final class FantasyViewModel: ObservableObject {
             let rivalStandingsSnapshot = shouldUseCurrentRivalStandings
                 ? currentSnapshot
                 : previousSnapshot
-            if normalizedRivals.isEmpty || rivalStandingsSnapshot == nil {
+            configuredRivals = normalizedRivals
+            if normalizedRivals.isEmpty {
                 rivalSquads = []
+                rivalScoreSnapshots = [:]
+                staleRivalEntryIDs = []
             } else if let rivalStandingsSnapshot {
+                prepareRivalScores(accountID: activeEntryID, gameweekID: rivalStandingsSnapshot.gameweek.id, rivals: normalizedRivals)
                 let refreshToken = UUID()
                 rivalRefreshToken = refreshToken
                 rivalRefreshTask = Task(priority: .utility) { [weak self] in
                     guard let self else { return }
-                    let refreshedRivals = await self.fetchRivalSquads(
+                    await self.refreshRivalScores(
                         rivals: normalizedRivals,
                         gameweek: rivalStandingsSnapshot.gameweek,
                         liveResponse: rivalStandingsSnapshot.liveResponse,
@@ -1243,13 +1288,15 @@ final class FantasyViewModel: ObservableObject {
                         bootstrapLookup: bootstrapLookup
                     )
                     guard self.rivalRefreshToken == refreshToken else { return }
-                    self.rivalSquads = refreshedRivals
-                    self.logPerf("rivals_complete count=\(refreshedRivals.count)")
+                    self.rivalRefreshTask = nil
+                    self.logPerf("rivals_complete count=\(self.rivalSquads.count)")
                     await self.populateRivalExpectedPoints(
                         apiBaseURL: apiBaseURL,
                         refreshToken: refreshToken
                     )
                 }
+            } else {
+                staleRivalEntryIDs.formUnion(normalizedRivals.map(\.entryID))
             }
 
             let normalizedTrackedLeagues = deduplicatedTrackedLeagues(trackedLeagues: trackedLeagues)
@@ -1271,7 +1318,7 @@ final class FantasyViewModel: ObservableObject {
                 }
             }
             lastUpdated = Date()
-            shouldAutomaticallyRetry = false
+            shouldAutomaticallyRetry = !normalizedRivals.isEmpty && rivalStandingsSnapshot == nil
             errorMessage = nil
             requiresAuthentication = false
             authenticatedEntryID = activeEntryID
@@ -1288,6 +1335,7 @@ final class FantasyViewModel: ObservableObject {
                case .authenticationRequired = fantasyError {
                 requiresAuthentication = true
             }
+            staleRivalEntryIDs.formUnion(configuredRivals.map(\.entryID))
             shouldAutomaticallyRetry = fantasyLoadFailureShouldAutomaticallyRetry(error)
             errorMessage = fantasyUserFriendlyLoadErrorMessage(for: error)
         }
@@ -1845,149 +1893,108 @@ final class FantasyViewModel: ObservableObject {
         )
     }
 
-    private func fetchRivalSquads(
+    func prepareRivalScores(accountID: Int, gameweekID: Int, rivals: [FantasyRivalManager]) {
+        configuredRivals = rivals
+        rivalScoreGameweekID = gameweekID
+        let key = FantasyRivalScoreSnapshot.storageKey(
+            accountID: accountID, season: activeFantasySeasonKey, gameweekID: gameweekID
+        )
+        if rivalScoreStorageKey != key {
+            rivalScoreStorageKey = key
+            rivalSquads = []
+            rivalScoreSnapshots = rivalScoreDefaults.data(forKey: key)
+                .flatMap { try? JSONDecoder().decode([Int: FantasyRivalScoreSnapshot].self, from: $0) } ?? [:]
+            staleRivalEntryIDs = Set(rivalScoreSnapshots.keys)
+        }
+        let ids = Set(configuredRivals.map(\.entryID))
+        rivalSquads.removeAll { !ids.contains($0.entryID) || $0.squad.gameweekID != gameweekID }
+        rivalScoreSnapshots = rivalScoreSnapshots.filter { ids.contains($0.key) }
+        staleRivalEntryIDs.formIntersection(ids)
+    }
+
+    func refreshRivalScores(
         rivals: [FantasyRivalManager],
         gameweek: FantasyGameweek,
         liveResponse: FantasyEventLiveResponse,
         fixtures: [FantasyFixture],
         seasonFixtures: [FantasyFixture],
         bootstrapLookup: FantasyBootstrapLookup
-    ) async -> [FantasyRivalSquad] {
+    ) async {
+        let refreshToken = rivalRefreshToken
+        guard !Task.isCancelled else { return }
         let signpost = PerformanceSignposter.fantasy.beginInterval("FantasyFetchRivalSquads")
         defer { PerformanceSignposter.fantasy.endInterval("FantasyFetchRivalSquads", signpost) }
-
-        var refreshedRivals: [FantasyRivalSquad] = []
-
-        for rival in rivals {
-            if Task.isCancelled { break }
-            do {
-                let rivalProfile = await fetchMyProfile(entryID: rival.entryID)
-                if Task.isCancelled { break }
-                let rivalPicks = try await timed("rival_picks entry_id=\(rival.entryID)") {
-                    try await fantasyPublicClient.fetchPicks(
-                        entryID: rival.entryID,
-                        eventID: gameweek.id
-                    )
-                }
-                if Task.isCancelled { break }
-                let rivalSquad = await buildSquadDisplayData(
-                    gameweek: gameweek,
-                    picksResponse: rivalPicks,
-                    liveResponse: liveResponse,
-                    fixtures: fixtures,
-                    seasonFixtures: seasonFixtures,
-                    bootstrap: bootstrapLookup
-                )
-                refreshedRivals.append(
-                    FantasyRivalSquad(
-                        entryID: rival.entryID,
-                        teamName: rival.teamName,
-                        managerName: rival.managerDisplayName,
-                        clubBadgeSrc: rivalProfile?.clubBadgeSrc ?? rival.clubBadgeSrc,
-                        squad: rivalSquad,
-                        allGameweeksPoints: rivalSquad.seasonTotalPoints
-                            ?? rivalProfile?.summaryOverallPoints
-                            ?? rival.overallPoints,
-                        projectedGameweekPoints: nil,
-                        expectedPointsSection: nil,
-                        isExpectedPointsLoading: true
-                    )
-                )
-            } catch {
-                continue
-            }
-        }
-
-        return refreshedRivals.sorted { lhs, rhs in
-            let left = lhs.teamName.trimmingCharacters(in: .whitespacesAndNewlines)
-            let right = rhs.teamName.trimmingCharacters(in: .whitespacesAndNewlines)
-            if left.caseInsensitiveCompare(right) != .orderedSame {
-                return left.localizedCaseInsensitiveCompare(right) == .orderedAscending
-            }
-            return lhs.entryID < rhs.entryID
-        }
-    }
-
-    private func refreshRivalScores(
-        gameweek: FantasyGameweek,
-        liveResponse: FantasyEventLiveResponse,
-        fixtures: [FantasyFixture],
-        seasonFixtures: [FantasyFixture],
-        bootstrapLookup: FantasyBootstrapLookup
-    ) async {
-        let existingRivals = rivalSquads
         let publicClient = fantasyPublicClient
-        let picksByEntryID = await withTaskGroup(
-            of: (Int, FantasyPicksResponse?).self,
-            returning: [Int: FantasyPicksResponse].self
-        ) { group in
-            let maximumConcurrentRequests = 6
-            let initialRequestCount = min(maximumConcurrentRequests, existingRivals.count)
-            for rival in existingRivals.prefix(initialRequestCount) {
+        loadingRivalEntryIDs = Set(rivals.map(\.entryID))
+        // Picks contain season totals. Badge/profile enrichment must not delay scores.
+        await withTaskGroup(of: (Int, FantasyPicksResponse?, String?).self) { group in
+            var nextIndex = 0
+            func enqueue(_ index: Int) {
+                let entryID = rivals[index].entryID
                 group.addTask {
-                    let picks = try? await publicClient.fetchPicks(
-                        entryID: rival.entryID,
-                        eventID: gameweek.id
-                    )
-                    return (rival.entryID, picks)
-                }
-            }
-
-            var results: [Int: FantasyPicksResponse] = [:]
-            var nextRivalIndex = initialRequestCount
-            while let (entryID, picks) = await group.next() {
-                if let picks {
-                    results[entryID] = picks
-                }
-                if nextRivalIndex < existingRivals.count {
-                    let rival = existingRivals[nextRivalIndex]
-                    nextRivalIndex += 1
-                    group.addTask {
-                        let picks = try? await publicClient.fetchPicks(
-                            entryID: rival.entryID,
-                            eventID: gameweek.id
-                        )
-                        return (rival.entryID, picks)
+                    do {
+                        let picks = try await publicClient.fetchPicks(entryID: entryID, eventID: gameweek.id)
+                        return (entryID, picks, nil)
+                    } catch {
+                        return (entryID, nil, error.localizedDescription)
                     }
                 }
             }
-            return results
-        }
-        if Task.isCancelled { return }
-
-        var refreshedRivals: [FantasyRivalSquad] = []
-        refreshedRivals.reserveCapacity(existingRivals.count)
-
-        for rival in existingRivals {
-            if Task.isCancelled { return }
-            if let picks = picksByEntryID[rival.entryID] {
-                let squad = await buildSquadDisplayData(
-                    gameweek: gameweek,
-                    picksResponse: picks,
-                    liveResponse: liveResponse,
-                    fixtures: fixtures,
-                    seasonFixtures: seasonFixtures,
-                    bootstrap: bootstrapLookup
-                )
-                refreshedRivals.append(
-                    FantasyRivalSquad(
-                        entryID: rival.entryID,
-                        teamName: rival.teamName,
-                        managerName: rival.managerName,
-                        clubBadgeSrc: rival.clubBadgeSrc,
-                        squad: squad,
-                        allGameweeksPoints: rival.allGameweeksPoints,
-                        projectedGameweekPoints: rival.projectedGameweekPoints,
-                        expectedPointsSection: rival.expectedPointsSection,
-                        isExpectedPointsLoading: rival.isExpectedPointsLoading
+            for index in 0..<min(3, rivals.count) {
+                enqueue(index)
+                nextIndex += 1
+            }
+            while let (entryID, picks, failure) = await group.next() {
+                guard !Task.isCancelled, rivalRefreshToken == refreshToken else {
+                    group.cancelAll()
+                    break
+                }
+                if let picks, let rival = rivals.first(where: { $0.entryID == entryID }) {
+                    let squad = await buildSquadDisplayData(
+                        gameweek: gameweek, picksResponse: picks, liveResponse: liveResponse,
+                        fixtures: fixtures, seasonFixtures: seasonFixtures, bootstrap: bootstrapLookup
                     )
-                )
-            } else {
-                refreshedRivals.append(rival)
+                    guard !Task.isCancelled, rivalRefreshToken == refreshToken else {
+                        group.cancelAll()
+                        break
+                    }
+                    let existing = rivalSquads.first { $0.entryID == entryID }
+                    let refreshed = FantasyRivalSquad(
+                        entryID: entryID, teamName: rival.teamName, managerName: rival.managerDisplayName,
+                        clubBadgeSrc: existing?.clubBadgeSrc ?? rival.clubBadgeSrc,
+                        squad: squad,
+                        allGameweeksPoints: squad.seasonTotalPoints ?? existing?.allGameweeksPoints ?? rival.overallPoints,
+                        projectedGameweekPoints: existing?.projectedGameweekPoints,
+                        expectedPointsSection: existing?.expectedPointsSection,
+                        isExpectedPointsLoading: existing?.isExpectedPointsLoading ?? false
+                    )
+                    rivalSquads.removeAll { $0.entryID == entryID }
+                    rivalSquads.append(refreshed)
+                    rivalScoreSnapshots[entryID] = FantasyRivalScoreSnapshot(
+                        currentPoints: refreshed.currentScore, seasonPoints: refreshed.allGameweeksPoints,
+                        updatedAt: Date()
+                    )
+                    staleRivalEntryIDs.remove(entryID)
+                    if let key = rivalScoreStorageKey,
+                       let encoded = try? JSONEncoder().encode(rivalScoreSnapshots) {
+                        rivalScoreDefaults.set(encoded, forKey: key)
+                    }
+                } else {
+                    // A failed update never removes the last successful score.
+                    staleRivalEntryIDs.insert(entryID)
+                    logPerf("rival_score_unavailable entry_id=\(entryID) error=\(failure ?? "unknown")")
+                }
+                loadingRivalEntryIDs.remove(entryID)
+                if nextIndex < rivals.count {
+                    enqueue(nextIndex)
+                    nextIndex += 1
+                }
             }
         }
-
-        rivalSquads = refreshedRivals
+        if rivalRefreshToken == refreshToken {
+            staleRivalEntryIDs.formUnion(loadingRivalEntryIDs)
+            loadingRivalEntryIDs = []
+        }
     }
 
     private func populateRivalExpectedPoints(

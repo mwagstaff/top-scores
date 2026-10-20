@@ -70,7 +70,6 @@ enum FootballVisualStyle {
     static let cardTop = Color(red: 0.055, green: 0.105, blue: 0.165)
     static let cardBottom = Color(red: 0.025, green: 0.065, blue: 0.110)
     static let mutedText = Color(red: 0.57, green: 0.64, blue: 0.72)
-    static let predictionAccent = Color(red: 0.57, green: 0.43, blue: 0.98)
     static let border = Color.white.opacity(0.08)
     static let divider = Color.white.opacity(0.075)
 
@@ -195,45 +194,18 @@ struct LiveInPlayStandingsNote: View {
 struct LiveStandingsRowBackground: View {
     let isActive: Bool
 
-    @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
-
     var body: some View {
-        TimelineView(
-            .animation(
-                minimumInterval: 1.0 / 30.0,
-                paused: !isActive || accessibilityReduceMotion
-            )
-        ) { context in
-            Rectangle()
-                .fill(Color.liveMatch)
-                .opacity(liveStandingsRowHighlightOpacity(
-                    at: context.date,
-                    isActive: isActive,
-                    reduceMotion: accessibilityReduceMotion
-                ))
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .transaction { transaction in
-            transaction.animation = nil
-        }
-        .accessibilityHidden(true)
+        // Live colour conveys status without keeping every table row rendering at 30 Hz.
+        Rectangle()
+            .fill(Color.liveMatch)
+            .opacity(liveStandingsRowHighlightOpacity(isActive: isActive))
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityHidden(true)
     }
 }
 
-func liveStandingsRowHighlightOpacity(
-    at date: Date,
-    isActive: Bool,
-    reduceMotion: Bool
-) -> Double {
-    guard isActive else { return 0 }
-    guard !reduceMotion else { return 0.14 }
-
-    let cycleDuration = 2.2
-    let cyclePosition = date.timeIntervalSinceReferenceDate
-        .truncatingRemainder(dividingBy: cycleDuration) / cycleDuration
-    let pulse = (1 - cos(cyclePosition * 2 * .pi)) / 2
-    return 0.07 + (0.13 * pulse)
+func liveStandingsRowHighlightOpacity(isActive: Bool) -> Double {
+    isActive ? 0.14 : 0
 }
 
 struct FootballPitchSegmentOption<Value: Hashable>: Identifiable {

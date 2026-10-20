@@ -63,6 +63,46 @@ struct StadiumParallaxMotionTests {
         await drain(queue)
     }
 
+    @MainActor
+    @Test func sharedMotionStopsOnlyAfterLastVisibleConsumerLeaves() async {
+        let queue = DispatchQueue(label: "StadiumParallaxMotionTests.consumers")
+        let backend = RecordingParallaxMotionBackend()
+        let model = StadiumParallaxMotionModel(
+            driver: StadiumParallaxMotionDriver(queue: queue) { backend }
+        )
+        let first = UUID()
+        let second = UUID()
+        model.deactivate(viewID: first)
+        model.activate(viewID: first, orientation: .portrait)
+        model.activate(viewID: second, orientation: .portrait)
+        model.deactivate(viewID: first)
+        await drain(queue)
+        #expect(backend.events == ["start:portrait:0"])
+        model.deactivate(viewID: second)
+        model.deactivate(viewID: second)
+        await drain(queue)
+        #expect(backend.events == ["start:portrait:0", "stop"])
+    }
+
+    @Test func publicationGateSuppressesStationaryNoiseButAccumulatesMovement() {
+        var gate = StadiumParallaxPublicationGate()
+        for _ in 0..<1_000 {
+            #expect(!{ gate.accepts(.zero) }())
+            #expect(!{ gate.accepts(CGSize(width: 0.1, height: -0.1)) }())
+        }
+        #expect(!{ gate.accepts(CGSize(width: 0.4, height: 0)) }())
+        #expect({ gate.accepts(CGSize(width: 0.6, height: 0)) }())
+        #expect(!{ gate.accepts(CGSize(width: 0.7, height: 0)) }())
+        #expect({ gate.accepts(CGSize(width: 0.7, height: -0.6)) }())
+        #expect({ gate.accepts(.zero) }())
+    }
+
+    @Test func publicationGateStartsFromExistingTranslation() {
+        var gate = StadiumParallaxPublicationGate(initialTranslation: CGSize(width: 8, height: 2))
+        #expect(!{ gate.accepts(CGSize(width: 8, height: 2)) }())
+        #expect({ gate.accepts(CGSize(width: 7, height: 2)) }())
+    }
+
     private func drain(_ queue: DispatchQueue) async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             queue.async { continuation.resume() }

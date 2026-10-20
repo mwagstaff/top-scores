@@ -18,21 +18,19 @@
 	<string>$(PRODUCT_NAME)</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>$(MARKETING_VERSION)</string>
+	<key>CFBundleVersion</key>
+	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
-			<key>CFBundleURLName</key>
-			<string>dev.skynolimit.topscores</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>topscores</string>
 			</array>
 		</dict>
 	</array>
-	<key>CFBundleShortVersionString</key>
-	<string>$(MARKETING_VERSION)</string>
-	<key>CFBundleVersion</key>
-	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>NSCalendarsWriteOnlyAccessUsageDescription</key>
 	<string>Allow Top Scores to add matches to your calendar.</string>
 	<key>NSRemindersFullAccessUsageDescription</key>

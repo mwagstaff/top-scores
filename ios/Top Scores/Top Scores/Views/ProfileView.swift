@@ -12,7 +12,6 @@ struct ProfileView: View {
     @State private var isSubscribingToCalendar = false
     @State private var calendarSubscriptionErrorMessage = ""
     @State private var showsCalendarSubscriptionError = false
-    @State private var showsPredictionGame = false
 
     var body: some View {
         NavigationStack {
@@ -72,17 +71,6 @@ struct ProfileView: View {
                                     )
                                 }
 
-                                Button {
-                                    showsPredictionGame = true
-                                } label: {
-                                    profileRow(
-                                        title: "Beat the AI",
-                                        subtitle: "Predict Premier League scores and see how you compare.",
-                                        systemImage: "brain.head.profile"
-                                    )
-                                }
-                                .accessibilityIdentifier("prediction-game-entry")
-
                                 NavigationLink {
                                     AboutView(embeddedInNavigation: true)
                                 } label: {
@@ -108,12 +96,6 @@ struct ProfileView: View {
             .toolbarColorScheme(.dark, for: .navigationBar)
         }
         .environment(\.colorScheme, .dark)
-        .crashBreadcrumb("profile_beat_the_ai", isPresented: showsPredictionGame)
-        .sheet(isPresented: $showsPredictionGame) {
-            PredictionGameMenuFlow(onPredictionsVisibilityChanged: {})
-                .presentationDetents([.large])
-                .presentationDragIndicator(.visible)
-        }
         .alert("Unable to subscribe", isPresented: $showsCalendarSubscriptionError) {
             Button("OK", role: .cancel) {}
         } message: {

@@ -214,6 +214,72 @@ nonisolated struct MatchVarEvent: Codable, Hashable, Sendable {
     }
 }
 
+nonisolated struct MatchPerformanceResponse: Decodable, Sendable {
+    struct Player: Decodable, Sendable {
+        let player_id: String
+        let stats: MatchPlayerStats
+    }
+    let players: [Player]
+}
+
+nonisolated struct PlayerMatchHistoryResponse: Decodable, Sendable {
+    let matches: [PlayerMatchHistory]
+}
+
+nonisolated struct PlayerMatchHistory: Decodable, Identifiable, Sendable {
+    let event_id: String
+    let date: String
+    let home_team: String
+    let away_team: String
+    let home_score: Int?
+    let away_score: Int?
+    let is_home: Bool?
+    let result_note: String?
+    let match: Match?
+    let stats: MatchPlayerStats
+    var id: String { event_id }
+    var result: String? {
+        guard let home_score, let away_score, let is_home else { return nil }
+        if home_score == away_score { return "D" }
+        return (home_score > away_score) == is_home ? "W" : "L"
+    }
+    var score: String {
+        guard let home_score, let away_score else { return "–" }
+        return "\(home_score)–\(away_score)"
+    }
+}
+
+nonisolated struct MatchPlayerStats: Codable, Hashable, Sendable {
+    let rating: Double?
+    let minutesPlayed: Int?
+    let goals: Int?
+    let assists: Int?
+    let totalShots: Int?
+    let shotsOnTarget: Int?
+    let accuratePasses: Int?
+    let totalPasses: Int?
+    let tackles: Int?
+    let saves: Int?
+    let expectedGoals: Double?
+
+    var displayRating: Double? {
+        guard let rating, rating.isFinite, (1...10).contains(rating) else { return nil }
+        return rating
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case rating, goals, saves
+        case minutesPlayed = "minutes_played"
+        case assists = "goal_assist"
+        case totalShots = "total_shots"
+        case shotsOnTarget = "shots_on_target"
+        case accuratePasses = "accurate_pass"
+        case totalPasses = "total_pass"
+        case tackles = "total_tackle"
+        case expectedGoals = "expected_goals"
+    }
+}
+
 nonisolated struct MatchLineupPlayer: Codable, Hashable, Identifiable, Sendable {
     let number: Int?
     let name: String
@@ -225,6 +291,7 @@ nonisolated struct MatchLineupPlayer: Codable, Hashable, Identifiable, Sendable 
     let formationRowIndex: Int?
     let formationSlotIndex: Int?
     let formationRowSize: Int?
+    let matchStats: MatchPlayerStats?
 
     var id: String {
         if let idPlayer, !idPlayer.isEmpty {
@@ -249,7 +316,8 @@ nonisolated struct MatchLineupPlayer: Codable, Hashable, Identifiable, Sendable 
         cutoutURL: String? = nil,
         formationRowIndex: Int?,
         formationSlotIndex: Int?,
-        formationRowSize: Int?
+        formationRowSize: Int?,
+        matchStats: MatchPlayerStats? = nil
     ) {
         self.number = number
         self.name = name
@@ -261,9 +329,11 @@ nonisolated struct MatchLineupPlayer: Codable, Hashable, Identifiable, Sendable 
         self.formationRowIndex = formationRowIndex
         self.formationSlotIndex = formationSlotIndex
         self.formationRowSize = formationRowSize
+        self.matchStats = matchStats
     }
 
     enum CodingKeys: String, CodingKey {
+        case matchStats = "match_stats"
         case number
         case name
         case idPlayer = "id_player"
@@ -274,6 +344,14 @@ nonisolated struct MatchLineupPlayer: Codable, Hashable, Identifiable, Sendable 
         case formationRowIndex = "formation_row_index"
         case formationSlotIndex = "formation_slot_index"
         case formationRowSize = "formation_row_size"
+    }
+
+    func withMatchStats(_ stats: MatchPlayerStats?) -> MatchLineupPlayer {
+        MatchLineupPlayer(number: number, name: name, idPlayer: idPlayer,
+            positionCategory: positionCategory, position: position, positionShort: positionShort,
+            cutoutURL: cutoutURL, formationRowIndex: formationRowIndex,
+            formationSlotIndex: formationSlotIndex, formationRowSize: formationRowSize,
+            matchStats: stats ?? matchStats)
     }
 
     private static func normalizeName(_ value: String) -> String {
@@ -298,7 +376,8 @@ nonisolated struct MatchLineupPlayer: Codable, Hashable, Identifiable, Sendable 
         lhs.cutoutURL == rhs.cutoutURL &&
         lhs.formationRowIndex == rhs.formationRowIndex &&
         lhs.formationSlotIndex == rhs.formationSlotIndex &&
-        lhs.formationRowSize == rhs.formationRowSize
+        lhs.formationRowSize == rhs.formationRowSize &&
+        lhs.matchStats == rhs.matchStats
     }
 }
 

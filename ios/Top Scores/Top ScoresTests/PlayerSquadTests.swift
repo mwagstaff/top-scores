@@ -3,6 +3,50 @@ import Testing
 @testable import Top_Scores
 
 struct PlayerSquadTests {
+    @Test func ratingHistoryUsesPlayerSideForResultAndKeepsMissingRatings() throws {
+        let json = #"""
+        {"matches":[{"event_id":"209598","date":"2026-10-17T11:30:00Z","home_team":"Everton","away_team":"Chelsea","home_score":1,"away_score":2,"is_home":true,"stats":{"rating":null,"minutes_played":90}}]}
+        """#
+        let response = try JSONDecoder().decode(PlayerMatchHistoryResponse.self, from: Data(json.utf8))
+        #expect(response.matches[0].result == "L")
+        #expect(response.matches[0].score == "1–2")
+        #expect(response.matches[0].stats.displayRating == nil)
+        #expect(response.matches[0].match == nil)
+        let away = try JSONDecoder().decode(PlayerMatchHistoryResponse.self, from: Data(json.replacingOccurrences(of: "true", with: "false").utf8))
+        #expect(away.matches[0].result == "W")
+    }
+
+    @Test func ratingHistoryDecodesAvailableMatchDestination() throws {
+        let json = #"""
+        {"matches":[{"event_id":"209598","date":"2026-10-17T11:30:00Z","home_team":"Everton","away_team":"Chelsea","stats":{},"match":{"match_details_id":"209598","date":"2026-10-17","time":"12:30","home_team":"Everton","away_team":"Chelsea","league":"Premier League","home_score":0,"away_score":2,"score_status":"FT"}}]}
+        """#
+        let response = try JSONDecoder().decode(PlayerMatchHistoryResponse.self, from: Data(json.utf8))
+        let match = try #require(response.matches[0].match)
+        #expect(match.matchDetailsID == "209598")
+        #expect(match.homeTeam == "Everton")
+        #expect(match.awayScore == 2)
+    }
+
+    @Test func lineupMatchStatsDecodeAndChangesInvalidateEquality() throws {
+        let payload = #"""
+        {"name":"Saka","id_player":"455","match_stats":{"rating":7.1,"minutes_played":96,"goals":0,"goal_assist":1,"expected_goals":null}}
+        """#
+        let player = try JSONDecoder().decode(MatchLineupPlayer.self, from: Data(payload.utf8))
+        #expect(player.matchStats?.displayRating == 7.1)
+        #expect(player.matchStats?.goals == 0)
+        #expect(player.matchStats?.expectedGoals == nil)
+        let updated = try JSONDecoder().decode(MatchLineupPlayer.self, from: Data(payload.replacingOccurrences(of: "7.1", with: "8.2").utf8))
+        #expect(player != updated)
+        let restored = try JSONDecoder().decode(MatchLineupPlayer.self, from: JSONEncoder().encode(player))
+        #expect(restored == player)
+        for value in ["null", "0", "93"] {
+            let stats = try JSONDecoder().decode(MatchPlayerStats.self, from: Data("{\"rating\":\(value)}".utf8))
+            #expect(stats.displayRating == nil)
+        }
+        let old = try JSONDecoder().decode(MatchLineupPlayer.self, from: Data(#"{"name":"Player"}"#.utf8))
+        #expect(old.matchStats == nil)
+    }
+
     @Test func playerDetailsDecodesBSDProfileFields() throws {
         let json = Data(#"""
         {

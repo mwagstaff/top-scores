@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 /* eslint-disable no-console */
 const fs = require("fs");
+const cheerio = require("cheerio");
 const http = require("http");
 const https = require("https");
 const path = require("path");
 const { URL } = require("url");
 
-const DEFAULT_CLUB_ELO_BASE_URL = "http://api.clubelo.com";
+const DEFAULT_CLUB_ELO_BASE_URL = "https://clubelo.com";
 const DEFAULT_CLUB_ELO_TIMEZONE = "Europe/London";
 const DEFAULT_CLUB_ELO_OUTPUT = path.join(__dirname, "club_elo_teams.json");
 const DEFAULT_CLUB_ELO_MIN_ROWS = 600;
@@ -41,15 +42,17 @@ function clubEloDateInTimeZone(date = new Date(), timeZone = DEFAULT_CLUB_ELO_TI
   return `${year}-${month}-${day}`;
 }
 
-function buildClubEloUrl(baseUrl, date) {
+function buildClubEloUrl(baseUrl) {
   const normalizedBase = String(baseUrl || DEFAULT_CLUB_ELO_BASE_URL).replace(/\/+$/, "");
-  return `${normalizedBase}/${date}`;
+  // Migrate existing deployments that still override the retired CSV host.
+  if (/^https?:\/\/api\.clubelo\.com$/i.test(normalizedBase)) return `${DEFAULT_CLUB_ELO_BASE_URL}/Ranking`;
+  return `${normalizedBase}/Ranking`;
 }
 
 function fetchText(url, redirectDepth = 0) {
   return new Promise((resolve, reject) => {
     if (redirectDepth > 5) {
-      reject(new Error("Too many redirects while fetching Club Elo CSV"));
+      reject(new Error("Too many redirects while fetching Club Elo rankings"));
       return;
     }
 
@@ -60,7 +63,7 @@ function fetchText(url, redirectDepth = 0) {
       {
         headers: {
           "User-Agent": "Mozilla/5.0 (compatible; ClubEloParser/1.0)",
-          Accept: "text/csv,*/*;q=0.8",
+          Accept: "text/html,*/*;q=0.8",
         },
       },
       (res) => {
@@ -243,25 +246,80 @@ function rankByElo(rows) {
   }));
 }
 
-async function fetchClubEloRankings(options = {}) {
-  const timeZone = options.timeZone || DEFAULT_CLUB_ELO_TIMEZONE;
-  const date = options.date || clubEloDateInTimeZone(new Date(), timeZone);
-  const url = buildClubEloUrl(options.baseUrl || DEFAULT_CLUB_ELO_BASE_URL, date);
-  const response = await fetchText(url);
-  const validated = validateCsvResponse(response, {
-    minRows: options.minRows,
-    minBytes: options.minBytes,
-  });
-  const parsedRows = parseClubEloRows(validated.lines);
-  const teams = rankByElo(parsedRows);
-  if (teams.length < (options.minRows || DEFAULT_CLUB_ELO_MIN_ROWS)) {
-    throw new Error(
-      `Club Elo parsed rows too small (${teams.length}). Expected at least ${options.minRows || DEFAULT_CLUB_ELO_MIN_ROWS}.`
-    );
+// Read published HTML only; never execute the upstream page's scripts.
+function parseRankingPage(response, options = {}) {
+  const body = String(response.body || "");
+  const contentType = String(response.headers["content-type"] || "");
+  const byteLength = Buffer.byteLength(body);
+  if (!contentType.includes("text/html")) throw new Error("Club Elo response is not HTML");
+  if (byteLength < (options.minBytes ?? DEFAULT_CLUB_ELO_MIN_BYTES)) {
+    throw new Error("Club Elo rankings page is too small");
   }
+  const $ = cheerio.load(body);
+  const date = $(".accordion-major-item a").map((_i, el) => $(el).text().trim())
+    .get().find((value) => /^\d{4}-\d{2}-\d{2}$/.test(value));
+  const age = Date.now() - Date.parse(date);
+  if (!date || !Number.isFinite(age) || age > 7 * 86400000 || age < -86400000) {
+    throw new Error("Club Elo rankings page has a missing or stale publication date");
+  }
+  const rows = new Map();
+  $(".accordion-item").each((_i, section) => {
+    const country = $(section).find(".accordion-header a").first().attr("href");
+    if (!country || !/^\/?[A-Z]{3}$/.test(country)) return;
+    let level = null;
+    $(section).find(".accordion-content tr").each((_j, tr) => {
+      if ($(tr).closest(".accordion-item")[0] !== section) return;
+      const cells = $(tr).children("td");
+      const levelMatch = cells.first().find("i").text().match(/Level (\d+)/);
+      if (levelMatch) level = Number(levelMatch[1]);
+      const club = cells.first().find(".Ast").text().trim();
+      const rating = cells.eq(1).text().trim();
+      // Provisional ratings (e.g. 1554p) are not established Elo scores.
+      if (!club || !/^\d+(?:\.\d+)?$/.test(rating)) return;
+      const code = country.replace("/", "");
+      const key = `${code}:${club}`;
+      // Same-name lower-division entries cannot be distinguished by our name-based catalog.
+      // Keep the strongest entry, consistent with ranking-order matching.
+      if (rows.has(key) && rows.get(key).Elo >= Number(rating)) return;
+      rows.set(key, {
+        Club: club === "Internazionale" ? "Inter" : club,
+        Country: code,
+        Level: level,
+        Elo: Number(rating),
+        From: date,
+        To: null,
+      });
+    });
+  });
+  // The chart carries more precise scores for the top 100. Its data is JSON,
+  // unlike the separate JavaScript table literal, which we intentionally ignore.
+  for (const match of body.matchAll(/(?:const|let|var)\s+vegaJson\s*=\s*(\{[\s\S]*?\});/g)) {
+    const chart = JSON.parse(match[1]);
+    for (const dataset of Object.values(chart.datasets || {})) {
+      if (!Array.isArray(dataset)) continue;
+      for (const item of dataset) {
+        const row = rows.get(`${item.FedURL}:${item.Name}`);
+        if (row && Number.isFinite(item.Elo)) row.Elo = item.Elo;
+      }
+    }
+  }
+  if (rows.size < (options.minRows ?? DEFAULT_CLUB_ELO_MIN_ROWS)) {
+    throw new Error(`Club Elo rankings page has too few teams (${rows.size})`);
+  }
+  return { rows: [...rows.values()], date, byteLength, contentType };
+}
+
+async function fetchClubEloRankings(options = {}) {
+  const url = buildClubEloUrl(options.baseUrl || DEFAULT_CLUB_ELO_BASE_URL);
+  const response = await fetchText(url);
+  const validated = parseRankingPage(response, options);
+  if (options.date && options.date !== validated.date) {
+    throw new Error("Club Elo website only supplies its latest published rankings");
+  }
+  const teams = rankByElo(validated.rows);
 
   return {
-    date,
+    date: validated.date,
     url,
     teams,
     rowCount: teams.length,
@@ -320,6 +378,7 @@ module.exports = {
   fetchClubEloRankings,
   writeClubEloRankings,
   __private: {
+    parseRankingPage,
     parseCsvLine,
     validateCsvResponse,
     parseClubEloRows,

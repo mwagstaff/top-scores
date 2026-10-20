@@ -112,6 +112,26 @@ final class WatchMatchesStore: NSObject, ObservableObject {
         reloadComplications()
     }
 
+    @MainActor
+    func liveActivityMatch(activityID: String) async -> WatchMatch? {
+        // WCSession may still be activating when a Live Activity cold-launches the app.
+        for _ in 0..<20 {
+            if session?.activationState == .activated { break }
+            do { try await Task.sleep(for: .milliseconds(100)) } catch { return nil }
+        }
+        guard !Task.isCancelled, let session, session.activationState == .activated else { return nil }
+        let urlString: String? = await withCheckedContinuation { continuation in
+            session.sendMessage(["live_activity_route_id": activityID], replyHandler: { reply in
+                continuation.resume(returning: reply["live_activity_route_url"] as? String)
+            }, errorHandler: { error in
+                diagnosticLog("Live Activity route request failed: %@", error.localizedDescription)
+                continuation.resume(returning: nil)
+            })
+        }
+        guard !Task.isCancelled, let urlString, let url = URL(string: urlString) else { return nil }
+        return WatchLiveActivityLink.match(from: url)
+    }
+
     func cachedDetails(for match: WatchMatch) -> WatchMatch? {
         guard let matchID = match.matchDetailsIDValue else { return nil }
         return detailsCache[matchID]?.match

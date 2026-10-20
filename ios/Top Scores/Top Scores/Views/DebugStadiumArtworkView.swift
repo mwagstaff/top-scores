@@ -541,7 +541,6 @@ private struct DebugStadiumArtworkHeroPreview: View {
     @EnvironmentObject private var artworkStore: StadiumArtworkStore
     let asset: StadiumArtworkAsset
     let mode: String
-    var predictions = true
 
     private var teamName: String {
         asset.teamIDs.compactMap { artworkStore.catalog?.teams[$0]?.name }.first ?? "Arsenal"
@@ -562,9 +561,6 @@ private struct DebugStadiumArtworkHeroPreview: View {
             if mode == "Match" {
                 MatchDetailScoreboardHero(
                     match: match, kickoffText: "Sun 6 Sep, 16:30",
-                    predictionDisplay: predictions
-                        ? .available(homeGoals: 1, awayGoals: 2, homeWinProbability: 0.57,
-                                     drawProbability: 0.24, awayWinProbability: 0.19) : .hidden,
                     teamCompetitionEntries: []
                 )
             } else if mode == "Team" {
@@ -588,7 +584,6 @@ private struct DebugStadiumArtworkHeroReview: View {
     let initialAssetID: String
     @State private var selection: String?
     @State private var mode: String
-    @State private var predictions = true
     @State private var largerText = false
     @State private var drafts: [String: StadiumArtworkFocalPoint] = [:]
     @State private var copied = false
@@ -620,7 +615,7 @@ private struct DebugStadiumArtworkHeroReview: View {
                     .pickerStyle(.segmented)
                     .padding(.horizontal)
 
-                    DebugStadiumArtworkHeroPreview(asset: asset, mode: mode, predictions: predictions)
+                    DebugStadiumArtworkHeroPreview(asset: asset, mode: mode)
                         .environment(\.dynamicTypeSize, largerText ? .accessibility1 : .large)
 
                     VStack(alignment: .leading, spacing: 14) {
@@ -635,7 +630,6 @@ private struct DebugStadiumArtworkHeroReview: View {
                         }
                         Text(asset.id).font(.caption).textSelection(.enabled)
                         Text("Sample content • rotation paused").font(.caption).foregroundStyle(.secondary)
-                        Toggle("Show predictions", isOn: $predictions)
                         Toggle("Larger text", isOn: $largerText)
                         Text("Framing").font(.headline)
                         Text("Choose the part of the photograph to keep centred. Movement stops at the image edges.")

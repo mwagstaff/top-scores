@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, memo, type CSSProperties } from "react";
 import { clearMatchDetailsCache, fetchMatchDetails, fetchMatchSocial, fetchPlayerDetails, shouldRetryMatchDetails } from "../api";
-import { getPrediction, isPredictionPending } from "../predictions";
 import { MatchTeamLeaguePositionsLink } from "./MatchTeamLeaguePositionsLink";
 
 // Neutral accent for teams without a configured brand colour,
@@ -26,7 +25,6 @@ import type {
   MatchRedCardEvent,
   MatchYellowCardEvent,
   MatchVarEvent,
-  StoredPrediction,
   TvChannel,
 } from "../types";
 
@@ -57,10 +55,6 @@ interface MatchCardProps {
   highlightToday?: boolean;
   useShortTeamNames?: boolean;
   debugMode?: boolean;
-  /** Whether the "show predicted scores" toggle is on. */
-  showPrediction?: boolean;
-  /** The match's day bucket, used to show a brief "calculating" spinner while that day's predictions warm up. */
-  predictionDateKey?: string;
 }
 
 export function MatchCard({
@@ -68,8 +62,6 @@ export function MatchCard({
   highlightToday = false,
   useShortTeamNames = false,
   debugMode = false,
-  showPrediction = false,
-  predictionDateKey,
 }: MatchCardProps) {
   const [homeLogoMissing, setHomeLogoMissing] = useState(false);
   const [awayLogoMissing, setAwayLogoMissing] = useState(false);
@@ -87,13 +79,6 @@ export function MatchCard({
   const isFinished    = isMatchFinished(match);
   const isExpandable  = Boolean(match.matchDetailsId);
   const detailPanelId = `match-details-${match.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
-
-  // Predicted score chip — frozen the first time it's computed (see ../predictions),
-  // so once shown it stays comparable to the eventual real result.
-  const prediction = showPrediction ? getPrediction(match.id) : null;
-  const predictionPending = showPrediction && !prediction && Boolean(predictionDateKey) && isPredictionPending(predictionDateKey!);
-  const predictionCorrect =
-    prediction != null && isFinished && match.homeScore === prediction.homeGoals && match.awayScore === prediction.awayGoals;
 
   // Derived display state
   const hasScore   = typeof match.homeScore === "number" && typeof match.awayScore === "number";
@@ -309,16 +294,6 @@ export function MatchCard({
         </div>
       )}
 
-      {/* Predicted score strip: chip + home/draw/away probability bar */}
-      {predictionPending ? (
-        <div className="match-predict-strip">
-          <span className="mc-predict-spinner" aria-label="Calculating predicted score" />
-          <span className="match-predict-pending-label">Calculating prediction…</span>
-        </div>
-      ) : prediction ? (
-        <PredictionStrip prediction={prediction} isFinished={isFinished} isCorrect={predictionCorrect} />
-      ) : null}
-
       {/* Expanded match details panel */}
       {isExpandable && isExpanded && (
         <div className="match-details-panel" id={detailPanelId}>
@@ -349,71 +324,6 @@ export function MatchCard({
         </div>
       )}
     </article>
-  );
-}
-
-// ── Predicted score strip ───────────────────────────────────────────
-// A chip (indigo while undecided; green once finished and correct; muted grey
-// once finished and it didn't) plus a home/draw/away probability bar — the
-// probabilities are the frozen pre-match snapshot and never change.
-function PredictionStrip({
-  prediction,
-  isFinished,
-  isCorrect,
-}: {
-  prediction: StoredPrediction;
-  isFinished: boolean;
-  isCorrect: boolean;
-}) {
-  const stateClass = !isFinished ? "" : isCorrect ? " is-correct" : " is-missed";
-  const chipLabel = isFinished
-    ? isCorrect
-      ? `Predicted score ${prediction.homeGoals} to ${prediction.awayGoals}, correct`
-      : `Predicted score ${prediction.homeGoals} to ${prediction.awayGoals}, final score was different`
-    : `Predicted score ${prediction.homeGoals} to ${prediction.awayGoals}`;
-
-  const total = Math.max(
-    prediction.homeWinProbability + prediction.drawProbability + prediction.awayWinProbability,
-    0.0001
-  );
-  const homePct = Math.round((prediction.homeWinProbability / total) * 100);
-  const drawPct = Math.round((prediction.drawProbability / total) * 100);
-  const awayPct = Math.round((prediction.awayWinProbability / total) * 100);
-
-  return (
-    <div className="match-predict-strip">
-      <span className={`mc-predict${stateClass}`} aria-label={chipLabel}>
-        <svg className="mc-predict-icon" viewBox="0 0 24 24" aria-hidden="true">
-          {isFinished && isCorrect ? (
-            <path d="M4.5 12.5 9 17l10.5-10.5" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" />
-          ) : (
-            <path
-              d="M12 3.5c.3 3.1 1.1 4.9 2.2 6 1.1 1.1 2.9 1.9 6 2.2-3.1.3-4.9 1.1-6 2.2-1.1 1.1-1.9 2.9-2.2 6-.3-3.1-1.1-4.9-2.2-6-1.1-1.1-2.9-1.9-6-2.2 3.1-.3 4.9-1.1 6-2.2 1.1-1.1 1.9-2.9 2.2-6Z"
-              fill="currentColor"
-            />
-          )}
-        </svg>
-        {prediction.homeGoals}–{prediction.awayGoals}
-      </span>
-
-      <div
-        className="match-predict-bar"
-        role="img"
-        aria-label={`Home win ${homePct} percent, draw ${drawPct} percent, away win ${awayPct} percent`}
-      >
-        <span className="mpb-home" style={{ flexGrow: Math.max(homePct, 0.5) }} />
-        <span className="mpb-draw" style={{ flexGrow: Math.max(drawPct, 0.5) }} />
-        <span className="mpb-away" style={{ flexGrow: Math.max(awayPct, 0.5) }} />
-      </div>
-
-      <div className="match-predict-label" aria-hidden="true">
-        <span className="mpl-home">H {homePct}</span>
-        <span className="mpl-sep">·</span>
-        <span>D {drawPct}</span>
-        <span className="mpl-sep">·</span>
-        <span className="mpl-away">A {awayPct}</span>
-      </div>
-    </div>
   );
 }
 
