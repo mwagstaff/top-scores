@@ -1,690 +1,596 @@
-import { useEffect, useMemo, useReducer, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import { fetchMatchesPage, fetchTeamRankings, fetchCompetitionWeights, fetchCompetitions } from "../api";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
+import { cachedDay, loadDay } from "../dayStore";
+import {
+  competitionPath,
+  dateLabel,
+  isUKRelevant,
+  matchPath,
+  moveDate,
+  ukChannels,
+  ukDate,
+  validDate,
+} from "../football";
+import { isMatchFinished, isMatchLive } from "../matchState";
 import { usePreferences } from "../preferences";
-import { CompetitionWeightLookup, TeamRatingLookup, groupMatches } from "../matchGrouping";
-import { useShouldUseShortTeamNames } from "../useResponsiveTeamNames";
-import { MatchCard } from "./MatchCard";
-import type { ChangeEvent } from "react";
-import type { Match, MatchDayGroup, MatchesMode, Preferences } from "../types";
+import { FixtureRow } from "./FixtureRow";
+import { PageMeta } from "./PageMeta";
+import { StadiumBackdrop } from "./StadiumBackdrop";
+import type { Match, MatchesMode } from "../types";
+import { useInitialSeed } from "../bootstrap";
+import { normalizeMatch } from "../api";
+import { fetchTeamRankings } from "../api";
 
-interface MatchesScreenProps {
-  mode: MatchesMode;
-}
-
-interface ScreenState {
-  loading: boolean;
-  refreshing: boolean;
-  error: string | null;
-  groups: MatchDayGroup[];
-  totalCount: number;
-  lastUpdated: string | null;
-  matches: Match[];
-  page: number;
-  hasMore: boolean;
-  loadingMore: boolean;
-}
-
-const initialState: ScreenState = {
-  loading: true,
-  refreshing: false,
-  error: null,
-  groups: [],
-  totalCount: 0,
-  lastUpdated: null,
-  matches: [],
-  page: 0,
-  hasMore: false,
-  loadingMore: false,
-};
-
-export function MatchesScreen({ mode }: MatchesScreenProps) {
-  const { preferences, setPreferences } = usePreferences();
-  const [searchText, setSearchText]   = useState("");
-  const [showSearch, setShowSearch]   = useState(false);
-  const [debugMode, setDebugMode]     = useState(false);
-  const [state, setState]             = useState<ScreenState>(initialState);
-  const [reloadToken, reload]         = useReducer((v) => v + 1, 0);
-  const useShortTeamNames             = useShouldUseShortTeamNames();
-  const pagingRef = useRef({
-    loading: false,
-    page: 0,
-    hasMore: false,
-    matches: [] as Match[],
-  });
-
-  // Client-side competition filter – null means "show all", string[] means "show only these".
-  // This is intentionally NOT part of server preferences: the server always fetches the
-  // full set (or EPL-only), and we filter the results here. This avoids fragile server-side
-  // league-name matching when many leagues are sent as params.
-  const [customCompetitions, setCustomCompetitions] = useState<string[] | null>(null);
-
-  // On mount: read URL search params and apply them so shared/bookmarked URLs work.
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const updates: Partial<Preferences> = {};
-    if (params.get("filter") === "all") updates.englishPremierLeagueTeamsOnly = false;
-    else if (params.get("filter") === "epl") updates.englishPremierLeagueTeamsOnly = true;
-    if (params.get("uefa") === "0") updates.majorUEFAClubGamesEnabled = false;
-    if (params.get("nations") === "0") updates.homeNationsFilterEnabled = false;
-    if (params.get("majors") === "0") updates.majorTournamentsFilterEnabled = false;
-    if (Object.keys(updates).length > 0) setPreferences(updates);
-    if (params.get("debug") === "1") setDebugMode(true);
-
-    const compsParam = params.get("comps");
-    if (compsParam) {
-      setCustomCompetitions(compsParam.split(",").map((c) => c.trim()).filter(Boolean));
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // After any user-driven filter change, update the URL so the current view can be bookmarked
-  // or shared. Skip the very first effect run to avoid clobbering URL params we just applied.
-  const skipFirstUrlSync = useRef(true);
-  useEffect(() => {
-    if (skipFirstUrlSync.current) {
-      skipFirstUrlSync.current = false;
-      return;
-    }
-    const params = new URLSearchParams();
-    if (!preferences.englishPremierLeagueTeamsOnly) params.set("filter", "all");
-    if (!preferences.majorUEFAClubGamesEnabled) params.set("uefa", "0");
-    if (!preferences.homeNationsFilterEnabled) params.set("nations", "0");
-    if (!preferences.majorTournamentsFilterEnabled) params.set("majors", "0");
-    if (customCompetitions !== null) params.set("comps", customCompetitions.join(","));
-    const qs = params.toString();
-    window.history.replaceState(null, "", qs ? `${window.location.pathname}?${qs}` : window.location.pathname);
-  }, [
-    preferences.englishPremierLeagueTeamsOnly,
-    preferences.majorUEFAClubGamesEnabled,
-    preferences.homeNationsFilterEnabled,
-    preferences.majorTournamentsFilterEnabled,
-    customCompetitions,
-  ]);
-
-  const requestKey = JSON.stringify({ mode, preferences, reloadToken });
-
-  useEffect(() => {
-    const controller    = new AbortController();
-    let refreshTimeoutId = 0;
-    let loadInFlight     = false;
-    let backgroundLoadInFlight = false;
-
-    const loadRemainingResults = async (
-      rankings: Awaited<ReturnType<typeof fetchTeamRankings>>,
-      weights: Awaited<ReturnType<typeof fetchCompetitionWeights>>
-    ) => {
-      if (mode !== "results" || backgroundLoadInFlight) return;
-      backgroundLoadInFlight = true;
-      pagingRef.current.loading = true;
-      setState((current) => ({ ...current, loadingMore: true }));
-
-      try {
-        while (!controller.signal.aborted && pagingRef.current.hasMore) {
-          const payload = await fetchMatchesPage(
-            mode,
-            preferences,
-            pagingRef.current.page + 1,
-            controller.signal
-          );
-          if (controller.signal.aborted) return;
-
-          const seen = new Set(pagingRef.current.matches.map((match) => match.id));
-          const nextMatches = [
-            ...pagingRef.current.matches,
-            ...payload.matches.filter((match) => !seen.has(match.id)),
-          ];
-          const grouped = groupMatches(
-            nextMatches,
-            mode,
-            preferences.matchGroupSortOrder,
-            new TeamRatingLookup(rankings),
-            new CompetitionWeightLookup(weights)
-          );
-
-          pagingRef.current = {
-            loading: true,
-            page: payload.page,
-            hasMore: payload.hasMore,
-            matches: nextMatches,
-          };
-          setState((current) => ({
-            ...current,
-            groups: grouped,
-            matches: nextMatches,
-            page: payload.page,
-            hasMore: payload.hasMore,
-            loadingMore: payload.hasMore,
-            totalCount: payload.totalCount || current.totalCount,
-            lastUpdated: payload.lastUpdated || current.lastUpdated,
-          }));
-
-          if (payload.matches.length === 0) {
-            break;
+export function MatchesScreen({
+  mode = "fixtures",
+  tv = false,
+  competition,
+}: {
+  mode?: MatchesMode;
+  tv?: boolean;
+  competition?: string;
+}) {
+  const [params, setParams] = useSearchParams();
+  const { preferences } = usePreferences();
+  const today = ukDate();
+  const requestedDate = params.get("date");
+  const date = validDate(requestedDate)
+    ? requestedDate
+    : mode === "results"
+      ? moveDate(today, -1)
+      : today;
+  const scope =
+    params.get("scope") ||
+    (competition
+      ? "all"
+      : preferences.englishPremierLeagueTeamsOnly
+        ? "epl"
+        : "uk");
+  const epl = scope === "epl" && !competition;
+  const dayScope = epl
+    ? new URLSearchParams({
+        major_uefa: String(preferences.majorUEFAClubGamesEnabled),
+        home_nations: String(preferences.homeNationsFilterEnabled),
+        major_tournaments: String(preferences.majorTournamentsFilterEnabled),
+      }).toString()
+    : false;
+  const filter = tv ? "tv" : params.get("view") || "all";
+  const seed = useInitialSeed();
+  const seededDay = useMemo(
+    () =>
+      !epl && seed?.date === date && seed.matches
+        ? {
+            matches: seed.matches.map(normalizeMatch),
+            fetchedAt: seed.fetchedAt,
+            page: 1,
+            hasMore: Boolean(seed.hasMore),
+            lastUpdated: seed.lastUpdated || null,
+            totalCount: seed.matches.length,
           }
-        }
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        setState((current) => ({
-          ...current,
-          loadingMore: false,
-          error: error instanceof Error ? error.message : "Unable to load more results.",
-        }));
-      } finally {
-        backgroundLoadInFlight = false;
-        pagingRef.current.loading = false;
-        if (!controller.signal.aborted) {
-          setState((current) => ({ ...current, loadingMore: false }));
-        }
-      }
-    };
-
-    const load = async (manual = false) => {
-      if (loadInFlight) return;
-      loadInFlight = true;
-
-      setState((current) => ({
-        ...current,
-        loading:    current.groups.length === 0,
-        refreshing: manual || current.groups.length > 0,
-        error:      null,
-      }));
-
-      try {
-        const rankingsPromise =
-          preferences.matchGroupSortOrder === "teamScore" ||
-          preferences.matchGroupSortOrder === "kickoffThenTeamScore"
-            ? fetchTeamRankings()
-            : Promise.resolve([]);
-
-        const [rankings, weights, payload] = await Promise.all([
-          rankingsPromise,
-          fetchCompetitionWeights().catch(() => []),
-          fetchMatchesPage(mode, preferences, 1, controller.signal),
-        ]);
-
-        if (controller.signal.aborted) return;
-
-        const allMatches = payload.matches;
-        const grouped = groupMatches(
-          allMatches,
-          mode,
-          preferences.matchGroupSortOrder,
-          new TeamRatingLookup(rankings),
-          new CompetitionWeightLookup(weights)
-        );
-
-        pagingRef.current = {
-          loading: false,
-          page: payload.page,
-          hasMore: payload.hasMore,
-          matches: allMatches,
-        };
-        setState({
-          loading: false, refreshing: false, error: null,
-          groups: grouped,
-          totalCount: payload.totalCount,
-          lastUpdated: payload.lastUpdated,
-          matches: allMatches,
-          page: payload.page,
-          hasMore: payload.hasMore,
-          loadingMore: false,
-        });
-        if (mode === "results" && payload.hasMore) {
-          void loadRemainingResults(rankings, weights);
-        }
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        setState((current) => ({
-          ...current,
-          loading: false, refreshing: false,
-          error: error instanceof Error ? error.message : "Unable to load matches.",
-        }));
-      } finally {
-        loadInFlight = false;
-        if (!controller.signal.aborted) scheduleRefresh();
-      }
-    };
-
-    const scheduleRefresh = () => {
-      window.clearTimeout(refreshTimeoutId);
-      refreshTimeoutId = window.setTimeout(() => {
-        if (document.visibilityState === "visible") {
-          void load(true);
-        } else {
-          scheduleRefresh();
-        }
-      }, preferences.refreshIntervalMinutes * 60_000);
-    };
-
-    const handleWindowActive = () => {
-      if (document.visibilityState === "visible") void load(true);
-    };
-
-    void load();
-    window.addEventListener("focus", handleWindowActive);
-    document.addEventListener("visibilitychange", handleWindowActive);
-
-    return () => {
-      controller.abort();
-      window.clearTimeout(refreshTimeoutId);
-      window.removeEventListener("focus", handleWindowActive);
-      document.removeEventListener("visibilitychange", handleWindowActive);
-    };
-  }, [requestKey]);
-
-  // Build a lowercase set for O(1) lookups when a custom filter is active.
-  const customCompetitionSet = useMemo(
-    () => (customCompetitions !== null ? new Set(customCompetitions.map((c) => c.toLowerCase())) : null),
-    [customCompetitions]
+        : undefined,
+    [seed, date, epl],
   );
-
-  // Filter matches by search query (min 3 chars) and client-side competition selection.
-  const displayedGroups = useMemo(() => {
-    const query = searchText.trim().toLowerCase();
-
-    return state.groups
-      .map((day) => ({
-        ...day,
-        leagues: day.leagues
-          .map((league) => ({
-            ...league,
-            matches: league.matches.filter((match) => {
-              if (mode === "fixtures" && (match.scoreStatus || "").trim().toUpperCase() === "POSTPONED") {
-                return false;
-              }
-              // Client-side competition filter
-              if (customCompetitionSet && !customCompetitionSet.has(match.league.toLowerCase())) {
-                return false;
-              }
-              if (query.length < 3) return true;
-              const haystack = [
-                match.homeTeam, match.awayTeam,
-                match.league, match.leagueSubcategory ?? "",
-                match.tvChannels.map((c) => c.name).join(" "),
-              ].join(" ").toLowerCase();
-              return haystack.includes(query);
-            }),
-          }))
-          .filter((league) => league.matches.length > 0),
-      }))
-      .filter((day) => day.leagues.length > 0);
-  }, [mode, searchText, state.groups, customCompetitionSet]);
-
-  const title = mode === "fixtures" ? "Fixtures" : "Results";
-
+  const [query, setQuery] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [data, setData] = useState(() => ({
+    key: `${date}:${dayScope}`,
+    value:
+      seededDay || (seed?.rendered ? undefined : cachedDay(date, dayScope)),
+  }));
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [refresh, setRefresh] = useState(0);
+  const [rating, setRating] = useState<((name: string) => number) | null>(null);
+  const key = `${date}:${dayScope}`;
+  const payload = data.key === key ? data.value : cachedDay(date, dayScope);
+  useEffect(() => {
+    if (!preferences.matchGroupSortOrder.toLowerCase().includes("teamscore"))
+      return;
+    let cancelled = false;
+    void Promise.all([import("../matchGrouping"), fetchTeamRankings()])
+      .then(([module, entries]) => {
+        const lookup = new module.TeamRatingLookup(entries);
+        if (!cancelled)
+          setRating(() => (name: string) => lookup.resolvedRating(name));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [preferences.matchGroupSortOrder]);
+  useEffect(() => {
+    let cancelled = false,
+      inFlight = false;
+    let timer = 0;
+    setError("");
+    const run = async () => {
+      if (inFlight || cancelled) return;
+      if (document.visibilityState !== "visible") {
+        timer = window.setTimeout(run, 60_000);
+        return;
+      }
+      inFlight = true;
+      setBusy(true);
+      try {
+        const value = await loadDay(date, dayScope, refresh > 0);
+        if (!cancelled) {
+          setData({ key, value });
+          setError("");
+        }
+      } catch (error) {
+        if (!cancelled)
+          setError(
+            error instanceof Error
+              ? error.message
+              : "Scores are temporarily unavailable.",
+          );
+      } finally {
+        inFlight = false;
+        if (!cancelled) {
+          setBusy(false);
+          window.clearTimeout(timer);
+          timer = window.setTimeout(
+            run,
+            date === ukDate()
+              ? 10_000
+              : preferences.refreshIntervalMinutes * 60_000,
+          );
+        }
+      }
+    };
+    const activate = () => {
+      if (document.visibilityState === "visible") void run();
+    };
+    void run();
+    window.addEventListener("online", activate);
+    document.addEventListener("visibilitychange", activate);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      window.removeEventListener("online", activate);
+      document.removeEventListener("visibilitychange", activate);
+    };
+  }, [key, refresh, preferences.refreshIntervalMinutes]);
+  useEffect(() => {
+    if (!payload) return;
+    const connection = (
+      navigator as Navigator & {
+        connection?: { saveData?: boolean; effectiveType?: string };
+      }
+    ).connection;
+    if (connection?.saveData || /2g/.test(connection?.effectiveType || ""))
+      return;
+    const timer = window.setTimeout(() => {
+      void loadDay(moveDate(date, -1), dayScope).catch(() => {});
+      void loadDay(moveDate(date, 1), dayScope).catch(() => {});
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [key, Boolean(payload)]);
+  const change = (values: Record<string, string>) =>
+    setParams((current) => {
+      const next = new URLSearchParams(current);
+      for (const [key, value] of Object.entries(values)) {
+        if (value) next.set(key, value);
+        else next.delete(key);
+      }
+      return next;
+    });
+  const relevant = useMemo(
+    () =>
+      (payload?.matches || []).filter((match) => {
+        if (competition && match.league !== competition) return false;
+        const legacyComps = params.get("comps")?.split(",");
+        if (legacyComps && !legacyComps.includes(match.league)) return false;
+        if (!competition && scope === "uk" && !isUKRelevant(match))
+          return false;
+        if (
+          !competition &&
+          preferences.competitionFilterEnabled &&
+          !preferences.selectedLeagues.includes(match.league)
+        )
+          return false;
+        if (mode === "results" && !isMatchFinished(match)) return false;
+        if (
+          preferences.channelFilterEnabled &&
+          mode === "fixtures" &&
+          !match.tvChannels.some((channel) =>
+            preferences.selectedChannels.some((selected) =>
+              channel.name
+                .toLowerCase()
+                .includes(selected.replace(" (all)", "").toLowerCase()),
+            ),
+          )
+        )
+          return false;
+        return true;
+      }),
+    [payload, competition, scope, mode, preferences, params],
+  );
+  const matches = useMemo(
+    () =>
+      relevant.filter((match) => {
+        if (filter === "live" && !isMatchLive(match)) return false;
+        if (filter === "tv" && !ukChannels(match.tvChannels).length)
+          return false;
+        return `${match.homeTeam} ${match.awayTeam} ${match.league} ${match.tvChannels.map((c) => c.name).join(" ")}`
+          .toLowerCase()
+          .includes(query.toLowerCase().trim());
+      }),
+    [relevant, filter, query],
+  );
+  const groups = useMemo(() => {
+    const groups = new Map<string, Match[]>();
+    for (const match of matches)
+      groups.set(match.league, [...(groups.get(match.league) || []), match]);
+    return [...groups]
+      .sort(
+        (a, b) =>
+          (b[1][0].competitionWeight || 0) - (a[1][0].competitionWeight || 0) ||
+          a[0].localeCompare(b[0]),
+      )
+      .map(
+        ([league, games]) =>
+          [
+            league,
+            [...games].sort((a, b) =>
+              preferences.matchGroupSortOrder === "alphabetical"
+                ? a.homeTeam.localeCompare(b.homeTeam)
+                : (preferences.matchGroupSortOrder !== "teamScore"
+                    ? a.time.localeCompare(b.time)
+                    : 0) ||
+                  (rating &&
+                  preferences.matchGroupSortOrder
+                    .toLowerCase()
+                    .includes("teamscore")
+                    ? rating(b.homeTeam) +
+                      rating(b.awayTeam) -
+                      rating(a.homeTeam) -
+                      rating(a.awayTeam)
+                    : 0) ||
+                  a.homeTeam.localeCompare(b.homeTeam),
+            ),
+          ] as const,
+      );
+  }, [matches, preferences.matchGroupSortOrder, rating]);
+  const tvMatches = relevant
+    .filter(
+      (match) => ukChannels(match.tvChannels).length && !isMatchFinished(match),
+    )
+    .slice(0, 3);
+  const title =
+    competition ||
+    (tv
+      ? "Football on TV"
+      : mode === "results"
+        ? "The final whistle."
+        : "Your football. Today.");
+  const loading = !payload && !error;
   return (
-    <section className="screen-panel match-screen-panel">
-      {/* ── Minimal toolbar: search + refresh icons ── */}
-      <div className="match-controls">
-        {showSearch && (
-          <span style={{ flex: 1, marginRight: "0.25rem", fontSize: "0.75rem", color: "var(--text-muted)", alignSelf: "center" }}>
-            {searchText.trim().length >= 3 && displayedGroups.length === 0
-              ? "No matches"
-              : searchText.trim().length >= 3
-              ? `${displayedGroups.reduce((n, d) => n + d.leagues.reduce((m, l) => m + l.matches.length, 0), 0)} match${displayedGroups.reduce((n, d) => n + d.leagues.reduce((m, l) => m + l.matches.length, 0), 0) === 1 ? "" : "es"}`
-              : null}
-          </span>
-        )}
-
-        {/* Competitions dropdown */}
-        <CompetitionsDropdown
-          customCompetitions={customCompetitions}
-          onCustomCompetitionsChange={setCustomCompetitions}
+    <>
+      {!competition && (
+        <PageMeta
+          title={
+            tv
+              ? "Football on UK TV"
+              : mode === "results"
+                ? "Football results"
+                : "Live scores & fixtures"
+          }
+          description="Today’s football scores, fixtures and UK TV channels. Find your match and where to watch with Top Scores."
         />
-
-        {/* Search toggle */}
-        <button
-          type="button"
-          className={`control-btn${showSearch ? " is-active" : ""}`}
-          onClick={() => {
-            setShowSearch((v) => {
-              if (v) setSearchText(""); // clear on close
-              return !v;
-            });
-          }}
-          aria-label={showSearch ? "Close search" : "Search"}
-          style={showSearch ? { color: "var(--accent)", borderColor: "var(--accent-border)", background: "var(--accent-soft)" } : undefined}
-        >
-          {/* Magnifier icon */}
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <circle cx="11" cy="11" r="7" />
-            <path d="m16.5 16.5 4 4" />
-          </svg>
-        </button>
-
-        {/* Refresh */}
-        <button
-          type="button"
-          className={`control-btn${state.refreshing ? " is-spinning" : ""}`}
-          onClick={() => reload()}
-          disabled={state.refreshing}
-          aria-label={state.refreshing ? "Refreshing…" : `Refresh ${title.toLowerCase()}`}
-        >
-          {/* Refresh / rotate icon */}
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M4 4v5h.582m15.356 2A8.001 8.001 0 0 0 4.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 0 1-15.357-2m15.357 2H15" />
-          </svg>
-        </button>
-      </div>
-
-      {/* ── Collapsible search field ── */}
-      {showSearch && (
-        <div className="match-search">
-          <input
-            type="search"
-            placeholder="Search teams, leagues, channels…"
-            value={searchText}
-            onChange={(e) => setSearchText(e.target.value)}
-            // eslint-disable-next-line jsx-a11y/no-autofocus
-            autoFocus
-          />
-        </div>
       )}
-
-      {/* ── Match list ── */}
-      {state.loading ? (
-        <div className="empty-state empty-state--loading">
-          <span className="match-list-footer__spinner" aria-hidden="true" />
-          Loading {title.toLowerCase()}…
-        </div>
-      ) : state.error ? (
-        <div className="empty-state is-error">{state.error}</div>
-      ) : displayedGroups.length === 0 ? (
-        <div className="empty-state">
-          {searchText.trim().length >= 3
-            ? `No ${title.toLowerCase()} matched that search.`
-            : `No ${title.toLowerCase()} to show.`}
-        </div>
-      ) : (
-        <div className="match-day-stack">
-          {displayedGroups.map((day) => (
-            <section className="day-section" key={day.id}>
-              <div className="day-section-header">
-                <h3>{day.displayDate}</h3>
-              </div>
-
-              {day.leagues.map((league) => (
-                <div className="league-group" key={league.id}>
-                  <div className="league-title">{league.league}</div>
-                  <div className="match-card-list">
-                    {league.matches.map((match) => (
-                      <MatchCard
-                        key={match.id}
-                        match={match}
-                        highlightToday={day.isToday}
-                        useShortTeamNames={useShortTeamNames}
-                        debugMode={debugMode}
-                      />
-                    ))}
-                  </div>
+      {!competition && (
+        <header className="football-heading">
+          <StadiumBackdrop ready={Boolean(payload)} />
+          <div className="heading-copy">
+            <span className="eyebrow">
+              {tv
+                ? "The UK TV guide"
+                : mode === "results"
+                  ? "Results & scorelines"
+                  : "The beautiful game, at a glance"}
+            </span>
+            <h1>{title}</h1>
+            <p>
+              {tv
+                ? "Every listed UK broadcast. Find your next match."
+                : mode === "results"
+                  ? "Every goal. Every result. All in one place."
+                  : "The scores you follow. The matches you’ll watch."}
+            </p>
+          </div>
+        </header>
+      )}
+      <div className="scores-layout">
+        <section
+          className="scores-primary"
+          aria-label={
+            competition ? `${competition} matches` : "Football matches"
+          }
+        >
+          <div className="date-navigator">
+            <button
+              aria-label="Previous day"
+              onClick={() => change({ date: moveDate(date, -1) })}
+            >
+              ←
+            </button>
+            <div className="date-shortcuts">
+              {[-1, 0, 1].map((offset) => (
+                <button
+                  key={offset}
+                  aria-pressed={date === moveDate(today, offset)}
+                  onClick={() => change({ date: moveDate(today, offset) })}
+                >
+                  {offset < 0 ? "Yesterday" : offset > 0 ? "Tomorrow" : "Today"}
+                </button>
+              ))}
+            </div>
+            <button
+              aria-label="Next day"
+              onClick={() => change({ date: moveDate(date, 1) })}
+            >
+              →
+            </button>
+            <label className="date-picker">
+              <span className="sr-only">Choose a date</span>
+              <input
+                aria-label="Choose a date"
+                type="date"
+                value={date}
+                onChange={(e) => {
+                  if (validDate(e.target.value))
+                    change({ date: e.target.value });
+                }}
+              />
+            </label>
+          </div>
+          <div className="match-filter-bar">
+            <div className="filter-tabs" role="group" aria-label="Match view">
+              {(tv
+                ? [["tv", "On UK TV"]]
+                : [
+                    ["all", "All matches"],
+                    ["live", "Live"],
+                    ["tv", "On UK TV"],
+                  ]
+              ).map(([value, label]) => (
+                <button
+                  key={value}
+                  aria-pressed={filter === value}
+                  onClick={() => change({ view: value })}
+                >
+                  {value === "live" && <span className="live-dot" />}
+                  {label}
+                  {value === "live" && (
+                    <span className="filter-count">
+                      {relevant.filter(isMatchLive).length}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+            <button
+              className="refresh-button"
+              disabled={busy}
+              onClick={() => setRefresh((v) => v + 1)}
+              aria-label="Refresh matches"
+            >
+              ↻
+            </button>
+          </div>
+          <div className="match-search-row">
+            <button
+              className="search-toggle"
+              aria-label="Search matches"
+              aria-expanded={searchOpen}
+              onClick={() => {
+                setSearchOpen((v) => !v);
+                setQuery("");
+              }}
+            >
+              ⌕ <span>Search</span>
+            </button>
+            {searchOpen && (
+              <label className="match-search-field">
+                <span aria-hidden="true">⌕</span>
+                <input
+                  type="search"
+                  aria-label="Search teams, competitions or channels"
+                  placeholder="Find a team, competition or channel"
+                  autoFocus
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+              </label>
+            )}
+            {!competition && (
+              <select
+                aria-label="Competition scope"
+                value={scope}
+                onChange={(e) => change({ scope: e.target.value, comps: "" })}
+              >
+                <option value="uk">UK favourites + TV</option>
+                <option value="all">All competitions</option>
+                <option value="epl">Premier League focus</option>
+              </select>
+            )}
+          </div>
+          <div className="fixture-date-heading">
+            <h2>{dateLabel(date)}</h2>
+            <span>
+              {loading ? "Finding matches…" : `${matches.length} matches`}
+            </span>
+          </div>
+          {error && (
+            <div className="refresh-notice" role="status">
+              {payload
+                ? "Unable to refresh. Showing saved scores."
+                : "We couldn’t load these matches."}{" "}
+              <button onClick={() => setRefresh((v) => v + 1)}>
+                Try again
+              </button>
+            </div>
+          )}
+          {loading ? (
+            <div
+              className="fixture-skeleton"
+              role="status"
+              aria-label="Loading matches"
+            >
+              {[0, 1, 2, 3].map((i) => (
+                <div key={i}>
+                  <span />
+                  <span />
                 </div>
               ))}
-            </section>
-          ))}
-        </div>
-      )}
-
-      {/* ── Last updated footer ── */}
-      {state.lastUpdated && (
-        <div className="match-list-footer">
-          {state.loadingMore ? (
-            <span className="match-list-footer__loading">
-              <span className="match-list-footer__spinner" aria-hidden="true" />
-              Loading more results...
-            </span>
+            </div>
+          ) : groups.length ? (
+            groups.map(([league, games]) => (
+              <section className="fixture-competition" key={league}>
+                <div className="competition-heading">
+                  <Link to={competitionPath(league)}>
+                    <span className="competition-mark" aria-hidden="true">
+                      {league
+                        .replace(/^UEFA /, "")
+                        .split(" ")
+                        .slice(0, 2)
+                        .map((w) => w[0])
+                        .join("")}
+                    </span>
+                    <h3>{league}</h3>
+                    <span aria-hidden="true">↗</span>
+                  </Link>
+                  <span>{games.length}</span>
+                </div>
+                {games.map((match) => (
+                  <FixtureRow match={match} key={match.id} />
+                ))}
+              </section>
+            ))
           ) : (
-            `Updated ${formatLastUpdated(state.lastUpdated)}`
+            !error && (
+              <div className="football-empty">
+                <span aria-hidden="true">◷</span>
+                <h3>
+                  {filter === "live"
+                    ? "No matches live right now"
+                    : query
+                      ? "No matches found"
+                      : filter === "tv"
+                        ? "No UK broadcasts listed"
+                        : "A quiet day for football"}
+                </h3>
+                <p>
+                  {query
+                    ? "Try another team or channel, or widen your filters."
+                    : "Choose another day or explore all competitions."}
+                </p>
+                <button
+                  onClick={() => {
+                    setQuery("");
+                    change({
+                      date: today,
+                      view: "all",
+                      scope: "all",
+                      comps: "",
+                    });
+                  }}
+                >
+                  Show today’s matches
+                </button>
+              </div>
+            )
           )}
-        </div>
-      )}
-    </section>
+          {payload?.hasMore && (
+            <button
+              className="load-more"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  const value = await loadDay(
+                    date,
+                    dayScope,
+                    true,
+                    payload.page + 1,
+                  );
+                  setData({ key, value });
+                } catch {
+                  setError("Unable to load more matches.");
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              {busy ? "Loading…" : "Load more matches"}
+            </button>
+          )}
+          <div className="scores-footnote">
+            <span>All times UK · TV listings may change</span>
+            {payload?.lastUpdated && (
+              <span>
+                Updated{" "}
+                {new Intl.DateTimeFormat("en-GB", {
+                  timeZone: "Europe/London",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                }).format(new Date(payload.lastUpdated))}
+              </span>
+            )}
+          </div>
+        </section>
+        {!competition && (
+          <aside className="watch-sidebar" aria-label="UK viewing guide">
+            <span className="eyebrow">Make a night of it</span>
+            <h2>
+              On the box<span className="brand-period">.</span>
+            </h2>
+            <p>
+              UK broadcasts for{" "}
+              {date === today ? "today" : dateLabel(date, true)}.
+            </p>
+            {tvMatches.map((match) => (
+              <Link
+                className="watch-pick"
+                to={matchPath(match)}
+                state={{ match }}
+                key={match.id}
+              >
+                <span className="watch-time">
+                  {match.time}
+                  <span>UK</span>
+                </span>
+                <strong>
+                  {match.homeTeam}
+                  <small>v</small>
+                  {match.awayTeam}
+                </strong>
+                <span className="watch-channel">
+                  {ukChannels(match.tvChannels)
+                    .map((channel) => channel.name)
+                    .join(" · ")}
+                </span>
+              </Link>
+            ))}
+            {!tvMatches.length && (
+              <p className="watch-empty">
+                {loading
+                  ? "Finding broadcasts…"
+                  : "No upcoming UK broadcasts listed for this selection."}
+              </p>
+            )}
+            <Link className="text-link" to={`/tv?date=${date}`}>
+              Full TV guide <span aria-hidden="true">→</span>
+            </Link>
+            <div className="sidebar-note">
+              <span className="eyebrow">Follow the football</span>
+              <p>From the first whistle to the last kick.</p>
+              <Link to="/tables">Explore the tables →</Link>
+            </div>
+          </aside>
+        )}
+      </div>
+    </>
   );
-}
-
-interface PanelPos { top: number; right: number }
-
-interface CompetitionsDropdownProps {
-  customCompetitions: string[] | null;
-  onCustomCompetitionsChange: (value: string[] | null) => void;
-}
-
-function CompetitionsDropdown({ customCompetitions, onCustomCompetitionsChange }: CompetitionsDropdownProps) {
-  const { preferences, setPreferences } = usePreferences();
-  const [isOpen, setIsOpen] = useState(false);
-  const [competitions, setCompetitions] = useState<string[]>([]);
-  const [panelPos, setPanelPos] = useState<PanelPos>({ top: 0, right: 0 });
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const panelRef = useRef<HTMLDivElement>(null);
-
-  const eplOnly = preferences.englishPremierLeagueTeamsOnly;
-  const majorUEFAClubGamesEnabled = preferences.majorUEFAClubGamesEnabled;
-  const homeNationsFilterEnabled = preferences.homeNationsFilterEnabled;
-  const majorTournamentsFilterEnabled = preferences.majorTournamentsFilterEnabled;
-  const customFilter = customCompetitions !== null;
-
-  useEffect(() => {
-    void fetchCompetitions().then(setCompetitions).catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const handlePointerDown = (e: PointerEvent) => {
-      const target = e.target as Node;
-      if (!triggerRef.current?.contains(target) && !panelRef.current?.contains(target)) {
-        setIsOpen(false);
-      }
-    };
-
-    // Dismiss on scroll/resize, but NOT when the user scrolls inside the panel itself.
-    const handleScroll = (e: Event) => {
-      if (panelRef.current?.contains(e.target as Node)) return;
-      setIsOpen(false);
-    };
-
-    const handleResize = () => setIsOpen(false);
-
-    document.addEventListener("pointerdown", handlePointerDown);
-    window.addEventListener("scroll", handleScroll, { capture: true, passive: true });
-    window.addEventListener("resize", handleResize, { passive: true });
-    return () => {
-      document.removeEventListener("pointerdown", handlePointerDown);
-      window.removeEventListener("scroll", handleScroll, { capture: true });
-      window.removeEventListener("resize", handleResize);
-    };
-  }, [isOpen]);
-
-  const openDropdown = () => {
-    if (triggerRef.current) {
-      const rect = triggerRef.current.getBoundingClientRect();
-      setPanelPos({
-        top: rect.bottom + 5,
-        right: window.innerWidth - rect.right,
-      });
-    }
-    setIsOpen((v) => !v);
-  };
-
-  // Option 1: show all matches, no EPL filter, no competition filter.
-  const handleSelectAll = () => {
-    setPreferences({ englishPremierLeagueTeamsOnly: false });
-    onCustomCompetitionsChange(null);
-  };
-
-  // Option 2: EPL teams only server filter – does NOT touch the competition filter.
-  const handleSelectEplOnly = () => {
-    setPreferences({ englishPremierLeagueTeamsOnly: true });
-  };
-
-  const handleToggleMajorUEFAClubGames = (event: ChangeEvent<HTMLInputElement>) => {
-    setPreferences({ majorUEFAClubGamesEnabled: event.target.checked });
-  };
-
-  const handleToggleHomeNations = (event: ChangeEvent<HTMLInputElement>) => {
-    setPreferences({ homeNationsFilterEnabled: event.target.checked });
-  };
-
-  const handleToggleMajorTournaments = (event: ChangeEvent<HTMLInputElement>) => {
-    setPreferences({ majorTournamentsFilterEnabled: event.target.checked });
-  };
-
-  // Toggle a single competition in the client-side filter.
-  // When not yet in custom mode, initialise from the full list and remove (or add) the tapped item.
-  const handleToggleCompetition = (competition: string) => {
-    const base = customFilter
-      ? new Set(customCompetitions)
-      : new Set(competitions); // treat all as checked when no custom filter active
-
-    if (base.has(competition)) {
-      base.delete(competition);
-    } else {
-      base.add(competition);
-    }
-
-    const newSelected = [...base];
-    // If every competition is back to checked, revert to "no filter" state.
-    const allChecked = newSelected.length === competitions.length;
-    onCustomCompetitionsChange(allChecked ? null : newSelected);
-  };
-
-  let label: string;
-  if (eplOnly && customFilter) {
-    const n = customCompetitions.length;
-    label = n === 1 ? "PL teams · 1 competition" : `PL teams · ${n} competitions`;
-  } else if (eplOnly) {
-    label = "Matches with Premier League teams only";
-  } else if (customFilter) {
-    const n = customCompetitions.length;
-    label = n === 1 ? "1 competition" : `${n} competitions`;
-  } else {
-    label = "All matches across all competitions";
-  }
-
-  const panel = (
-    <div
-      ref={panelRef}
-      className="comp-dropdown-panel"
-      role="dialog"
-      aria-label="Filter competitions"
-      style={{ top: panelPos.top, right: panelPos.right }}
-    >
-      <label className="comp-option">
-        <input
-          type="radio"
-          name="comp-mode"
-          checked={!eplOnly}
-          onChange={handleSelectAll}
-        />
-        <span>All matches across all competitions</span>
-      </label>
-
-      <label className="comp-option comp-option--epl">
-        <input
-          type="radio"
-          name="comp-mode"
-          checked={eplOnly}
-          onChange={handleSelectEplOnly}
-        />
-        <img
-          src="/generated-assets/fpl-lion.png"
-          alt=""
-          aria-hidden="true"
-          className="epl-toggle-lion"
-        />
-        <span>Matches with Premier League teams only</span>
-      </label>
-
-      <div className="comp-dropdown-sep" />
-
-      <label className="comp-option comp-option--major-uefa">
-        <input
-          type="checkbox"
-          checked={majorUEFAClubGamesEnabled}
-          onChange={handleToggleMajorUEFAClubGames}
-        />
-        <span>Major games of interest</span>
-      </label>
-
-      <label className="comp-option comp-option--international">
-        <input
-          type="checkbox"
-          checked={homeNationsFilterEnabled}
-          onChange={handleToggleHomeNations}
-        />
-        <span>International: Home nations</span>
-      </label>
-
-      <label className="comp-option comp-option--international">
-        <input
-          type="checkbox"
-          checked={majorTournamentsFilterEnabled}
-          onChange={handleToggleMajorTournaments}
-        />
-        <span>International: Major tournaments</span>
-      </label>
-
-      {competitions.length > 0 && <div className="comp-dropdown-sep" />}
-
-      {competitions.length > 0 && (
-        <div className="comp-list">
-          {competitions.map((comp) => {
-            const isChecked = !customFilter || customCompetitions.includes(comp);
-            return (
-              <label key={comp} className="comp-option">
-                <input
-                  type="checkbox"
-                  checked={isChecked}
-                  onChange={() => handleToggleCompetition(comp)}
-                />
-                <span>{comp}</span>
-              </label>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-
-  return (
-    <div className="comp-dropdown">
-      <button
-        ref={triggerRef}
-        type="button"
-        className={`epl-toggle-btn comp-dropdown-trigger${eplOnly || customFilter ? " is-active" : ""}`}
-        onClick={openDropdown}
-        aria-haspopup="true"
-        aria-expanded={isOpen}
-      >
-        <img
-          src="/generated-assets/fpl-lion.png"
-          alt=""
-          aria-hidden="true"
-          className="epl-toggle-lion"
-        />
-        <span className="epl-toggle-label">{label}</span>
-        <svg
-          className="comp-dropdown-chevron"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-          style={{ transform: isOpen ? "rotate(180deg)" : undefined }}
-        >
-          <path d="m6 9 6 6 6-6" />
-        </svg>
-      </button>
-
-      {isOpen && createPortal(panel, document.body)}
-    </div>
-  );
-}
-
-function formatLastUpdated(value: string | null): string {
-  if (!value) return "";
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-  return new Intl.DateTimeFormat(undefined, {
-    hour: "2-digit",
-    minute: "2-digit",
-    month: "short",
-    day: "numeric",
-  }).format(parsed);
 }

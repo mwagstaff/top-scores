@@ -580,6 +580,15 @@ function getIncidents(id, options = {}) {
   });
 }
 
+// Commentary is a cursor feed, not a paginated list. BSD rejects limit/offset.
+function getCommentary(id, options = {}) {
+  return _request(`/events/${encodeURIComponent(id)}/commentary`, {
+    source: "bsd_event_commentary",
+    reason: "event_commentary_fetch",
+    ...options,
+  });
+}
+
 function getLineups(id, options = {}) {
   return _request(`/events/${encodeURIComponent(id)}/lineups`, {
     source: "bsd_event_lineups",
@@ -673,6 +682,7 @@ module.exports = {
   getLiveEvents,
   getEvent,
   getIncidents,
+  getCommentary,
   getLineups,
   getEventPlayerStats,
   getPlayerStats,

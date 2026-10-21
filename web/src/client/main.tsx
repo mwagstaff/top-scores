@@ -4,11 +4,12 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import { PreferencesProvider } from "./preferences";
 import { warmTeamBadges } from "./api";
-import "./styles.css";
+import "./football.css";
+import { initialSeed } from "./bootstrap";
 
 void warmTeamBadges();
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
+const application = (
   <React.StrictMode>
     <BrowserRouter>
       <PreferencesProvider>
@@ -17,3 +18,6 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     </BrowserRouter>
   </React.StrictMode>
 );
+const root = document.getElementById("root")!;
+if (initialSeed?.rendered) ReactDOM.hydrateRoot(root, application);
+else ReactDOM.createRoot(root).render(application);

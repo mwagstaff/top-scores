@@ -1,7 +1,9 @@
+import "../styles.css";
 import { useEffect, useMemo, useReducer, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { fetchLeagueTables } from "../api";
 import type { LeagueTable, LeagueTableRow, LeagueTableZone } from "../types";
+import { PageMeta } from "./PageMeta";
 
 interface TablesState {
   loading: boolean;
@@ -19,7 +21,7 @@ const initialState: TablesState = {
   lastUpdated: null,
 };
 
-export function TablesScreen() {
+export function TablesScreen({ competition }: { competition?: string }) {
   const [selectedLeagueID, setSelectedLeagueID] = useState("premier-league");
   const [state, setState] = useState<TablesState>(initialState);
   const [reloadToken, reload] = useReducer((value) => value + 1, 0);
@@ -76,7 +78,7 @@ export function TablesScreen() {
   // scores flow into the standings within ~30s. The endpoint is cached
   // server-side (stale-while-revalidate), so this stays cheap.
   useEffect(() => {
-    const id = window.setInterval(() => reload(), 30_000);
+    const id = window.setInterval(() => { if (document.visibilityState === "visible") reload(); }, 30_000);
     return () => window.clearInterval(id);
   }, []);
 
@@ -105,7 +107,7 @@ export function TablesScreen() {
 
     if (row) {
       window.setTimeout(() => {
-        document.getElementById(`table-row-${row.id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
+        document.getElementById(`table-row-${row.id}`)?.scrollIntoView({ behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth", block: "center" });
         setHighlightedRowId(row.id);
         window.setTimeout(() => setHighlightedRowId((current) => (current === row.id ? null : current)), 2500);
       }, 200);
@@ -121,12 +123,15 @@ export function TablesScreen() {
   );
 
   const selectedLeague =
-    sortedLeagues.find((league) => league.leagueID === selectedLeagueID) || sortedLeagues[0] || null;
+    (competition ? sortedLeagues.find(league => league.leagueName.toLowerCase() === competition.toLowerCase()) : sortedLeagues.find((league) => league.leagueID === selectedLeagueID) || sortedLeagues[0]) || null;
 
   return (
     <section className="screen-panel">
+      {!competition && <PageMeta title="League tables" description="Football standings and live positions. Follow the title race and relegation battle with Top Scores." />}
+      {!competition && <header className="screen-header"><div><span className="eyebrow">Every point matters</span><h1>League tables</h1></div></header>}
+      {state.error && <div className="refresh-notice" role="status">{state.error} <button onClick={() => reload()}>Try again</button></div>}
       {state.loading ? (
-        <div className="empty-state">Loading tables...</div>
+        <div className="empty-state tables-loading" role="status">Loading tables...</div>
       ) : sortedLeagues.length === 0 ? (
         <div className="empty-state">
           <strong>No tables to show.</strong>
@@ -134,9 +139,10 @@ export function TablesScreen() {
         </div>
       ) : (
         <div className="tables-stack">
-          <label className="field-stack tables-competition-field">
+          {!competition && <label className="field-stack tables-competition-field">
             <select
               className="select-field"
+              aria-label="Choose a competition"
               value={selectedLeague?.leagueID || ""}
               onChange={(event) => setSelectedLeagueID(event.target.value)}
             >
@@ -146,7 +152,7 @@ export function TablesScreen() {
                 </option>
               ))}
             </select>
-          </label>
+          </label>}
 
           {selectedLeague ? (
             <>
@@ -162,7 +168,7 @@ export function TablesScreen() {
                 <div className="tables-updated">Updated {formatLastUpdated(state.lastUpdated)}</div>
               ) : null}
             </>
-          ) : null}
+          ) : <div className="football-empty">Standings aren’t available for this competition.</div>}
         </div>
       )}
     </section>
@@ -475,9 +481,8 @@ function resolveLeagueID(leagues: LeagueTable[], currentSelection: string): stri
   if (leagues.some((league) => league.leagueID === currentSelection)) {
     return currentSelection;
   }
-  if (leagues.some((league) => league.leagueID === "premier-league")) {
-    return "premier-league";
-  }
+  const premierLeague = leagues.find(league => league.leagueName.toLowerCase() === "premier league");
+  if (premierLeague) return premierLeague.leagueID;
 
   return [...leagues]
     .sort((left, right) => left.leagueName.localeCompare(right.leagueName, undefined, { sensitivity: "base" }))

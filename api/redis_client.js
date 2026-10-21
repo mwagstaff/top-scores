@@ -580,12 +580,15 @@ async function getClient() {
 
   await client.connect();
   if (!ttlPolicyEnsured) {
-    try {
-      await ensureRedisTtlPolicy(client);
-      ttlPolicyEnsured = true;
-    } catch (error) {
-      console.warn("[Redis] Failed applying TTL policy:", error.message || error);
-    }
+    // Existing-key maintenance can scan a large history. Connected clients
+    // must be usable immediately; writes already assign their own TTLs.
+    void ensureRedisTtlPolicy(client)
+      .then(() => {
+        ttlPolicyEnsured = true;
+      })
+      .catch((error) => {
+        console.warn("[Redis] Failed applying TTL policy:", error.message || error);
+      });
   }
   return client;
 }

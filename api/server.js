@@ -8697,16 +8697,8 @@ async function ensureTeamShortNamesCacheReady() {
     return;
   }
 
-  try {
-    await operationalBootstrapPromise;
-  } catch (_error) {
-    // Best-effort only; fall back to a direct Redis read below.
-  }
-
-  if (scrapedTeamShortNamesByKey.size > 0) {
-    return;
-  }
-
+  // Short names must not wait for unrelated startup work, such as loading
+  // every historical match detail. Read this small dataset independently.
   const record = await loadOperationalDatasetSafe(OP_DATASET_TEAM_SHORT_NAMES);
   if (!record || !record.payload || typeof record.payload !== "object") {
     return;
@@ -25899,6 +25891,20 @@ app.get(`${API_PREFIX}/managers/:managerId/career`, async (req, res) => {
 
 // Performance loads independently so upstream cache misses never block the
 // match details or player profile response.
+app.get(`${API_PREFIX}/matches/:matchId/commentary`, async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  const id = String(req.params.matchId || "");
+  if (!/^\d+$/.test(id)) return res.status(400).json({ error: "Invalid match id." });
+  try {
+    const payload = await require("./bsd_commentary").getMatchCommentary(id);
+    if (!payload) return res.status(404).json({ error: "Match not found." });
+    res.json(payload);
+  } catch (error) {
+    console.warn("[API] Match commentary unavailable:", error.message);
+    res.status(502).json({ error: "Commentary is temporarily unavailable." });
+  }
+});
+
 app.get(`${API_PREFIX}/matches/:matchId/player-stats`, async (req, res) => {
   const id = String(req.params.matchId || "");
   if (!/^\d+$/.test(id)) return res.status(400).json({ error: "Invalid match id." });

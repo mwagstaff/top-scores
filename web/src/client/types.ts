@@ -27,6 +27,7 @@ export interface TvChannel {
 }
 
 export interface Match {
+  competitionWeight?: number | null;
   id: string;
   date: string;
   time: string;
@@ -274,12 +275,12 @@ export const defaultPreferences: Preferences = {
   selectedChannels: ["Amazon (all)", "BBC (all)", "ITV (all)", "Sky (all)", "TNT (all)"],
   competitionFilterEnabled: false,
   channelFilterEnabled: false,
-  englishPremierLeagueTeamsOnly: true,
+  englishPremierLeagueTeamsOnly: false,
   majorUEFAClubGamesEnabled: true,
   homeNationsFilterEnabled: true,
   majorTournamentsFilterEnabled: true,
   refreshIntervalMinutes: 10,
-  matchGroupSortOrder: "kickoffThenTeamScore",
+  matchGroupSortOrder: "kickoffThenAlphabetical",
 };
 
 export const channelGroupOptions = ["Amazon (all)", "BBC (all)", "ITV (all)", "Sky (all)", "TNT (all)"];
@@ -400,3 +401,27 @@ export const matchOrderOptions: Array<{
     description: "Show earliest matches first, then stronger fixtures first.",
   },
 ];
+export interface CommentaryLine {
+  id: string;
+  period: number;
+  minute: number;
+  added_time: number | null;
+  second: number | null;
+  type: string;
+  team: "home" | "away" | null;
+  player: { id: number | null; name: string | null } | null;
+  related_player: { id: number | null; name: string | null } | null;
+  text: string;
+  score: { home: number | null; away: number | null };
+  important: boolean;
+}
+
+export interface MatchCommentary {
+  event_id: number;
+  status: string | null;
+  has_play_by_play: boolean;
+  commentary: CommentaryLine[];
+  updated_at: string | null;
+  stale: boolean;
+  refresh_after_seconds: number | null;
+}

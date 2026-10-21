@@ -9,6 +9,7 @@ import {
   type LeagueTablesPayload,
   type MatchAssistProvider,
   type MatchDetails,
+  type MatchCommentary,
   type MatchGoalScorer,
   type MatchLineupPlayer,
   type MatchLineupSubstitution,
@@ -197,6 +198,12 @@ export function fetchCompetitionWeights(): Promise<CompetitionWeightEntry[]> {
 
 export function fetchMatchDetails(matchDetailsId: string): Promise<MatchDetails> {
   return fetchMatchDetailsInternal(matchDetailsId, false);
+}
+
+export function fetchMatchCommentary(matchId: string, signal?: AbortSignal): Promise<MatchCommentary> {
+  return requestJson<MatchCommentary>(
+    `/api/v1/matches/${encodeURIComponent(matchId)}/commentary`, signal, { cache: "no-store" }
+  );
 }
 
 export function fetchMatchSocial(matchDetailsId: string): Promise<MatchSocialItem[]> {
@@ -429,7 +436,7 @@ function formatDateParam(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
-function normalizeMatch(raw: Record<string, unknown>): Match {
+export function normalizeMatch(raw: Record<string, unknown>): Match {
   const date = asString(raw.date);
   const time = asString(raw.time);
   const homeTeam = asString(raw.home_team);
@@ -437,7 +444,8 @@ function normalizeMatch(raw: Record<string, unknown>): Match {
   const league = asString(raw.league);
 
   return {
-    id: [date, time, league, homeTeam, awayTeam].join("|"),
+    id: optionalString(raw.match_details_id) || [date, time, league, homeTeam, awayTeam].join("|"),
+    competitionWeight: optionalNumber(raw.competition_weight),
     date,
     time,
     homeTeam,
@@ -488,7 +496,7 @@ function normalizeTeamRanking(raw: unknown): TeamRankingEntry {
   };
 }
 
-function normalizeMatchDetails(raw: Record<string, unknown>): MatchDetails {
+export function normalizeMatchDetails(raw: Record<string, unknown>): MatchDetails {
   return {
     id: asString(raw.id),
     detailsUrl: optionalString(raw.details_url),

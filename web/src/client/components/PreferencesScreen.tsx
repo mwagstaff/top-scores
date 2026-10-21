@@ -1,6 +1,8 @@
+import "../styles.css";
 import { useEffect, useMemo, useState } from "react";
 import { fetchChannels, fetchCompetitions } from "../api";
 import { usePreferences } from "../preferences";
+import { PageMeta } from "./PageMeta";
 import {
   matchOrderOptions,
   type MatchGroupSortOrder,
@@ -46,13 +48,13 @@ export function PreferencesScreen() {
 
   return (
     <section className="screen-panel">
+      <PageMeta title="Preferences" description="Choose your competitions, channels and match preferences on Top Scores." />
       <header className="screen-header">
         <div>
           <div className="screen-kicker">Preferences</div>
-          <h2>Preferences</h2>
+          <h1>Make it yours.</h1>
           <p>
-            Saved in browser storage for now. A future login plus Redis sync can reuse the same
-            preference model.
+            Choose the competitions and channels you follow. Your choices are saved on this device.
           </p>
         </div>
         <button type="button" className="ghost-button" onClick={resetPreferences}>
@@ -76,7 +78,7 @@ export function PreferencesScreen() {
             />
           </label>
           <p className="field-copy">
-            During active browsing, fixtures and results poll automatically at this interval.
+            Older fixtures refresh at this interval. Today’s scores update every 10 seconds while you’re viewing them.
           </p>
         </section>
 
@@ -116,7 +118,7 @@ export function PreferencesScreen() {
             />
           </label>
           <p className="field-copy">
-            Restricts fixtures and results to matches involving BBC Premier League clubs.
+            Restricts fixtures and results to matches involving Premier League clubs.
           </p>
 
           <label className="toggle-row">
@@ -180,7 +182,7 @@ export function PreferencesScreen() {
               }
             />
           </label>
-          <p className="field-copy">Channel filtering applies to Fixtures only, matching iOS.</p>
+          <p className="field-copy">Channel filtering applies to fixtures and the TV guide.</p>
         </section>
 
         <section className="settings-card">

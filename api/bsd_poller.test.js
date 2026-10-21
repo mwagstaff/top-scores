@@ -249,6 +249,36 @@ function isolatedPollerState(overrides = {}, clock = Date) {
   );
 }
 
+test("a slow commentary settlement never delays the final match projection", { timeout: 1000 }, async () => {
+  let release;
+  let requested = false;
+  const saved = [];
+  const state = isolatedPollerState({
+    "./bsd_client": {
+      setRequestObserver() {},
+      getEvent: async () => ({ id: 123, status: "finished" }),
+      getIncidents: async () => ({ event_id: 123, incidents: [] }),
+      getLineups: async () => ({ event_id: 123 }),
+      getEventPlayerStats: async () => ({ event_id: 123, player_stats: [] }),
+    },
+    "./mongo_client": {
+      upsertBsdRecord: async collection => saved.push(collection),
+      upsertBsdRecords: async collection => saved.push(collection),
+    },
+    "./bsd_commentary": {
+      refreshCachedMatchCommentary: () => {
+        requested = true;
+        return new Promise(resolve => { release = resolve; });
+      },
+    },
+  });
+  await state.poller.reconcileSettledEvent(123);
+  assert.equal(requested, true);
+  assert.ok(saved.includes("bsd_events"));
+  assert.ok(saved.includes("bsd_incidents"));
+  release();
+});
+
 test("finished incident repair drops expired retry history even when no matches remain", async () => {
   const nowMs = Date.parse("2026-09-19T20:00:00Z");
   const dayMs = 24 * 60 * 60 * 1000;

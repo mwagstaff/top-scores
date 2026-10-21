@@ -27,6 +27,7 @@ struct MatchDetailView: View {
     @State private var loadDiagnostics = MatchDetailLoadDiagnostics()
     @State private var screenViewSent = false
     @State private var showOtherCountries = false
+    @State private var showCommentary = false
     @State private var teamCompetitionEntries: [MatchTeamCompetitionEntry] = []
 
     private static let detailsRefreshIntervalNanos: UInt64 = 10_000_000_000
@@ -224,89 +225,116 @@ struct MatchDetailView: View {
     }
 
     var body: some View {
-        GeometryReader { proxy in
-            ScrollView(.vertical) {
-                // Build offscreen sections only as they approach the viewport.
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    MatchDetailScoreboardHero(
-                        match: activeMatch,
-                        kickoffText: kickoffText,
-                        teamCompetitionEntries: teamCompetitionEntries
-                    )
-
-                    MatchTeamLeaguePositionsLink(
-                        entries: teamCompetitionEntries
-                    )
-                    .padding(.horizontal)
-
-                    if let penaltyDetailSummary = activeMatch.penaltyDetailSummaryText {
-                        MatchPenaltyShootoutSummary(text: penaltyDetailSummary)
-                            .padding(.horizontal)
-                    }
-
-                    if let fantasyMatchContext {
-                        let sections = fantasySquadSections(in: fantasyMatchContext.squad)
-                        if !sections.isEmpty {
-                            FantasyMatchPlayersSection(
-                                context: fantasyMatchContext,
-                                sections: sections,
-                                pointsPhase: fantasyMatchPointsPhase(
-                                    isMatchInProgress: activeMatch.isInProgress,
-                                    isMatchFinished: activeMatch.isFinished,
-                                    squadScorePhase: fantasyMatchContext.squad.scorePhase
-                                )
-                            )
-                            .padding(.horizontal)
-                        }
-                    }
-
-                    MatchEventsCard(match: activeMatch)
-                        .padding(.horizontal)
-
-                    if shouldShowLineupPitch {
-                        MatchLineupPitchSection(
+        ScrollViewReader { scrollProxy in
+            GeometryReader { proxy in
+                ScrollView(.vertical) {
+                    // Build offscreen sections only as they approach the viewport.
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                        MatchDetailScoreboardHero(
                             match: activeMatch,
-                            fantasyHighlightLookup: fantasyHighlightLookup,
-                            fantasyPointsLookup: fantasyPointsLookup
+                            kickoffText: kickoffText,
+                            teamCompetitionEntries: teamCompetitionEntries
                         )
-                            .padding(.horizontal)
-                    }
 
-                    if let detailsErrorMessage {
-                        Text(detailsErrorMessage)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal)
-                    }
-
-                    if !activeMatch.tvChannels.isEmpty {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Label("Follow the action", systemImage: "dot.radiowaves.left.and.right")
-                                .font(.headline)
-                                .foregroundStyle(FootballSectionAccent.action)
-                            tvChannelSection
-                        }
+                        MatchTeamLeaguePositionsLink(
+                            entries: teamCompetitionEntries
+                        )
                         .padding(.horizontal)
-                    }
 
-                    if shouldShowMatchActions {
-                        actionPanel
-                            .padding(.horizontal)
-                    }
+                        if let penaltyDetailSummary = activeMatch.penaltyDetailSummaryText {
+                            MatchPenaltyShootoutSummary(text: penaltyDetailSummary)
+                                .padding(.horizontal)
+                        }
 
-                    if !socialItems.isEmpty {
-                        MatchSocialSection(items: socialItems)
-                            .padding(.horizontal)
-                    }
+                        if let fantasyMatchContext {
+                            let sections = fantasySquadSections(in: fantasyMatchContext.squad)
+                            if !sections.isEmpty {
+                                FantasyMatchPlayersSection(
+                                    context: fantasyMatchContext,
+                                    sections: sections,
+                                    pointsPhase: fantasyMatchPointsPhase(
+                                        isMatchInProgress: activeMatch.isInProgress,
+                                        isMatchFinished: activeMatch.isFinished,
+                                        squadScorePhase: fantasyMatchContext.squad.scorePhase
+                                    )
+                                )
+                                .padding(.horizontal)
+                            }
+                        }
 
-                    if let venue = activeMatch.venueDetails {
-                        MatchVenueSection(venue: venue)
+                        if let matchID = activeMatch.matchDetailsID, activeMatch.isTestMatch != true {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Picker("Match updates", selection: $showCommentary) {
+                                    Text("Key events").tag(false)
+                                    Text("Commentary").tag(true)
+                                }
+                                .pickerStyle(.segmented)
+                                if showCommentary {
+                                    MatchCommentaryView(
+                                        matchID: matchID,
+                                        apiBaseURL: preferences.apiBaseURL,
+                                        isLive: activeMatch.isInProgress,
+                                        onShowRecent: {
+                                            scrollProxy.scrollTo("match-updates", anchor: .top)
+                                        }
+                                    )
+                                    .id("\(matchID)|\(preferences.apiBaseURL)")
+                                } else {
+                                    MatchEventsCard(match: activeMatch)
+                                }
+                            }
                             .padding(.horizontal)
+                            .id("match-updates")
+                        } else {
+                            MatchEventsCard(match: activeMatch)
+                                .padding(.horizontal)
+                        }
+
+                        if shouldShowLineupPitch {
+                            MatchLineupPitchSection(
+                                match: activeMatch,
+                                fantasyHighlightLookup: fantasyHighlightLookup,
+                                fantasyPointsLookup: fantasyPointsLookup
+                            )
+                                .padding(.horizontal)
+                        }
+
+                        if let detailsErrorMessage {
+                            Text(detailsErrorMessage)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal)
+                        }
+
+                        if !activeMatch.tvChannels.isEmpty {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Label("Follow the action", systemImage: "dot.radiowaves.left.and.right")
+                                    .font(.headline)
+                                    .foregroundStyle(FootballSectionAccent.action)
+                                tvChannelSection
+                            }
+                            .padding(.horizontal)
+                        }
+
+                        if shouldShowMatchActions {
+                            actionPanel
+                                .padding(.horizontal)
+                        }
+
+                        if !socialItems.isEmpty {
+                            MatchSocialSection(items: socialItems)
+                                .padding(.horizontal)
+                        }
+
+                        if let venue = activeMatch.venueDetails {
+                            MatchVenueSection(venue: venue)
+                                .padding(.horizontal)
+                        }
                     }
+                    // Keep data-heavy child views from widening the vertical scroll content.
+                    .frame(width: proxy.size.width, alignment: .leading)
+                    .padding(.bottom, 12)
                 }
-                // Keep data-heavy child views from widening the vertical scroll content.
-                .frame(width: proxy.size.width, alignment: .leading)
-                .padding(.bottom, 12)
             }
         }
         .task(id: "\(preferences.apiBaseURL)|\(match.matchDetailsID ?? "")") {
@@ -554,6 +582,19 @@ struct MatchDetailView: View {
     }
 
     private func refreshFromServer(baseURL: URL) async {
+        // Details include the score and clock. Do not hold them behind a
+        // request for every fixture on the same day.
+        let currentMatch = await MainActor.run { activeMatch }
+        if let detailsID = currentMatch.matchDetailsID {
+            let fetched = await refreshDetailsOnce(
+                detailsID: detailsID,
+                baseURL: baseURL,
+                fallbackMatch: currentMatch
+            )
+            guard !Task.isCancelled else { return }
+            if fetched { return }
+        }
+
         // Finished match scores/state never change — skip the slow snapshot fetch
         let isFinished = await MainActor.run { activeMatch.isFinished }
         let serverMatch = isFinished ? nil : await refreshMatchSnapshotOnce(baseURL: baseURL)

@@ -358,6 +358,10 @@ async function reconcileSettledEvent(eventId) {
       `[bsd-runtime] settled event ${eventId} lineups failed: ${lineupsResult.reason.message || lineupsResult.reason}`
     );
   }
+  // Commentary must not delay publishing the final score/lineup projection.
+  void require("./bsd_commentary").refreshCachedMatchCommentary(eventId).catch(error => {
+    console.warn(`[bsd-runtime] settled event ${eventId} commentary failed: ${error.message}`);
+  });
 }
 
 async function reconcileSettledEvents(eventIds, reason) {

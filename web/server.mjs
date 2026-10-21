@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
+import { registerArtwork } from "./artwork.mjs";
+import { createPageRenderer } from "./page-document.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -58,6 +60,10 @@ const teamLogoAliases = new Map(
     "sheffield united": "sheff utd",
     "sheffield wednesday": "sheff wed",
     "nottingham forest": "nottm forest",
+    "fc bayern münchen": "bayern munich",
+    "bayern münchen": "bayern munich",
+    "fc bayern munchen": "bayern munich",
+    "bayern munchen": "bayern munich",
     "borussia dortmund": "dortmund",
     "borussia m'gladbach": "m'gladbach",
     "athletic club": "athletic",
@@ -105,6 +111,9 @@ async function loadCompetitionWeights() {
 
 const app = express();
 app.disable("x-powered-by");
+registerArtwork(app, apiBaseUrl);
+
+const canonicalOrigin = (process.env.TOP_SCORES_WEB_ORIGIN || "https://top-scores.skynolimit.dev").replace(/\/+$/, "");
 
 app.get("/healthcheck", (_req, res) => {
   res.json({
@@ -257,31 +266,61 @@ async function start() {
   setInterval(() => { void loadCompetitionWeights(); }, 24 * 60 * 60 * 1000);
 
   if (isProduction) {
-    app.use("/assets", express.static(path.join(productionClientRoot, "assets")));
-    app.use(express.static(productionClientRoot));
+    app.use("/assets", express.static(path.join(productionClientRoot, "assets"), { immutable: true, maxAge: "1y" }));
+    app.use(express.static(productionClientRoot, { index: false, maxAge: "1h" }));
     app.get("/generated-assets/*", (_req, res) => {
       res.status(404).end();
     });
 
-    app.get("*", (_req, res) => {
-      res.sendFile(path.join(productionClientRoot, "index.html"));
+    const { render } = await import("./dist-server/server-entry.js");
+    const renderPage = createPageRenderer(apiBaseUrl, render);
+    const manifest = JSON.parse(await fs.promises.readFile(path.join(productionClientRoot, ".vite/manifest.json"), "utf8"));
+    const routeAssets = url => {
+      const route = new URL(url, canonicalOrigin).pathname;
+      const component = route.startsWith("/matches/") ? "MatchPage" : route.startsWith("/competitions/") ? "CompetitionPage" : route === "/tables" ? "TablesScreen" : route === "/preferences" ? "PreferencesScreen" : null;
+      const visited = new Set(), css = new Set(), scripts = new Set();
+      const visit = key => {
+        if (visited.has(key) || !manifest[key]) return;
+        visited.add(key);
+        const chunk = manifest[key];
+        if (key !== "index.html") {
+          if (chunk.file.endsWith(".js")) scripts.add(chunk.file);
+          for (const file of chunk.css || []) css.add(file);
+        }
+        for (const dependency of chunk.imports || []) visit(dependency);
+      };
+      if (component) visit(`src/client/components/${component}.tsx`);
+      if (component === "CompetitionPage" && new URL(url, canonicalOrigin).searchParams.get("section") === "table") visit("src/client/components/TablesScreen.tsx");
+      return [...css].map(file => `<link rel="stylesheet" href="/${file}">`).join("") + [...scripts].map(file => `<link rel="modulepreload" href="/${file}">`).join("");
+    };
+    const template = await fs.promises.readFile(path.join(productionClientRoot, "index.html"), "utf8");
+    app.get("*", async (req, res, next) => {
+      try {
+        const { html, status } = await renderPage(template.replace("</head>", `${routeAssets(req.originalUrl)}</head>`), req.originalUrl, canonicalOrigin);
+        res.status(status).set("Cache-Control", "no-cache").type("html").send(html);
+      } catch (error) { next(error); }
     });
   } else {
     const { createServer } = await import("vite");
     const vite = await createServer({
       root: __dirname,
       server: { middlewareMode: true },
-      appType: "spa",
+      appType: "custom",
     });
 
     app.use(vite.middlewares);
+    const renderDevelopmentPage = createPageRenderer(apiBaseUrl, async (url, seed) => {
+      const { render } = await vite.ssrLoadModule("/src/server-entry.tsx");
+      return render(url, seed);
+    });
 
     app.get("*", async (req, res, next) => {
       try {
         const templatePath = path.join(__dirname, "index.html");
         const template = await fs.promises.readFile(templatePath, "utf8");
         const transformed = await vite.transformIndexHtml(req.originalUrl, template);
-        res.status(200).setHeader("Content-Type", "text/html").end(transformed);
+        const { html, status } = await renderDevelopmentPage(transformed, req.originalUrl, canonicalOrigin);
+        res.status(status).type("html").send(html);
       } catch (error) {
         vite.ssrFixStacktrace(error);
         next(error);

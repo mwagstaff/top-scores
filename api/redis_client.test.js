@@ -1,5 +1,69 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const vm = require("node:vm");
+
+function loadRedisWithFakeClient(fakeClient, warnings) {
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(require.resolve("./redis_client"), "utf8"), {
+    module,
+    require: (name) => name === "redis" ? { createClient: () => fakeClient } : require(name),
+    process,
+    Buffer,
+    console: { log() {}, warn: (...args) => warnings.push(args), error() {} },
+  });
+  return module.exports;
+}
+
+test("first Redis read completes while expiry maintenance is still blocked", async () => {
+  let finishSweep;
+  const sweep = new Promise((resolve) => { finishSweep = resolve; });
+  const handlers = {};
+  let connects = 0;
+  let scans = 0;
+  const expired = [];
+  const fakeClient = {
+    on(event, handler) { handlers[event] = handler; },
+    async connect() { connects += 1; handlers.connect(); },
+    async ttl() { return -1; },
+    async expire(key) { expired.push(key); },
+    async *scanIterator() { scans += 1; await sweep; yield ["old-history"]; },
+    async sMembers() { return ["601133"]; },
+    async mGet() { return [JSON.stringify({ id: "601133", home_score: 2, away_score: 1 })]; },
+    async get() { return null; },
+  };
+  const warnings = [];
+  const redis = loadRedisWithFakeClient(fakeClient, warnings);
+  let snapshot;
+  const pending = redis.getAllOperationalMatchDetails().then((value) => { snapshot = value; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(snapshot?.records["601133"].home_score, 2);
+  assert.equal(scans, 1, "the maintenance sweep should have started");
+  assert.equal(expired.includes("old-history"), false);
+  assert.equal(await redis.getClient(), fakeClient);
+  assert.equal(connects, 1);
+  finishSweep();
+  await pending;
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(expired.includes("old-history"), "maintenance must still finish in the background");
+  assert.equal(warnings.length, 0);
+});
+
+test("failed background expiry maintenance does not make Redis unavailable", async () => {
+  const handlers = {};
+  const warnings = [];
+  const fakeClient = {
+    on(event, handler) { handlers[event] = handler; },
+    async connect() { handlers.connect(); },
+    async ttl() { throw new Error("maintenance failed"); },
+  };
+  const redis = loadRedisWithFakeClient(fakeClient, warnings);
+  assert.equal(await redis.getClient(), fakeClient);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(await redis.getClient(), fakeClient);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0].join(" "), /Failed applying TTL policy: maintenance failed/);
+});
 
 const {
   __private: {

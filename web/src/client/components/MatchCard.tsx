@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, memo, type CSSProperties } from "react";
 import { clearMatchDetailsCache, fetchMatchDetails, fetchMatchSocial, fetchPlayerDetails, shouldRetryMatchDetails } from "../api";
 import { MatchTeamLeaguePositionsLink } from "./MatchTeamLeaguePositionsLink";
+import { MatchCommentary } from "./MatchCommentary";
 
 // Neutral accent for teams without a configured brand colour,
 // so every card still shows a consistent home-left / away-right stripe.
@@ -32,7 +33,7 @@ import type {
 // Derive the user's broadcast country code from the browser locale tag.
 // e.g. "en-GB" → "GB",  "en-US" → "US",  "fr-FR" → "FR".
 function userCountryCode(): string | null {
-  const tag = navigator.language ?? "";
+  const tag = typeof navigator === "undefined" ? "en-GB" : navigator.language ?? "";
   const parts = tag.split("-");
   return parts.length >= 2 ? parts[parts.length - 1].toUpperCase() : null;
 }
@@ -51,6 +52,7 @@ function localChannels(channels: TvChannel[]): TvChannel[] {
 }
 
 interface MatchCardProps {
+  detailOnly?: boolean;
   match: Match;
   highlightToday?: boolean;
   useShortTeamNames?: boolean;
@@ -59,18 +61,20 @@ interface MatchCardProps {
 
 export function MatchCard({
   match,
+  detailOnly = false,
   highlightToday = false,
   useShortTeamNames = false,
   debugMode = false,
 }: MatchCardProps) {
   const [homeLogoMissing, setHomeLogoMissing] = useState(false);
   const [awayLogoMissing, setAwayLogoMissing] = useState(false);
-  const [isExpanded, setIsExpanded]           = useState(false);
+  const [isExpanded, setIsExpanded]           = useState(detailOnly);
   const [details, setDetails]                 = useState<MatchDetails | null>(match.matchDetails ?? null);
   const [detailsLoading, setDetailsLoading]   = useState(false);
   const [detailsError, setDetailsError]       = useState<string | null>(null);
   const [socialItems, setSocialItems]         = useState<MatchSocialItem[]>([]);
   const [socialLoading, setSocialLoading]     = useState(false);
+  const [showCommentary, setShowCommentary]   = useState(false);
   const retriedIncompleteDetailsIdRef         = useRef<string | null>(null);
 
   const status        = displayStatus(match);
@@ -100,6 +104,7 @@ export function MatchCard({
     setDetailsError(null);
     setSocialItems([]);
     setSocialLoading(false);
+    setShowCommentary(false);
     retriedIncompleteDetailsIdRef.current = null;
   }, [match.id]);
 
@@ -114,7 +119,7 @@ export function MatchCard({
   // Fetch details on expand
   useEffect(() => {
     let cancelled = false;
-    if (!isExpanded || !match.matchDetailsId || details || detailsError) {
+    if (detailOnly || !isExpanded || !match.matchDetailsId || details || detailsError) {
       return () => { cancelled = true; };
     }
 
@@ -135,7 +140,7 @@ export function MatchCard({
       .finally(() => { if (!cancelled) setDetailsLoading(false); });
 
     return () => { cancelled = true; };
-  }, [details, detailsError, isExpanded, match.matchDetailsId]);
+  }, [detailOnly, details, detailsError, isExpanded, match.matchDetailsId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -154,7 +159,7 @@ export function MatchCard({
 
   // If the match has since ended but cached details pre-date the final whistle, clear and re-fetch
   useEffect(() => {
-    if (!details || !match.matchDetailsId) return;
+    if (detailOnly || !details || !match.matchDetailsId) return;
     const matchFinished = isMatchFinished(match);
     const detailsFinished = ["FT", "AET", "PENS"].includes((details.scoreStatus ?? "").trim().toUpperCase());
     if (matchFinished && !detailsFinished) {
@@ -162,13 +167,13 @@ export function MatchCard({
       setDetails(null);
       retriedIncompleteDetailsIdRef.current = null;
     }
-  }, [match, details]);
+  }, [detailOnly, match, details]);
 
   // Retry once if details came back incomplete
   useEffect(() => {
     let cancelled = false;
     if (
-      !isExpanded || !match.matchDetailsId || !details ||
+      detailOnly || !isExpanded || !match.matchDetailsId || !details ||
       !shouldRetryMatchDetails(details) ||
       retriedIncompleteDetailsIdRef.current === match.matchDetailsId
     ) {
@@ -185,7 +190,7 @@ export function MatchCard({
     }, 1500);
 
     return () => { cancelled = true; window.clearTimeout(timer); };
-  }, [details, isExpanded, match.matchDetailsId]);
+  }, [detailOnly, details, isExpanded, match.matchDetailsId]);
 
   // ── Compact single-row summary ────────────────────────────────
   //
@@ -278,7 +283,7 @@ export function MatchCard({
   return (
     <article className={`match-card${isLive ? " is-live" : highlightToday ? " is-highlighted" : ""}`}>
       {/* Use a button when expandable so the whole row is keyboard/click accessible */}
-      {isExpandable ? (
+      {detailOnly ? null : isExpandable ? (
         <button
           type="button"
           className="match-row"
@@ -298,6 +303,11 @@ export function MatchCard({
       {isExpandable && isExpanded && (
         <div className="match-details-panel" id={detailPanelId}>
           <MatchTeamLeaguePositionsLink match={match} />
+          <div className="match-feed-picker" role="group" aria-label="Match updates">
+            <button type="button" aria-pressed={!showCommentary} onClick={() => setShowCommentary(false)}>Key events</button>
+            <button type="button" aria-pressed={showCommentary} onClick={() => setShowCommentary(true)}>Commentary</button>
+          </div>
+          {showCommentary && <MatchCommentary key={match.matchDetailsId} matchId={match.matchDetailsId!} isLive={isLive} />}
           {detailsLoading ? (
             <div className="match-details-message">Loading match details…</div>
           ) : detailsError ? (
@@ -305,11 +315,12 @@ export function MatchCard({
           ) : details ? (
             <ExpandedMatchDetails
               details={details}
-              tvChannels={match.tvChannels}
+              tvChannels={detailOnly ? [] : match.tvChannels}
               homeTeamId={match.homeTeamId}
               awayTeamId={match.awayTeamId}
+              showEvents={!showCommentary}
             />
-          ) : socialItems.length > 0 ? null : socialLoading ? (
+          ) : showCommentary || socialItems.length > 0 ? null : socialLoading ? (
             <div className="match-details-message">Loading match details…</div>
           ) : (
             <div className="match-details-message">No additional match details available.</div>
@@ -594,11 +605,13 @@ function ExpandedMatchDetails({
   tvChannels = [],
   homeTeamId,
   awayTeamId,
+  showEvents = true,
 }: {
   details: MatchDetails;
   tvChannels?: TvChannel[];
   homeTeamId?: string | null;
   awayTeamId?: string | null;
+  showEvents?: boolean;
 }) {
   const timelineEntries    = useMemo(() => buildTimelineEntries(details), [details]);
   const hasCompleteLineups = hasRenderableTeamLineups(details.teamLineups);
@@ -609,12 +622,12 @@ function ExpandedMatchDetails({
   const awayAccent = NEUTRAL_EVENT_ACCENT;
 
   if (timelineEntries.length === 0 && !hasCompleteLineups && !hasTvData) {
-    return <div className="match-details-message">No additional match details available.</div>;
+    return showEvents ? <div className="match-details-message">No additional match details available.</div> : null;
   }
 
   return (
     <div className="match-details-body">
-      {timelineEntries.length > 0 && (
+      {showEvents && timelineEntries.length > 0 && (
         <section className="details-section">
           <div className="details-section-title">Key events</div>
           <div className="timeline-list">

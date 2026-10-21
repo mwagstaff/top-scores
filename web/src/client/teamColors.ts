@@ -356,10 +356,10 @@ function relativeLuminance({ r, g, b }: { r: number; g: number; b: number }): nu
 }
 
 const teamColorCatalog = new TeamColorCatalogStore();
-void teamColorCatalog.ensureLoaded();
+if (typeof window !== "undefined") void teamColorCatalog.ensureLoaded();
 
 export function useTeamColorCatalog(): TeamColorCatalogStore {
-  useSyncExternalStore(teamColorCatalog.subscribe, teamColorCatalog.snapshot);
+  useSyncExternalStore(teamColorCatalog.subscribe, teamColorCatalog.snapshot, () => 0);
 
   useEffect(() => {
     void teamColorCatalog.ensureLoaded();

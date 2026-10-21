@@ -1,5 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const vm = require("node:vm");
 
 const {
   __private: {
@@ -14,6 +16,41 @@ const {
     collectTeamShortNameScrapeCandidates,
   },
 } = require("./server");
+
+test("cold short names load independently while the operational bootstrap is stalled", async () => {
+  const source = fs.readFileSync(require.resolve("./server"), "utf8");
+  const start = source.indexOf("async function ensureTeamShortNamesCacheReady()");
+  const end = source.indexOf("\nfunction resolveManualMappingCandidates", start);
+  assert.ok(start >= 0 && end > start);
+  let reads = 0;
+  const context = {
+    scrapedTeamShortNamesByKey: new Map(),
+    scrapedTeamShortNamesLastUpdated: null,
+    operationalBootstrapPromise: new Promise(() => {}),
+    OP_DATASET_TEAM_SHORT_NAMES: "team_short_names",
+    loadTeamShortNameOverrides() {},
+    async loadOperationalDatasetSafe(name) {
+      assert.equal(name, "team_short_names");
+      reads += 1;
+      return {
+        payload: buildPersistedTeamShortNamesDataset(
+          new Map([["manchester city", normalizeTeamShortNameEntry("Manchester City", "Man City")]]),
+          "2026-10-20T17:46:00.000Z"
+        ),
+      };
+    },
+    restoreScrapedTeamShortNamesFromDataset,
+  };
+  vm.runInNewContext(source.slice(start, end), context);
+  let completed = false;
+  const pending = context.ensureTeamShortNamesCacheReady().then(() => { completed = true; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(completed, true, "short names must not await the full startup cache");
+  await pending;
+  assert.equal(context.scrapedTeamShortNamesByKey.get("manchester city").short_name, "Man City");
+  await context.ensureTeamShortNamesCacheReady();
+  assert.equal(reads, 1, "warm requests should use the cached names");
+});
 
 test("extractTeamShortNameEntriesFromMatch returns per-side short name mappings", () => {
   const entries = extractTeamShortNameEntriesFromMatch({

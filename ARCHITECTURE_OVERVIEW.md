@@ -277,6 +277,35 @@ Important scope note:
 
 - The fantasy/FPL caches are shown in admin status, but they are not part of the Redis operational reconciliation loop.
 
+## Match commentary
+
+`/api/v1/matches/:id/commentary` loads separately from scores, key events and
+lineups. The API caches BSD's English commentary in `bsd_commentary`, keyed by
+event ID, with `updated_at` and `full_refreshed_at`. Concurrent requests in an API
+process share one fetch. Cached reads return immediately while stale snapshots
+refresh; failures preserve the last successful feed and impose a 30-second
+retry cooldown.
+
+Active viewers trigger updates every 15 seconds during play. BSD's `since`
+cursor reduces upstream payloads; IDs are deduplicated and the provider's match
+order is preserved. A full snapshot every two minutes reconciles corrections
+and removals. Commentary accepts only `since` and `order`, so unlike list
+endpoints it must not receive `limit` or `offset`.
+
+Upcoming fixtures return an empty, refreshable feed without calling BSD.
+Completed matches refresh in full at most once a minute until five hours after
+kickoff, then once a day on demand. Empty completed feeds retry after one minute
+on subsequent reads. The poller's existing post-match settlement also refreshes
+commentary for previously viewed matches only. There is no all-match background
+commentary poll.
+
+Responses contain the full cached `commentary` array, `has_play_by_play`,
+`updated_at`, `stale`, and `refresh_after_seconds` (null when no further client
+poll is needed). A stale completed response asks the client to check again for
+the refreshed snapshot. iOS and web fetch only while Commentary is selected and
+the app/tab is active; closing the feed cancels client requests. Both show newest
+entries first, support a Key moments filter, and initially show ten entries.
+
 ## Player Portrait Source
 
 Player portraits use the canonical `cutout_url` response field and the public, long-cache BSD URL `https://sports.bzzoiro.com/img/player/{bsd_player_id}/`.

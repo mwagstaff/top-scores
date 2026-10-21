@@ -1,160 +1,3 @@
-/* ============================================================
-   TOP SCORES – Design System
-   Design principle: content-first, iOS-inspired, minimal chrome
-   Palette: deep navy bg · blue accent · green live · muted slate
-   ============================================================ */
-
-/* ── 1. TOKENS / COLOR SCHEMES ─────────────────────────────── */
-
-:root {
-  color-scheme: dark;
-  font-family: "SF Pro Display", "SF Pro Text", ui-sans-serif, system-ui,
-    -apple-system, BlinkMacSystemFont, sans-serif;
-
-  /* Background: rich dark navy with subtle radial glows */
-  background:
-    radial-gradient(circle at top left,  rgba(50, 112, 255, 0.26), transparent 28rem),
-    radial-gradient(circle at top right, rgba(255, 191, 72, 0.14), transparent 22rem),
-    linear-gradient(180deg, #07111f 0%, #0d1728 55%, #111d32 100%);
-  background-attachment: fixed;
-  color: #ecf3ff;
-
-  /* Core palette */
-  --accent:          #78aaff;
-  --accent-soft:     rgba(120, 170, 255, 0.14);
-  --accent-border:   rgba(120, 170, 255, 0.30);
-
-  /* Surfaces */
-  --surface:         rgba(11, 21, 37, 0.78);
-  --surface-strong:  rgba(18, 30, 49, 0.92);
-  --surface-border:  rgba(173, 197, 240, 0.11);
-
-  /* Text */
-  --text:            #ecf3ff;
-  --text-muted:      #8aa4c8;
-
-  /* Semantic */
-  --live:            #52d083;
-  --live-bg:         rgba(82, 208, 131, 0.10);
-  --warning:         #f0c15b;
-  --error:           rgba(220, 38, 38, 0.12);
-  --error-text:      #f8b4b4;
-
-  /* Shadows */
-  --shadow:          0 16px 48px rgba(0, 0, 0, 0.32);
-  --shadow-sm:       0 4px 16px  rgba(0, 0, 0, 0.20);
-
-  /* Input fields */
-  --field-border:    rgba(173, 197, 240, 0.15);
-  --field-bg:        rgba(7, 16, 29, 0.65);
-  --hover-bg:        rgba(120, 170, 255, 0.07);
-
-  /* Pitch (lineup view) */
-  --pitch-grass-top:    #648319;
-  --pitch-grass-bottom: #4d6811;
-  --pitch-line:         rgba(255, 255, 255, 0.48);
-}
-
-/* System light preference – only when no explicit override */
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
-    color-scheme: light;
-    background:
-      radial-gradient(circle at top left,  rgba(76, 149, 255, 0.14), transparent 28rem),
-      radial-gradient(circle at top right, rgba(251, 191, 36, 0.12), transparent 22rem),
-      linear-gradient(180deg, #f4f7fc 0%, #edf1f8 100%);
-    color: #132238;
-
-    --accent:          #1473ff;
-    --accent-soft:     rgba(20, 115, 255, 0.10);
-    --accent-border:   rgba(20, 115, 255, 0.25);
-
-    --surface:         rgba(255, 255, 255, 0.80);
-    --surface-strong:  rgba(255, 255, 255, 0.96);
-    --surface-border:  rgba(19, 34, 56, 0.09);
-
-    --text:            #132238;
-    --text-muted:      #5b6b83;
-
-    --live:            #0f9d58;
-    --live-bg:         rgba(15, 157, 88, 0.09);
-    --warning:         #e8a716;
-    --error:           rgba(220, 38, 38, 0.07);
-    --error-text:      #9f1d1d;
-
-    --shadow:          0 12px 40px rgba(20, 33, 61, 0.08);
-    --shadow-sm:       0 3px 12px  rgba(20, 33, 61, 0.06);
-
-    --field-border:    rgba(19, 34, 56, 0.12);
-    --field-bg:        rgba(255, 255, 255, 0.90);
-    --hover-bg:        rgba(20, 115, 255, 0.06);
-
-    --pitch-grass-top:    #6f9121;
-    --pitch-grass-bottom: #557316;
-    --pitch-line:         rgba(255, 255, 255, 0.58);
-  }
-}
-
-/* Explicit theme overrides */
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  background:
-    radial-gradient(circle at top left,  rgba(50, 112, 255, 0.26), transparent 28rem),
-    radial-gradient(circle at top right, rgba(255, 191, 72, 0.14), transparent 22rem),
-    linear-gradient(180deg, #07111f 0%, #0d1728 55%, #111d32 100%);
-  background-attachment: fixed;
-  color: #ecf3ff;
-  --accent:          #78aaff;
-  --accent-soft:     rgba(120, 170, 255, 0.14);
-  --accent-border:   rgba(120, 170, 255, 0.30);
-  --surface:         rgba(11, 21, 37, 0.78);
-  --surface-strong:  rgba(18, 30, 49, 0.92);
-  --surface-border:  rgba(173, 197, 240, 0.11);
-  --text:            #ecf3ff;
-  --text-muted:      #8aa4c8;
-  --live:            #52d083;
-  --live-bg:         rgba(82, 208, 131, 0.10);
-  --warning:         #f0c15b;
-  --field-border:    rgba(173, 197, 240, 0.15);
-  --field-bg:        rgba(7, 16, 29, 0.65);
-  --hover-bg:        rgba(120, 170, 255, 0.07);
-  --pitch-grass-top:    #648319;
-  --pitch-grass-bottom: #4d6811;
-  --pitch-line:         rgba(255, 255, 255, 0.48);
-}
-
-:root[data-theme="light"] {
-  color-scheme: light;
-  background:
-    radial-gradient(circle at top left,  rgba(76, 149, 255, 0.14), transparent 28rem),
-    radial-gradient(circle at top right, rgba(251, 191, 36, 0.12), transparent 22rem),
-    linear-gradient(180deg, #f4f7fc 0%, #edf1f8 100%);
-  background-attachment: fixed;
-  color: #132238;
-  --accent:          #1473ff;
-  --accent-soft:     rgba(20, 115, 255, 0.10);
-  --accent-border:   rgba(20, 115, 255, 0.25);
-  --surface:         rgba(255, 255, 255, 0.80);
-  --surface-strong:  rgba(255, 255, 255, 0.96);
-  --surface-border:  rgba(19, 34, 56, 0.09);
-  --text:            #132238;
-  --text-muted:      #5b6b83;
-  --live:            #0f9d58;
-  --live-bg:         rgba(15, 157, 88, 0.09);
-  --warning:         #e8a716;
-  --error:           rgba(220, 38, 38, 0.07);
-  --error-text:      #9f1d1d;
-  --shadow:          0 12px 40px rgba(20, 33, 61, 0.08);
-  --shadow-sm:       0 3px 12px  rgba(20, 33, 61, 0.06);
-  --field-border:    rgba(19, 34, 56, 0.12);
-  --field-bg:        rgba(255, 255, 255, 0.90);
-  --hover-bg:        rgba(20, 115, 255, 0.06);
-  --pitch-grass-top:    #6f9121;
-  --pitch-grass-bottom: #557316;
-  --pitch-line:         rgba(255, 255, 255, 0.58);
-}
-
-
 /* ── 2. RESET / BASE ─────────────────────────────────────────── */
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -1506,6 +1349,65 @@ button.match-row:hover {
 }
 
 
+.match-feed-picker {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 12px;
+  background: var(--field-bg);
+}
+.match-feed-picker button {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+.match-feed-picker button[aria-pressed="true"] {
+  color: var(--text);
+  background: var(--surface-strong);
+}
+.commentary-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.commentary-caption { font-size: 0.8125rem; color: var(--text-muted); }
+.commentary-caption:empty { display: none; }
+.match-commentary { display: grid; gap: 12px; min-width: 0; }
+.commentary-filter, .commentary-more {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--surface-border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.875rem;
+  cursor: pointer;
+}
+.commentary-filter[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent-border); color: var(--accent); }
+.commentary-more { justify-self: start; }
+.commentary-list { list-style: none; padding: 0; margin: 0; }
+.commentary-entry {
+  display: grid;
+  grid-template-columns: 4.5em minmax(0, 1fr);
+  gap: 12px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--surface-border);
+}
+.commentary-minute { font-size: 0.875rem; font-weight: 650; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.commentary-copy p { margin: 0; font-size: 0.9375rem; line-height: 1.55; overflow-wrap: anywhere; }
+.commentary-key-label { display: block; margin-bottom: 4px; color: var(--accent); font-weight: 650; font-size: 0.75rem; }
+.commentary-entry.is-important .commentary-copy p { font-weight: 600; }
+.commentary-empty { color: var(--text-muted); font-size: 0.9375rem; line-height: 1.5; margin: 8px 0; }
+.match-feed-picker button:focus-visible, .commentary-filter:focus-visible, .commentary-more:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
 /* ── 11. LINEUP ──────────────────────────────────────────────── */
 
 .lineup-section { margin-top: 0.25rem; }
@@ -2115,8 +2017,7 @@ button.match-row:hover {
   border-radius: 1rem;
   padding: 1.15rem 1.35rem;
   background:
-    radial-gradient(circle at 88% 10%, rgba(255, 58, 119, 0.28), transparent 18rem),
-    linear-gradient(135deg, #2a0647 0%, #3a064d 52%, #160522 100%);
+    linear-gradient(135deg, #14253c, #0a131d);
   color: #fff;
   box-shadow: var(--shadow-sm);
 }
@@ -2212,7 +2113,7 @@ button.match-row:hover {
    mirroring the live treatment used for matches in progress. */
 .league-table-row.is-live {
   background: var(--live-bg);
-  animation: table-row-live-pulse 1.8s ease-in-out infinite;
+  /* A steady tint keeps dense live standings calm. */
 }
 
 @keyframes table-row-live-pulse {
@@ -2271,7 +2172,7 @@ button.match-row:hover {
 .is-playoff { color: #0a84ff; }
 .is-relegation-playoff { color: #ff9f0a; }
 .is-relegation { color: #ff453a; }
-.is-other { color: var(--accent); }
+.is-other { color: #a785ff; }
 
 .table-trend {
   font-size: 0.62rem;

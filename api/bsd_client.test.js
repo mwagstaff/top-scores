@@ -10,6 +10,7 @@ const {
   getRateLimitState,
   getLeagues,
   getEvent,
+  getCommentary,
   __private,
 } = require("./bsd_client");
 
@@ -216,6 +217,18 @@ function mockResponses(t, respond, responseOptions = () => ({})) {
     return req;
   });
 }
+
+test("commentary uses cursor parameters without list pagination", async t => {
+  let requestedURL;
+  mockResponses(t, res => {
+    res.emit("data", '{"event_id":123,"commentary":[]}');
+    res.complete = true;
+    res.emit("end");
+  }, url => { requestedURL = new URL(url); return {}; });
+  await getCommentary(123, { query: { since: "last-id", order: "asc" } });
+  assert.equal(requestedURL.pathname, "/api/v2/events/123/commentary/");
+  assert.deepEqual([...requestedURL.searchParams], [["since", "last-id"], ["order", "asc"]]);
+});
 
 test("truncated response errors reject and release their request slot", { timeout: 1_000 }, async (t) => {
   const observed = [];

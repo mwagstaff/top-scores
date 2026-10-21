@@ -807,6 +807,17 @@ struct APIClient {
         return try JSONDecoder().decode(MatchPerformanceResponse.self, from: data)
     }
 
+    func fetchMatchCommentary(matchId: String) async throws -> MatchCommentaryPayload {
+        guard let normalizedID = Self.normalizedMatchDetailsID(matchId) else {
+            throw APIClientError.invalidMatchDetailsID(matchId)
+        }
+        var request = try buildRequest(path: "matches/\(normalizedID)/commentary", queryItems: [])
+        request.timeoutInterval = 15
+        let (data, http) = try await performRequest(request, operation: "match_commentary", maxAttempts: 1)
+        try validateSuccess(http, data: data, operation: "match_commentary")
+        return try await Self.decodeResponse(MatchCommentaryPayload.self, from: data, operation: "match_commentary")
+    }
+
     func fetchPlayerMatchHistory(playerId: String) async throws -> PlayerMatchHistoryResponse {
         let request = try buildRequest(path: "players/\(playerId)/matches", queryItems: [])
         let (data, http) = try await performRequest(request, operation: "player_history")

@@ -94,6 +94,7 @@ pnpm-debug.log*
 
 # Runtime / coverage / build output
 dist/
+dist-server/
 build/
 out/
 lib-cov/

@@ -13,6 +13,8 @@ import {
   type Preferences,
 } from "./types";
 
+import { useInitialSeed } from "./bootstrap";
+
 const storageKey = "top-scores.web.preferences.v1";
 const previousEplOnlyDefaultPreferences = normalizePreferences({
   ...defaultPreferences,
@@ -25,6 +27,9 @@ const previousAllCompetitionsDefaultPreferences = normalizePreferences({
   englishPremierLeagueTeamsOnly: false,
   homeNationsFilterEnabled: true,
   majorTournamentsFilterEnabled: true,
+});
+const previousWebsiteDefaultPreferences = normalizePreferences({
+  ...defaultPreferences, englishPremierLeagueTeamsOnly: true, matchGroupSortOrder: "kickoffThenTeamScore",
 });
 const legacyDefaultPreferences = normalizePreferences({
   selectedLeagues: [
@@ -54,11 +59,14 @@ interface PreferencesContextValue {
 const PreferencesContext = createContext<PreferencesContextValue | null>(null);
 
 export function PreferencesProvider({ children }: PropsWithChildren) {
-  const [preferences, setPreferencesState] = useState<Preferences>(() => loadPreferences());
+  const seed = useInitialSeed();
+  const [preferences, setPreferencesState] = useState<Preferences>(() => seed?.rendered ? defaultPreferences : loadPreferences());
+  const [loaded, setLoaded] = useState(!seed?.rendered);
+  useEffect(() => { if (seed?.rendered) { setPreferencesState(loadPreferences()); setLoaded(true); } }, []);
 
   useEffect(() => {
-    window.localStorage.setItem(storageKey, JSON.stringify(preferences));
-  }, [preferences]);
+    if (loaded) { try { window.localStorage.setItem(storageKey, JSON.stringify(preferences)); } catch { /* Private browsing can disable storage. */ } }
+  }, [preferences, loaded]);
 
   const value = useMemo<PreferencesContextValue>(
     () => ({
@@ -102,7 +110,7 @@ function loadPreferences(): Preferences {
     }
 
     const parsed = normalizePreferences(JSON.parse(raw) as Partial<Preferences>);
-    return preferencesEqual(parsed, legacyDefaultPreferences) ||
+    return preferencesEqual(parsed, previousWebsiteDefaultPreferences) || preferencesEqual(parsed, legacyDefaultPreferences) ||
       preferencesEqual(parsed, previousEplOnlyDefaultPreferences) ||
       preferencesEqual(parsed, previousAllCompetitionsDefaultPreferences)
       ? defaultPreferences

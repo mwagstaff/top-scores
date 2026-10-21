@@ -33,7 +33,7 @@ export function MatchTeamLeaguePositionsLink({ match }: { match: Match }) {
   }, [match.league, match.homeTeam, match.awayTeam]);
 
   if (entries.length === 0) {
-    return null;
+    return <div className="match-position-placeholder" aria-hidden="true" />;
   }
 
   return (
