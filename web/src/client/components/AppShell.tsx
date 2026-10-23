@@ -1,6 +1,6 @@
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { useEffect, useState, type PropsWithChildren } from "react";
-import { competitionPath, ukDate } from "../football";
+import { competitionPath, dateLabel, ukDate, validDate } from "../football";
 import { useInitialSeed } from "../bootstrap";
 import { normalizeMatch } from "../api";
 import { loadDay } from "../dayStore";
@@ -15,10 +15,14 @@ export function AppShell({ children }: PropsWithChildren) {
   const [catalogError, setCatalogError] = useState(false);
   useEffect(() => { let active = true; loadCompetitions().then(items => { if (active) setCompetitions(items); }).catch(() => { if (active) setCatalogError(true); }); return () => { active = false; }; }, []);
   const seed = useInitialSeed();
+  const requestedDate = new URLSearchParams(location.search).get("date");
+  const selectedDate = validDate(requestedDate) ? requestedDate : null;
+  const activityDate = selectedDate || ukDate();
+  const activityDateLabel = activityDate === ukDate() ? "today" : `on ${dateLabel(activityDate)}`;
   const [activity, setActivity] = useState(() => ({
-    date: ukDate(),
+    date: activityDate,
     counts:
-      seed?.date === ukDate() && seed.matches
+      seed?.date === activityDate && seed.matches
         ? countCompetitions(seed.matches.map(normalizeMatch))
         : ({} as Record<string, number>),
   }));
@@ -26,9 +30,9 @@ export function AppShell({ children }: PropsWithChildren) {
     let cancelled = false,
       running = false;
     const update = async () => {
-      if (document.visibilityState !== "visible" || running) return;
+      if (document.visibilityState !== "visible" || running || cancelled) return;
       running = true;
-      const date = ukDate();
+      const date = selectedDate || ukDate();
       try {
         let day = await loadDay(date);
         while (day.hasMore && !cancelled)
@@ -49,7 +53,7 @@ export function AppShell({ children }: PropsWithChildren) {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", update);
     };
-  }, []);
+  }, [selectedDate]);
   useEffect(() => {
     document.documentElement.dataset.theme = "dark";
   }, []);
@@ -114,11 +118,11 @@ export function AppShell({ children }: PropsWithChildren) {
                 {competitionLogo(id, name) ? <img src={competitionLogo(id, name)} width="26" height="26" alt="" loading="lazy" /> : String(index + 1).padStart(2, "0")}
               </span>
               <span className="league-name">{name.replace("UEFA ", "")}</span>
-              {activity.date === ukDate() && [name, ...aliases].reduce((total, alias) => total + (activity.counts[alias] || 0), 0) > 0 && (
+              {activity.date === activityDate && [name, ...aliases].reduce((total, alias) => total + (activity.counts[alias] || 0), 0) > 0 && (
                 <span
                   className="competition-count"
-                  aria-label={`${[name, ...aliases].reduce((total, alias) => total + (activity.counts[alias] || 0), 0)} ${[name, ...aliases].reduce((total, alias) => total + (activity.counts[alias] || 0), 0) === 1 ? "match" : "matches"} today`}
-                  title={`${[name, ...aliases].reduce((total, alias) => total + (activity.counts[alias] || 0), 0)} matches today`}
+                  aria-label={`${[name, ...aliases].reduce((total, alias) => total + (activity.counts[alias] || 0), 0)} ${[name, ...aliases].reduce((total, alias) => total + (activity.counts[alias] || 0), 0) === 1 ? "match" : "matches"} ${activityDateLabel}`}
+                  title={`${[name, ...aliases].reduce((total, alias) => total + (activity.counts[alias] || 0), 0)} matches ${activityDateLabel}`}
                 >
                   {[name, ...aliases].reduce((total, alias) => total + (activity.counts[alias] || 0), 0)}
                 </span>
