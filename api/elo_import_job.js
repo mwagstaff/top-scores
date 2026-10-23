@@ -1,6 +1,6 @@
 const os = require("node:os");
 
-const DEFAULT_ALERTMANAGERS = ["http://127.0.0.1:9093", "http://127.0.0.1:19093"];
+const DEFAULT_ALERTMANAGERS = ["http://127.0.0.1:19093"];
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function createEloImportRunner({

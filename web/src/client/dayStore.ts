@@ -5,7 +5,7 @@ import { initialSeed } from "./bootstrap";
 export type DayEntry = MatchesPayload & { fetchedAt: number };
 const cache = new Map<string, DayEntry>();
 const pending = new Map<string, Promise<DayEntry>>();
-const storageKey = "top-scores.days.v1";
+const storageKey = "top-scores.days.v2";
 const keyFor = (date: string, epl: boolean | string) => `${date}:${epl}`;
 try {
   for (const [key, value] of JSON.parse(
@@ -78,7 +78,11 @@ export async function loadDay(
       page: String(page),
       sort: "asc",
     });
-    if (epl) {
+    if (epl === "top") {
+      query.set("view_option", "preset:top-teams");
+    } else if (epl === "epl") {
+      query.set("epl_only", "true");
+    } else if (epl) {
       query.set("epl_only", "true");
       const flags = typeof epl === "string" ? new URLSearchParams(epl) : null;
       for (const flag of ["major_uefa", "home_nations", "major_tournaments"]) {

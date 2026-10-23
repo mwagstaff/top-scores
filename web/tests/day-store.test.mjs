@@ -109,3 +109,45 @@ test("Premier League focus honours each saved inclusion preference", async () =>
     globalThis.fetch = original;
   }
 });
+
+test("app scopes keep all competitions unfiltered, top teams on the shared preset, and EPL free of extras", async () => {
+  const original = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url) => {
+    requests.push(new URL(String(url), "http://localhost").searchParams);
+    return new Response("[]");
+  };
+  try {
+    await loadDay("2026-10-24", false, true);
+    await loadDay("2026-10-24", "top", true);
+    await loadDay("2026-10-24", "epl", true);
+    assert.equal(requests[0].has("epl_only"), false);
+    assert.equal(requests[0].has("view_option"), false);
+    assert.equal(requests[1].get("view_option"), "preset:top-teams");
+    assert.equal(requests[1].has("epl_only"), false);
+    assert.equal(requests[2].get("epl_only"), "true");
+    for (const key of ["major_uefa", "home_nations", "major_tournaments"])
+      assert.equal(requests[2].has(key), false);
+    assert.notEqual(
+      cachedDay("2026-10-24", "top"),
+      cachedDay("2026-10-24", "epl"),
+    );
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test("watchability preserves API stars and tier without recalculating the app algorithm", async () => {
+  const { normalizeMatch } = await import("../src/client/api.ts");
+  const index = { score: 79, stars: 4, tier: "highly_watchable" };
+  assert.deepEqual(
+    normalizeMatch({ ...raw, watchability_index: index }).watchabilityIndex,
+    index,
+  );
+  assert.equal(normalizeMatch(raw).watchabilityIndex, null);
+  assert.equal(
+    normalizeMatch({ ...raw, watchability_index: { ...index, stars: 9 } })
+      .watchabilityIndex,
+    null,
+  );
+});

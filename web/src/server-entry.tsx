@@ -3,6 +3,7 @@ import { StaticRouter } from "react-router-dom";
 import App from "./client/App";
 import { PreferencesProvider } from "./client/preferences";
 import { SeedContext, type Seed } from "./client/bootstrap";
+import TeamPage from "./client/components/TeamPage";
 import MatchPage from "./client/components/MatchPage";
 import CompetitionPage from "./client/components/CompetitionPage";
 import { TablesScreen } from "./client/components/TablesScreen";
@@ -12,6 +13,7 @@ const ServerCompetitionPage = () => (
   <CompetitionPage TablesComponent={TablesScreen} />
 );
 const pages = {
+  TeamPage,
   MatchPage,
   CompetitionPage: ServerCompetitionPage,
   TablesScreen,

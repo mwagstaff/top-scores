@@ -436,6 +436,15 @@ function formatDateParam(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
+function normalizeWatchability(raw: unknown) {
+  if (!raw || typeof raw !== "object") return null;
+  const index = raw as Record<string, unknown>;
+  if (typeof index.score !== "number" || !Number.isFinite(index.score) ||
+      typeof index.stars !== "number" || !Number.isInteger(index.stars) ||
+      index.stars < 0 || index.stars > 5 || typeof index.tier !== "string") return null;
+  return { score: index.score, stars: index.stars, tier: index.tier };
+}
+
 export function normalizeMatch(raw: Record<string, unknown>): Match {
   const date = asString(raw.date);
   const time = asString(raw.time);
@@ -446,6 +455,7 @@ export function normalizeMatch(raw: Record<string, unknown>): Match {
   return {
     id: optionalString(raw.match_details_id) || [date, time, league, homeTeam, awayTeam].join("|"),
     competitionWeight: optionalNumber(raw.competition_weight),
+    watchabilityIndex: normalizeWatchability(raw.watchability_index),
     date,
     time,
     homeTeam,

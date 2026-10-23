@@ -1020,7 +1020,7 @@ function LineupPlayerPortrait({ player, className = "" }: { player: MatchLineupP
   );
 }
 
-function PlayerDetailsDialog({ player, onClose }: { player: MatchLineupPlayer; onClose: () => void }) {
+export function PlayerDetailsDialog({ player, onClose }: { player: MatchLineupPlayer; onClose: () => void }) {
   const [details, setDetails] = useState<PlayerDetails | null>(null);
   const [error, setError] = useState<string | null>(null);
 

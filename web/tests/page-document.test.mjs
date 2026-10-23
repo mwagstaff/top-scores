@@ -35,7 +35,7 @@ test("public HTML includes crawlable matches, escaped metadata and safe client s
     assert.match(result.html, /\\u003cscript>/);
     assert.match(
       result.html,
-      /rel="canonical" href="https:\/\/football.test\/fixtures\?date=2026-10-21"/,
+      /rel="canonical" href="https:\/\/football.test\/\?date=2026-10-21"/,
     );
     await render(
       template,
@@ -123,4 +123,29 @@ test("server rendering receives request-scoped data matching the hydration seed"
   } finally {
     globalThis.fetch = original;
   }
+});
+
+
+test("shared presentation order applies to cached SSR data and its hydration seed", async () => {
+  const { default: shared } = await import("../server-shared/broadcast_priorities.cjs");
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return new Response(JSON.stringify([{ ...fixture, tv_channels: [{name:"HBO Max",countryCode:"GB"},{name:"TNT Sports 2",countryCode:"GB"}] }]));
+  };
+  try {
+    const seeds = [];
+    const render = createPageRenderer("https://example.test/api", (_url, seed) => {
+      seeds.push(seed);
+      return "<main>Matches</main>";
+    }, shared.broadcastPriorities.apply);
+    for (let i = 0; i < 2; i++) {
+      const result = await render(template, "/fixtures?date=2026-10-21", "https://football.test");
+      assert.equal(seeds[i].matches[0].tv_channels[0].name,"TNT Sports 2");
+      const encoded = JSON.parse(result.html.match(/id="football-seed" type="application\/json">(.*?)<\/script>/s)[1]);
+      assert.equal(encoded.matches[0].tv_channels[0].name,"TNT Sports 2");
+    }
+    assert.equal(calls,1);
+  } finally { globalThis.fetch = original; }
 });

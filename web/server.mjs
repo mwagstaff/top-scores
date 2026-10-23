@@ -3,7 +3,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { registerArtwork } from "./artwork.mjs";
+import { createTeamLogoResolver } from "./team-logos.mjs";
 import { createPageRenderer } from "./page-document.mjs";
+import broadcastConfig from "./server-shared/broadcast_priorities.cjs";
+const { broadcastPriorities } = broadcastConfig;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -20,7 +23,6 @@ const apiRetryMaxDelayMs = Math.max(apiRetryBaseDelayMs, numberSetting("TOP_SCOR
 const generatedAssetsRoot = isProduction
   ? path.join(productionClientRoot, "generated-assets")
   : path.join(__dirname, "public", "generated-assets");
-const teamLogoManifestPath = path.join(generatedAssetsRoot, "team-logo-manifest.json");
 const tvLogosRoot = path.join(generatedAssetsRoot, "tv-logos");
 const teamShortNamesConfigPath = path.join(__dirname, "..", "api", "team_short_names.json");
 const appIconPath = path.join(generatedAssetsRoot, "app-icon.png");
@@ -45,43 +47,9 @@ if (stallThresholdMs > 0) {
   }, tickIntervalMs).unref();
 }
 
-const teamLogoIndex = buildTeamLogoIndex();
 const tvLogoIndex = buildTvLogoIndex();
 const teamShortNameEntries = loadTeamShortNameEntries();
-const teamLogoAliases = new Map(
-  Object.entries({
-    "manchester united": "man united",
-    "man utd": "man united",
-    "manchester utd": "man united",
-    "man u": "man united",
-    "manchester city": "man city",
-    "tottenham hotspur": "tottenham",
-    "wolverhampton wanderers": "wolves",
-    "sheffield united": "sheff utd",
-    "sheffield wednesday": "sheff wed",
-    "nottingham forest": "nottm forest",
-    "fc bayern münchen": "bayern munich",
-    "bayern münchen": "bayern munich",
-    "fc bayern munchen": "bayern munich",
-    "bayern munchen": "bayern munich",
-    "borussia dortmund": "dortmund",
-    "borussia m'gladbach": "m'gladbach",
-    "athletic club": "athletic",
-    "real betis": "betis",
-    "fc copenhagen": "copenhagen",
-    "fc porto": "porto",
-    "paok thessaloniki": "paok",
-    "paok thessaloniki fc": "paok",
-    "inter milan": "inter",
-    "ac milan": "ac milan",
-    "bodo/glimt": "bodo-glimt",
-    "bodoglimt": "bodo-glimt",
-    "rakow": "rakow czestochowa",
-    "sigma olomouc": "olomouc",
-    "bosnia-herzegovina": "bosnia",
-    "bosnia and herzegovina": "bosnia",
-  })
-);
+const resolveTeamLogo = createTeamLogoResolver(generatedAssetsRoot, teamShortNameEntries);
 
 let competitionWeightsCache = [];
 
@@ -110,6 +78,8 @@ async function loadCompetitionWeights() {
 }
 
 const app = express();
+app.get("/fixtures", (req, res) => res.redirect(308, `/${req.originalUrl.includes("?") ? req.originalUrl.slice(req.originalUrl.indexOf("?")) : ""}`));
+
 app.disable("x-powered-by");
 registerArtwork(app, apiBaseUrl);
 
@@ -166,7 +136,8 @@ app.get("/logos/team/:teamName", (req, res) => {
 
 app.get("/logos/team", (req, res) => {
   const requestedName = typeof req.query.name === "string" ? req.query.name : "";
-  const resolved = resolveTeamLogo(requestedName);
+  const alternateName = typeof req.query.alt === "string" ? req.query.alt : "";
+  const resolved = resolveTeamLogo(requestedName, alternateName);
   if (!resolved) {
     sendTeamPlaceholder(res, requestedName);
     return;
@@ -247,7 +218,13 @@ app.use(
         // eslint-disable-next-line no-console
         console.log(logLine);
       }
-      res.send(buffer);
+      if (upstream.ok && req.method === "GET" && /^matches(?:[/?]|$)/.test(suffix) &&
+          upstream.headers.get("content-type")?.includes("application/json")) {
+        // Use the same hot-reloaded server config even while the upstream API is on an older release.
+        res.removeHeader("ETag");
+        res.setHeader("Cache-Control", "no-store");
+        res.json(broadcastPriorities.apply(JSON.parse(buffer.toString("utf8"))));
+      } else res.send(buffer);
     } catch (error) {
       // eslint-disable-next-line no-console
       console.error(
@@ -273,7 +250,7 @@ async function start() {
     });
 
     const { render } = await import("./dist-server/server-entry.js");
-    const renderPage = createPageRenderer(apiBaseUrl, render);
+    const renderPage = createPageRenderer(apiBaseUrl, render, broadcastPriorities.apply);
     const manifest = JSON.parse(await fs.promises.readFile(path.join(productionClientRoot, ".vite/manifest.json"), "utf8"));
     const routeAssets = url => {
       const route = new URL(url, canonicalOrigin).pathname;
@@ -312,7 +289,7 @@ async function start() {
     const renderDevelopmentPage = createPageRenderer(apiBaseUrl, async (url, seed) => {
       const { render } = await vite.ssrLoadModule("/src/server-entry.tsx");
       return render(url, seed);
-    });
+    }, broadcastPriorities.apply);
 
     app.get("*", async (req, res, next) => {
       try {
@@ -423,23 +400,6 @@ function numberSetting(name, fallback) {
   return Number.isFinite(value) ? value : fallback;
 }
 
-function buildTeamLogoIndex() {
-  if (!fs.existsSync(teamLogoManifestPath)) {
-    return [];
-  }
-
-  const entries = JSON.parse(fs.readFileSync(teamLogoManifestPath, "utf8"));
-  return entries
-    .filter((entry) => typeof entry?.name === "string" && typeof entry?.relativePath === "string")
-    .map((entry) => ({
-      name: entry.name,
-      normalized: normalizedKey(entry.name),
-      core: normalizedCoreKey(entry.name),
-      path: path.join(generatedAssetsRoot, entry.relativePath),
-    }))
-    .filter((entry) => fs.existsSync(entry.path));
-}
-
 function buildTvLogoIndex() {
   if (!fs.existsSync(tvLogosRoot)) {
     return new Map();
@@ -480,51 +440,6 @@ function loadTeamShortNameEntries() {
   }
 }
 
-function resolveTeamLogo(teamName) {
-  const trimmed = decodeURIComponent(teamName || "").trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  for (const candidate of logoCandidates(trimmed)) {
-    const direct = teamLogoIndex.find(
-      (entry) => entry.name.toLowerCase() === candidate.toLowerCase()
-    );
-    if (direct) {
-      return direct.path;
-    }
-
-    const normalized = normalizedKey(candidate);
-    const normalizedMatch = teamLogoIndex.find((entry) => entry.normalized === normalized);
-    if (normalizedMatch) {
-      return normalizedMatch.path;
-    }
-
-    const core = normalizedCoreKey(candidate);
-    const coreMatches = teamLogoIndex.filter((entry) => entry.core === core);
-    if (coreMatches.length === 1) {
-      return coreMatches[0].path;
-    }
-  }
-
-  const normalizedQuery = normalizedKey(trimmed);
-  let bestMatch = null;
-  let bestScore = 0;
-  for (const entry of teamLogoIndex) {
-    const score = similarity(normalizedQuery, entry.normalized);
-    if (score > bestScore) {
-      bestScore = score;
-      bestMatch = entry;
-    }
-  }
-
-  if (bestMatch && bestScore >= 0.82) {
-    return bestMatch.path;
-  }
-
-  return null;
-}
-
 function resolveTvLogo(channelName) {
   const normalized = stripDiacritics(channelName).toLowerCase();
   if (normalized.includes("amazon")) return tvLogoIndex.get("amazon") || null;
@@ -542,103 +457,13 @@ function resolveTvLogo(channelName) {
   if (normalized.includes("premier sports") || normalized.includes("premiersports")) {
     return tvLogoIndex.get("premier sports") || null;
   }
-  if (normalized.includes("sky")) return tvLogoIndex.get("sky") || null;
-  if (normalized.includes("tnt")) return tvLogoIndex.get("tnt") || null;
+  if (normalized.includes("sky")) return tvLogoIndex.get("sky-expanded-dark") || tvLogoIndex.get("sky") || null;
+  if (normalized.includes("tnt")) return tvLogoIndex.get("tnt-expanded-dark") || tvLogoIndex.get("tnt") || null;
   return null;
-}
-
-function normalizedCoreKey(value) {
-  return normalizedTokens(value).join("");
-}
-
-function normalizedKey(value) {
-  const tokens = normalizedTokens(value);
-  if (tokens.length > 0) {
-    return tokens.join("");
-  }
-
-  return stripDiacritics(String(value || ""))
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "");
-}
-
-function normalizedTokens(value) {
-  const stopWords = new Set(["fc", "cf", "sc", "afc", "ac", "sv", "fk", "club", "the", "and"]);
-  return stripDiacritics(String(value || ""))
-    .toLowerCase()
-    .replace(/&/g, " and ")
-    .replace(/[.'’_-]/g, " ")
-    .split(/[^a-z0-9]+/g)
-    .map((token) => token.trim())
-    .filter((token) => token && !stopWords.has(token));
 }
 
 function stripDiacritics(value) {
   return value.normalize("NFKD").replace(/[\u0300-\u036f]/g, "");
-}
-
-function logoCandidates(teamName) {
-  const output = [];
-  const seen = new Set();
-
-  function add(candidate) {
-    const trimmed = String(candidate || "").trim();
-    if (!trimmed) return;
-    const key = trimmed.toLowerCase();
-    if (seen.has(key)) return;
-    seen.add(key);
-    output.push(trimmed);
-  }
-
-  const trimmed = String(teamName || "").trim();
-  const lowered = trimmed.toLowerCase();
-  add(trimmed);
-
-  const alias = teamLogoAliases.get(lowered);
-  if (alias) {
-    add(alias);
-  }
-
-  for (const entry of teamShortNameEntries) {
-    if (entry.name.toLowerCase() === lowered) {
-      add(entry.shortName);
-    }
-    if (entry.shortName.toLowerCase() === lowered) {
-      add(entry.name);
-    }
-  }
-
-  return output;
-}
-
-function similarity(left, right) {
-  const maxLength = Math.max(left.length, right.length);
-  if (maxLength === 0) {
-    return 1;
-  }
-
-  return 1 - levenshtein(left, right) / maxLength;
-}
-
-function levenshtein(left, right) {
-  const leftChars = Array.from(left);
-  const rightChars = Array.from(right);
-  let previous = Array.from({ length: rightChars.length + 1 }, (_, index) => index);
-
-  for (let row = 0; row < leftChars.length; row += 1) {
-    const current = [row + 1];
-    for (let column = 0; column < rightChars.length; column += 1) {
-      const cost = leftChars[row] === rightChars[column] ? 0 : 1;
-      current[column + 1] = Math.min(
-        previous[column + 1] + 1,
-        current[column] + 1,
-        previous[column] + cost
-      );
-    }
-    previous = current;
-  }
-
-  return previous[rightChars.length];
 }
 
 function sendTeamPlaceholder(res, teamName) {
@@ -658,7 +483,7 @@ function sendTeamPlaceholder(res, teamName) {
 </svg>`;
 
   res.setHeader("Content-Type", "image/svg+xml; charset=utf-8");
-  res.setHeader("Cache-Control", "public, max-age=3600");
+  res.setHeader("Cache-Control", "no-store");
   res.status(200).send(svg);
 }
 

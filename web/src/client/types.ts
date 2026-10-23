@@ -26,7 +26,14 @@ export interface TvChannel {
   logo: string | null;
 }
 
+export interface MatchWatchabilityIndex {
+  score: number;
+  stars: number;
+  tier: string;
+}
+
 export interface Match {
+  watchabilityIndex?: MatchWatchabilityIndex | null;
   competitionWeight?: number | null;
   id: string;
   date: string;

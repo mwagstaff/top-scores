@@ -36,6 +36,7 @@ const TEAM_ALIASES_PAYLOAD = require("./team_aliases.json");
 const { teamIdentityNames, teamIdentityKeys } = require("./team_identity");
 const { bsdTeamLogoAsset, legacyBsdTeamLogoAsset } = require("./bsd_team_logo_assets");
 const { normalizeTeamDisplayShortName } = require("./team_display_name");
+const { broadcastPriorities } = require("./broadcast_priorities");
 const fs = require("fs");
 const path = require("path");
 
@@ -3415,7 +3416,8 @@ function canonicalLiveActivityChannels(channels) {
   const output = [];
   const seen = new Set();
 
-  for (const channel of Array.isArray(channels) ? channels : []) {
+  // Apply the same provider order as web/app responses before shortening names.
+  for (const channel of broadcastPriorities.order(Array.isArray(channels) ? channels : [])) {
     const canonical = canonicalLiveActivityChannelName(channel);
     if (!canonical) continue;
     const key = canonical.toLowerCase();
@@ -5960,12 +5962,8 @@ function buildLiveActivityContentState(
       }
       const rawTvChannels = match.tv_channels || match.tvChannels;
       const canonicalChannels = canonicalLiveActivityChannels(rawTvChannels);
-      // tv_channels from the data source is an unordered worldwide broadcaster
-      // list (whatever channel happens to be first is arbitrary, e.g. a Czech
-      // or Greek feed) — prefer whichever entry we actually recognize a logo
-      // for instead of blindly taking index 0, so a UK broadcaster further
-      // down the list still wins. Falls back to the raw first entry (name only,
-      // no logo) when nothing in the list is a recognized broadcaster.
+      // Channels are in shared provider-priority order. Prefer the first with a
+      // recognized logo, falling back to the first name when none have a logo.
       const preferredChannel =
         canonicalChannels.find((channel) => canonicalLiveActivityTvLogoKey(channel)) ||
         canonicalChannels[0] ||

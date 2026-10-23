@@ -1,14 +1,22 @@
-import { memo, useState } from "react";
+import { memo, useId, useState } from "react";
 import { Link } from "react-router-dom";
+import { teamPath } from "../catalog";
 import { matchPath, ukChannels } from "../football";
-import { aggregateSummary, displayStatus, isMatchLive } from "../matchState";
-import type { Match } from "../types";
+import {
+  aggregateSummary,
+  displayStatus,
+  isMatchLive,
+  isMatchFinished,
+} from "../matchState";
+import type { Match, TvChannel } from "../types";
 
 export function TeamCrest({
   name,
+  shortName,
   large = false,
 }: {
   name: string;
+  shortName?: string | null;
   large?: boolean;
 }) {
   const [missing, setMissing] = useState(false);
@@ -26,7 +34,7 @@ export function TeamCrest({
   ) : (
     <img
       className={`team-crest${large ? " large" : ""}`}
-      src={`/logos/team?name=${encodeURIComponent(name)}`}
+      src={`/logos/team?name=${encodeURIComponent(name)}&alt=${encodeURIComponent(shortName || "")}&v=3`}
       width={large ? 64 : 24}
       height={large ? 64 : 24}
       alt=""
@@ -39,65 +47,136 @@ export function TeamCrest({
 
 export const FixtureRow = memo(function FixtureRow({
   match,
+  showBroadcast = true,
+  showRating = false,
 }: {
   match: Match;
+  showBroadcast?: boolean;
+  showRating?: boolean;
 }) {
   const live = isMatchLive(match);
-  const channels = ukChannels(match.tvChannels);
+  const broadcastVisible = showBroadcast && !isMatchFinished(match);
+  const channels = broadcastVisible ? ukChannels(match.tvChannels) : [];
   const scored =
     typeof match.homeScore === "number" && typeof match.awayScore === "number";
   const aggregate = aggregateSummary(match);
   return (
-    <Link
-      to={matchPath(match)}
-      state={{ match }}
-      className={`fixture-row${live ? " is-live" : ""}`}
-    >
-      <span className="fixture-state">
-        {live && <span className="live-dot" />}
-        <span>{displayStatus(match)}</span>
-      </span>
-      <span className="fixture-teams">
-        <span className="fixture-team">
-          <TeamCrest name={match.homeTeam} />
-          <span>{match.homeTeam}</span>
-          <strong key={`h-${match.homeScore}`}>
-            {scored ? match.homeScore : "–"}
-          </strong>
-        </span>
-        <span className="fixture-team">
-          <TeamCrest name={match.awayTeam} />
-          <span>{match.awayTeam}</span>
-          <strong key={`a-${match.awayScore}`}>
-            {scored ? match.awayScore : "–"}
-          </strong>
-        </span>
-        {(aggregate || match.penaltyResult) && (
-          <span className="fixture-note">
-            {match.penaltyResult || aggregate}
+    <div className={`fixture-row app-fixture${live ? " is-live" : ""}`}>
+      <Link to={matchPath(match)} state={{ match }} className="fixture-details-link" aria-label={`Match details: ${match.homeTeam} v ${match.awayTeam}`} />
+      <div className="fixture-match-line">
+        <TeamCrest name={match.homeTeam} shortName={match.homeShortName} />
+        <Link to={teamPath(match.homeTeam, match.homeTeamId, match.league)} className="fixture-home-name" title={match.homeTeam}>
+          <span className="fixture-name-wide">{match.homeTeam}</span>
+          <span className="fixture-name-compact">
+            {match.homeShortName || match.homeTeam}
           </span>
-        )}
-      </span>
-      <span
-        className={`fixture-broadcast${channels.length ? " has-channel" : ""}`}
-      >
-        {channels.length ? (
-          <>
-            <span className="tv-symbol" aria-hidden="true">
-              ▣
-            </span>
-            <span>
-              {channels[0].name}
-              {channels.length > 1 && <small> +{channels.length - 1}</small>}
-            </span>
-          </>
-        ) : (
-          <span>No UK listing</span>
-        )}
-      </span>
-      <span className="fixture-arrow" aria-hidden="true">
-        ↗
-      </span>
-    </Link>
+        </Link>
+        <strong className="fixture-score">
+          {scored ? match.homeScore : ""}
+        </strong>
+        <span className="fixture-state">
+          {live && <span className="live-dot" />}
+          <span>{displayStatus(match)}</span>
+        </span>
+        <strong className="fixture-score">
+          {scored ? match.awayScore : ""}
+        </strong>
+        <Link to={teamPath(match.awayTeam, match.awayTeamId, match.league)} className="fixture-away-name" title={match.awayTeam}>
+          <span className="fixture-name-wide">{match.awayTeam}</span>
+          <span className="fixture-name-compact">
+            {match.awayShortName || match.awayTeam}
+          </span>
+        </Link>
+        <TeamCrest name={match.awayTeam} shortName={match.awayShortName} />
+      </div>
+      <BroadcastChannels channels={channels} matchLabel={`${match.homeTeam} v ${match.awayTeam}`} />
+      {showRating && <WatchabilityRating match={match} />}
+      {(aggregate || match.penaltyResult) && (
+        <span className="fixture-note">{match.penaltyResult || aggregate}</span>
+      )}
+    </div>
   );
 });
+
+export function BroadcastChannels({ channels, matchLabel }: { channels: TvChannel[]; matchLabel: string }) {
+  const [channelsOpen, setChannelsOpen] = useState(false);
+  const [channelsRevealed, setChannelsRevealed] = useState(false);
+  const channelsId = useId();
+  return channels.length > 0 ? (
+  <div className="fixture-tv-logos">
+    {channels.length > 1 ? (
+      <>
+        <button
+          className="channel-toggle"
+          aria-expanded={channelsOpen}
+          aria-controls={channelsId}
+          aria-label={`${channelsOpen ? "Hide" : "Show"} all ${channels.length} channels for ${matchLabel}`}
+          onClick={() => { setChannelsRevealed(true); setChannelsOpen((open) => !open); }}
+        >
+          <ChannelLogo channel={channels[0]} />
+          <span className="channel-toggle-hint">
+            +{channels.length - 1}{" "}
+            <span aria-hidden="true">{channelsOpen ? "⌃" : "⌄"}</span>
+          </span>
+        </button>
+        <div
+          id={channelsId}
+          className={`channel-options${channelsOpen ? " is-open" : ""}`}
+          aria-hidden={!channelsOpen}
+          inert={!channelsOpen}
+        >
+          <div>
+            <ul aria-label="All available TV channels">
+              {channelsRevealed && channels.map((channel) => (
+                <li key={channel.name}>
+                  <ChannelLogo channel={channel} />
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </>
+    ) : (
+      <ChannelLogo channel={channels[0]} />
+    )}
+  </div>
+) : null;
+}
+
+export function ChannelLogo({ channel }: { channel: TvChannel }) {
+  const [failed, setFailed] = useState(false);
+  const bundled =
+    /amazon|apple|bbc|channel ?4|dazn|disney|hbo|itv|laliga|now ?tv|premier ?sports|sky|tnt/i.test(
+      channel.name,
+    );
+  const source = bundled
+    ? `/logos/tv?name=${encodeURIComponent(channel.name)}`
+    : channel.logo;
+  return (
+    <span className="channel-logo" title={channel.name}>
+      {!failed && source && (
+        <img
+          src={source}
+          alt=""
+          width="64"
+          height="24"
+          loading="lazy"
+          decoding="async"
+          onError={() => setFailed(true)}
+        />
+      )}
+      <span>{channel.name}</span>
+    </span>
+  );
+}
+
+export function WatchabilityRating({ match }: { match: Match }) {
+  const rating = match.watchabilityIndex;
+  if (!rating) return null;
+  const label = rating.tier.replaceAll("_", " ");
+  return <span className={`watchability-rating tier-${rating.tier}`} aria-label={`Watchability: ${label}, ${rating.score} out of 100, ${rating.stars} out of 5 stars`}>
+    <span className="watchability-label">{label}</span>
+    <span className="watchability-score">{rating.score}/100</span>
+    <span className="watchability-stars" aria-hidden="true">{"★".repeat(rating.stars)}<span>{"☆".repeat(5 - rating.stars)}</span></span>
+  </span>;
+}

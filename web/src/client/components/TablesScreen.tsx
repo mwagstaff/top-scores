@@ -1,9 +1,14 @@
+import { compareCompetitions } from "../competitionOrdering";
 import "../styles.css";
-import { useEffect, useMemo, useReducer, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { competitionLogo } from "../competitionLogos";
+import { useEffect, useMemo, useReducer, useState, useRef } from "react";
+import { loadCompetitions, type Competition } from "../catalog";
+import { teamPath } from "../catalog";
+import { Link, useSearchParams } from "react-router-dom";
 import { fetchLeagueTables } from "../api";
 import type { LeagueTable, LeagueTableRow, LeagueTableZone } from "../types";
 import { PageMeta } from "./PageMeta";
+import { StadiumBackdrop } from "./StadiumBackdrop";
 
 interface TablesState {
   loading: boolean;
@@ -22,11 +27,15 @@ const initialState: TablesState = {
 };
 
 export function TablesScreen({ competition }: { competition?: string }) {
-  const [selectedLeagueID, setSelectedLeagueID] = useState("premier-league");
+  const [catalog, setCatalog] = useState<Competition[]>([]);
+  useEffect(() => { let active = true; loadCompetitions().then(items => { if (active) setCatalog(items); }).catch(() => {}); return () => { active = false; }; }, []);
+  const carousel = useRef<HTMLElement>(null);
   const [state, setState] = useState<TablesState>(initialState);
   const [reloadToken, reload] = useReducer((value) => value + 1, 0);
   const [searchParams, setSearchParams] = useSearchParams();
   const [highlightedRowId, setHighlightedRowId] = useState<string | null>(null);
+  const [showStats, setShowStats] = useState(true);
+  const [carouselEdges, setCarouselEdges] = useState({ start: true, end: true });
 
   useEffect(() => {
     const controller = new AbortController();
@@ -52,7 +61,6 @@ export function TablesScreen({ competition }: { competition?: string }) {
           leagues: payload.leagues,
           lastUpdated: payload.lastUpdated,
         });
-        setSelectedLeagueID((current) => resolveLeagueID(payload.leagues, current));
       } catch (error) {
         if (controller.signal.aborted) {
           return;
@@ -83,7 +91,7 @@ export function TablesScreen({ competition }: { competition?: string }) {
   }, []);
 
   // Deep link from MatchTeamLeaguePositionsLink (?league=&team=): select the
-  // league, scroll to + briefly highlight the team's row, then clear the params.
+  // league, scroll to + briefly highlight the team's row, keeping the league URL.
   useEffect(() => {
     const leagueID = searchParams.get("league");
     const teamName = searchParams.get("team");
@@ -92,18 +100,17 @@ export function TablesScreen({ competition }: { competition?: string }) {
     }
 
     const league = state.leagues.find((candidate) => candidate.leagueID === leagueID);
-    if (!league) {
-      setSearchParams({}, { replace: true });
-      return;
-    }
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete("team");
+      return next;
+    }, { replace: true });
+    if (!league) return;
 
     const allRows = league.rows.length > 0 ? league.rows : league.groups.flatMap((group) => group.rows);
     const row = allRows.find(
       (candidate) => candidate.team.localeCompare(teamName, undefined, { sensitivity: "base" }) === 0
     );
-
-    setSelectedLeagueID(leagueID);
-    setSearchParams({}, { replace: true });
 
     if (row) {
       window.setTimeout(() => {
@@ -117,16 +124,49 @@ export function TablesScreen({ competition }: { competition?: string }) {
   const sortedLeagues = useMemo(
     () =>
       [...state.leagues].sort((left, right) =>
-        left.leagueName.localeCompare(right.leagueName, undefined, { sensitivity: "base" })
+        compareCompetitions(orderEntry(left, catalog), orderEntry(right, catalog))
       ),
-    [state.leagues]
+    [state.leagues, catalog]
   );
 
+  const selectedLeagueID = resolveLeagueID(sortedLeagues, searchParams.get("league") || "premier-league");
   const selectedLeague =
     (competition ? sortedLeagues.find(league => league.leagueName.toLowerCase() === competition.toLowerCase()) : sortedLeagues.find((league) => league.leagueID === selectedLeagueID) || sortedLeagues[0]) || null;
+  useEffect(() => {
+    const rail = carousel.current;
+    const selected = rail?.querySelector<HTMLElement>('[aria-pressed="true"]');
+    if (rail && selected) rail.scrollLeft += selected.getBoundingClientRect().left - rail.getBoundingClientRect().left - (rail.clientWidth - selected.clientWidth) / 2;
+  }, [selectedLeague?.leagueID, catalog]);
+
+  useEffect(() => {
+    const rail = carousel.current;
+    if (!rail) return;
+    const updateEdges = () => {
+      const start = rail.scrollLeft <= 1;
+      const end = rail.scrollLeft + rail.clientWidth >= rail.scrollWidth - 1;
+      setCarouselEdges(current => current.start === start && current.end === end ? current : { start, end });
+    };
+    updateEdges();
+    rail.addEventListener("scroll", updateEdges, { passive: true });
+    const observer = new ResizeObserver(updateEdges);
+    observer.observe(rail);
+    return () => {
+      rail.removeEventListener("scroll", updateEdges);
+      observer.disconnect();
+    };
+  }, [sortedLeagues.length, selectedLeague?.leagueID, catalog]);
+
+  const scrollCompetitions = (direction: number) => {
+    const rail = carousel.current;
+    rail?.scrollBy({
+      left: direction * Math.max(140, rail.clientWidth * 0.8),
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : "smooth",
+    });
+  };
 
   return (
-    <section className="screen-panel">
+    <section className="screen-panel tables-screen">
+      <StadiumBackdrop ready={Boolean(selectedLeague)} homes={selectedLeague ? [...selectedLeague.rows, ...selectedLeague.groups.flatMap(group => group.rows)].map(row => ({ name: row.team })) : undefined} />
       {!competition && <PageMeta title="League tables" description="Football standings and live positions. Follow the title race and relegation battle with Top Scores." />}
       {!competition && <header className="screen-header"><div><span className="eyebrow">Every point matters</span><h1>League tables</h1></div></header>}
       {state.error && <div className="refresh-notice" role="status">{state.error} <button onClick={() => reload()}>Try again</button></div>}
@@ -139,31 +179,32 @@ export function TablesScreen({ competition }: { competition?: string }) {
         </div>
       ) : (
         <div className="tables-stack">
-          {!competition && <label className="field-stack tables-competition-field">
-            <select
-              className="select-field"
-              aria-label="Choose a competition"
-              value={selectedLeague?.leagueID || ""}
-              onChange={(event) => setSelectedLeagueID(event.target.value)}
-            >
-              {sortedLeagues.map((league) => (
-                <option key={league.leagueID} value={league.leagueID}>
-                  {league.leagueName}
-                </option>
-              ))}
-            </select>
-          </label>}
+          {!competition && <div className="table-competition-navigator">
+            <button type="button" className="table-carousel-arrow" aria-label="Previous competitions" aria-controls="table-competitions" disabled={carouselEdges.start} onClick={() => scrollCompetitions(-1)}>←</button>
+            <nav id="table-competitions" ref={carousel} className="table-competition-carousel" aria-label="Choose a competition">
+            {sortedLeagues.map(league => <button type="button" key={league.leagueID} aria-pressed={selectedLeague?.leagueID === league.leagueID} onClick={() => setSearchParams(current => {
+              const next = new URLSearchParams(current);
+              next.set("league", league.leagueID);
+              next.delete("team");
+              return next;
+            }, { preventScrollReset: true })}>
+              {competitionLogo(league.leagueID, league.leagueName) && <img src={competitionLogo(league.leagueID, league.leagueName)} width="40" height="40" alt="" loading="lazy" />}
+              <span>{league.leagueName}</span>
+            </button>)}
+            </nav>
+            <button type="button" className="table-carousel-arrow" aria-label="Next competitions" aria-controls="table-competitions" disabled={carouselEdges.end} onClick={() => scrollCompetitions(1)}>→</button>
+          </div>}
 
           {selectedLeague ? (
             <>
-              <LeagueTableHero league={selectedLeague} />
+              <LeagueTableHero league={selectedLeague} showStats={showStats} onShowStatsChange={setShowStats} />
               {leagueHasLiveRows(selectedLeague) ? (
                 <div className="tables-live-note">
                   <span className="tables-live-dot" aria-hidden="true" />
                   Live in-play standings. Provisional, subject to change.
                 </div>
               ) : null}
-              <LeagueTableCard league={selectedLeague} highlightedRowId={highlightedRowId} />
+              <LeagueTableCard league={selectedLeague} highlightedRowId={highlightedRowId} showStats={showStats} />
               {state.lastUpdated ? (
                 <div className="tables-updated">Updated {formatLastUpdated(state.lastUpdated)}</div>
               ) : null}
@@ -175,22 +216,23 @@ export function TablesScreen({ competition }: { competition?: string }) {
   );
 }
 
-function LeagueTableHero({ league }: { league: LeagueTable }) {
+function LeagueTableHero({ league, showStats, onShowStatsChange }: { league: LeagueTable; showStats: boolean; onShowStatsChange: (value: boolean) => void }) {
   const visibleStageName = normalizeStageName(league.stageName);
+  const logo = competitionLogo(league.leagueID, league.leagueName);
 
   return (
     <section className="league-hero">
-      <div className="league-hero-mark">
-        {league.leagueName.toLowerCase().includes("premier league") ? (
-          <img src="/generated-assets/app-icon.png" alt="" />
-        ) : (
-          <span aria-hidden="true">*</span>
-        )}
+      <div className={`league-hero-mark${logo?.includes("FantasyPremierLeagueLion") ? " light-crest" : ""}`}>
+        {logo ? <img src={logo} alt={`${league.leagueName} crest`} width="48" height="48" /> : <span aria-hidden="true">{league.leagueName.split(" ").map(word => word[0]).slice(0, 3).join("")}</span>}
       </div>
       <div className="league-hero-title">
         <h2>{league.leagueName}</h2>
         {visibleStageName ? <p>{visibleStageName}</p> : null}
       </div>
+      <label className="tables-stats-toggle">
+        <input type="checkbox" role="switch" checked={showStats} onChange={event => onShowStatsChange(event.target.checked)} />
+        <span>Show stats</span>
+      </label>
     </section>
   );
 }
@@ -216,12 +258,15 @@ function PositionTrend({ row }: { row: LeagueTableRow }) {
 function LeagueTableCard({
   league,
   highlightedRowId = null,
+  showStats,
 }: {
   league: LeagueTable;
   highlightedRowId?: string | null;
+  showStats: boolean;
 }) {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const visibleStageName = normalizeStageName(league.stageName);
+  const logo = competitionLogo(league.leagueID, league.leagueName);
   const groups = league.groups.length > 0
     ? league.groups
     : [{ name: visibleStageName, rows: league.rows }];
@@ -244,14 +289,22 @@ function LeagueTableCard({
 
   return (
 
-      <div className="league-table">
+      <div className="league-table-scroll" role="region" aria-label={`${league.leagueName} standings${showStats ? ", scroll horizontally for all statistics" : ""}`} tabIndex={showStats ? 0 : undefined}>
+      <div className={`league-table${showStats ? " has-stats" : ""}`}>
         <div className="league-table-heading">
           <span className="table-cell table-cell-position" aria-hidden="true" />
           <span className="table-cell table-cell-logo" aria-hidden="true" />
           <span className="table-cell table-cell-team">Team</span>
-          <span className="table-cell table-cell-played">P</span>
-          <span className="table-cell table-cell-goal-difference">GD</span>
-          <span className="table-cell table-cell-points">Pts</span>
+          <span className="table-cell table-cell-played" title="Played">P</span>
+          {showStats && <>
+            <span className="table-cell table-cell-stat" title="Won">W</span>
+            <span className="table-cell table-cell-stat" title="Drawn">D</span>
+            <span className="table-cell table-cell-stat" title="Lost">L</span>
+            <span className="table-cell table-cell-stat" title="Goals scored">GF</span>
+            <span className="table-cell table-cell-stat" title="Goals conceded">GA</span>
+          </>}
+          <span className="table-cell table-cell-goal-difference" title="Goal difference">GD</span>
+          <span className="table-cell table-cell-points" title="Points">Pts</span>
           <span className="table-cell table-cell-chevron" aria-hidden="true" />
         </div>
 
@@ -290,12 +343,9 @@ function LeagueTableCard({
                     <TableZoneBoundary zone={zone} key={zoneBoundaryKey(zone)} />
                   ))}
 
-                  <button
-                    type="button"
+                  <div
                     id={`table-row-${row.id}`}
                     className={`league-table-row${row.live ? " is-live" : ""}${row.id === highlightedRowId ? " is-highlighted" : ""}`}
-                    onClick={() => toggleRow(row.id)}
-                    aria-expanded={isExpanded}
                   >
                     <span className="table-cell table-cell-position">
                       {league.zones.length > 0 ? (
@@ -308,18 +358,25 @@ function LeagueTableCard({
                       {row.position}
                     </span>
                     <TableTeamLogo teamName={row.team} />
-                    <span className="table-cell table-cell-team table-team-name">{row.team}</span>
+                    <Link to={teamPath(row.team, undefined, league.leagueName)} className="table-cell table-cell-team table-team-name">{row.team}</Link>
                     <span className="table-cell table-cell-played">{row.played}</span>
+                    {showStats && <>
+                      <span className="table-cell table-cell-stat">{row.won}</span>
+                      <span className="table-cell table-cell-stat">{row.drawn}</span>
+                      <span className="table-cell table-cell-stat">{row.lost}</span>
+                      <span className="table-cell table-cell-stat">{row.goalsFor}</span>
+                      <span className="table-cell table-cell-stat">{row.goalsAgainst}</span>
+                    </>}
                     <span className="table-cell table-cell-goal-difference table-cell-muted">
                       {signedNumber(row.goalDifference)}
                     </span>
                     <span className="table-cell table-cell-points table-cell-strong">{row.points}</span>
-                    <span className={`table-expand-chevron${isExpanded ? " is-expanded" : ""}`} aria-hidden="true">
+                    <button type="button" onClick={() => toggleRow(row.id)} aria-expanded={isExpanded} aria-label={`Statistics for ${row.team}`} className={`table-expand-chevron${isExpanded ? " is-expanded" : ""}`}>
                       <svg viewBox="0 0 20 20">
                         <path d="m5 7 5 5 5-5" />
                       </svg>
-                    </span>
-                  </button>
+                    </button>
+                  </div>
 
                   {isExpanded ? <LeagueTableExpandedRow row={row} /> : null}
 
@@ -337,6 +394,7 @@ function LeagueTableCard({
             {groupIndex < groups.length - 1 ? <div className="table-divider is-group-divider" /> : null}
           </div>
         ))}
+      </div>
       </div>
   );
 }
@@ -550,4 +608,9 @@ function formatLastUpdated(value: string): string {
     dateStyle: "medium",
     timeStyle: "short",
   }).format(parsed);
+}
+
+function orderEntry(league: LeagueTable, catalog: Competition[]) {
+  const entry = catalog.find(item => item.id === league.leagueID || [item.name, ...item.aliases].some(alias => alias.toLowerCase() === league.leagueName.toLowerCase()));
+  return { id: entry?.id || league.leagueID, name: entry?.name || league.leagueName, weight: entry?.weight };
 }

@@ -2316,8 +2316,8 @@ test("buildLiveActivityContentState canonicalizes TV channels for logo-friendly 
     Date.now()
   );
 
-  assert.deepStrictEqual(contentState.matches[0].tvChannels, ["Amazon"]);
-  assert.equal(contentState.matches[0].tvLogoKey, "amazon");
+  assert.deepStrictEqual(contentState.matches[0].tvChannels, ["TNT Sports"]);
+  assert.equal(contentState.matches[0].tvLogoKey, "tnt");
   assert.equal(contentState.matches[0].homeLogoKey, "Newcastle United");
   assert.equal(contentState.matches[0].awayLogoKey, "Barcelona");
 });
@@ -2632,7 +2632,7 @@ test("buildLiveActivityContentState de-dupes duplicate match ids and keeps the f
   assert.equal(contentState.matches[0].homeScore, 1);
   assert.equal(contentState.matches[0].awayScore, 0);
   assert.equal(contentState.matches[0].matchTime, "54'");
-  assert.deepStrictEqual(contentState.matches[0].tvChannels, ["TNT Sports"]);
+  assert.deepStrictEqual(contentState.matches[0].tvChannels, ["Sky Sports"]);
 });
 
 test("buildLiveActivityContentState carries the penalty winner side for widget score rendering", () => {

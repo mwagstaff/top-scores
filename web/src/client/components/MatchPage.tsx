@@ -4,10 +4,17 @@ import { Link, useLocation, useParams } from "react-router-dom";
 import { cachedMatch, loadDay } from "../dayStore";
 import { normalizeMatch, normalizeMatchDetails } from "../api";
 import { competitionPath, dateLabel, ukChannels, validDate } from "../football";
-import { aggregateSummary, displayStatus, isMatchLive } from "../matchState";
+import {
+  aggregateSummary,
+  displayStatus,
+  isMatchLive,
+  isMatchFinished,
+} from "../matchState";
+import { teamPath } from "../catalog";
+import { goalSummary } from "../goalSummary";
 import type { Match } from "../types";
 import { MatchCard } from "./MatchCard";
-import { TeamCrest } from "./FixtureRow";
+import { ChannelLogo, TeamCrest } from "./FixtureRow";
 import { StadiumBackdrop } from "./StadiumBackdrop";
 import { PageMeta } from "./PageMeta";
 import { useInitialSeed } from "../bootstrap";
@@ -114,7 +121,7 @@ export default function MatchPage() {
   if (!match)
     return (
       <section className="football-empty">
-        <Link to="/fixtures">← Back to football</Link>
+        <Link to="/">← Back to football</Link>
         <h1>{error ? "Match unavailable" : "Loading match…"}</h1>
         {error && (
           <>
@@ -126,6 +133,8 @@ export default function MatchPage() {
     );
   const channels = ukChannels(match.tvChannels);
   const live = isMatchLive(match);
+  const homeGoals = goalSummary(match.matchDetails, "home");
+  const awayGoals = goalSummary(match.matchDetails, "away");
   return (
     <article className="match-page">
       <PageMeta
@@ -133,7 +142,7 @@ export default function MatchPage() {
         description={`${match.homeTeam} v ${match.awayTeam}: scores, match updates and UK TV coverage. ${match.league}.`}
       />
       <div className="breadcrumbs">
-        <Link to={`/fixtures?date=${match.date}`}>← Matches</Link>
+        <Link to={`/?date=${match.date}`}>← Matches</Link>
         <span>/</span>
         <Link to={competitionPath(match.league)}>{match.league}</Link>
       </div>
@@ -149,8 +158,12 @@ export default function MatchPage() {
           </h1>
           <div className="hero-scoreline">
             <div className="hero-team">
-              <TeamCrest name={match.homeTeam} large />
-              <h2>{match.homeTeam}</h2>
+              <TeamCrest
+                name={match.homeTeam}
+                shortName={match.homeShortName}
+                large
+              />
+              <h2><Link to={teamPath(match.homeTeam, match.homeTeamId, match.league)}>{match.homeTeam}</Link></h2>
             </div>
             <div className="hero-score">
               <strong>
@@ -166,10 +179,29 @@ export default function MatchPage() {
               </span>
             </div>
             <div className="hero-team">
-              <TeamCrest name={match.awayTeam} large />
-              <h2>{match.awayTeam}</h2>
+              <TeamCrest
+                name={match.awayTeam}
+                shortName={match.awayShortName}
+                large
+              />
+              <h2><Link to={teamPath(match.awayTeam, match.awayTeamId, match.league)}>{match.awayTeam}</Link></h2>
             </div>
           </div>
+          {(live || isMatchFinished(match)) && (homeGoals.length > 0 || awayGoals.length > 0) && (
+            <div className="hero-goal-summary">
+              {[{ team: match.homeTeam, goals: homeGoals }, { team: match.awayTeam, goals: awayGoals }].map(({ team, goals }) => (
+                <ul key={team} aria-label={`${team} goals`}>
+                  {goals.map((goal, index) => (
+                    <li key={`${goal.minute}-${index}`} aria-label={goal.label}>
+                      <span className="goal-minute">{goal.minute}</span>{" "}
+                      <span>{goal.scorer}</span>{" "}
+                      {goal.assister && <span className="goal-assister">({goal.assister})</span>}
+                    </li>
+                  ))}
+                </ul>
+              ))}
+            </div>
+          )}
           <p className="hero-match-date">
             {validDate(match.date) ? dateLabel(match.date) : match.date}
             {match.penaltyResult
@@ -186,24 +218,26 @@ export default function MatchPage() {
           <button onClick={() => setRetry((v) => v + 1)}>Try again</button>
         </div>
       )}
-      <section className="uk-broadcast-panel">
-        <div>
-          <span className="eyebrow">Where to watch</span>
-          <h2>Live in the UK</h2>
-        </div>
-        <div className="broadcast-channels">
-          {channels.length ? (
-            channels.map((channel) => (
-              <span className="broadcast-chip" key={channel.name}>
-                {channel.name}
-              </span>
-            ))
-          ) : (
-            <p>No UK broadcast confirmed.</p>
-          )}
-        </div>
-        <small>Listings may change. Check with your broadcaster.</small>
-      </section>
+      {!isMatchFinished(match) && (
+        <section className="uk-broadcast-panel">
+          <div>
+            <span className="eyebrow">Where to watch</span>
+            <h2>Live in the UK</h2>
+          </div>
+          <div className="broadcast-channels">
+            {channels.length ? (
+              channels.map((channel) => (
+                <span className="broadcast-chip" key={channel.name}>
+                  <ChannelLogo channel={channel} />
+                </span>
+              ))
+            ) : (
+              <p>No UK broadcast confirmed.</p>
+            )}
+          </div>
+          <small>Listings may change. Check with your broadcaster.</small>
+        </section>
+      )}
       <MatchCard key={id} match={match} detailOnly />
     </article>
   );

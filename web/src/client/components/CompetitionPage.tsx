@@ -1,6 +1,8 @@
-import { Suspense, lazy, type ComponentType } from "react";
+import { loadCompetitions } from "../catalog";
+import { Suspense, lazy, useEffect, useState, type ComponentType } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { MatchesScreen } from "./MatchesScreen";
+import { competitionLogo } from "../competitionLogos";
 import { PageMeta } from "./PageMeta";
 import { StadiumBackdrop } from "./StadiumBackdrop";
 const Tables = lazy(() =>
@@ -14,7 +16,10 @@ export default function CompetitionPage({
 }) {
   const { name = "" } = useParams();
   const [params, setParams] = useSearchParams();
-  const section = params.get("section") || "fixtures";
+  const [supportsTable, setSupportsTable] = useState(false);
+  useEffect(() => { let active = true; setSupportsTable(false); loadCompetitions().then(items => { if (active) setSupportsTable(items.find(item => item.name === name || item.aliases.includes(name))?.supports_table === true); }).catch(() => {}); return () => { active = false; }; }, [name]);
+  const requestedSection = params.get("section") || "fixtures";
+  const section = requestedSection === 'table' && !supportsTable ? 'fixtures' : requestedSection;
   return (
     <>
       <PageMeta
@@ -22,18 +27,16 @@ export default function CompetitionPage({
         description={`${name} fixtures, results, standings and UK TV coverage on Top Scores.`}
       />
       <div className="breadcrumbs">
-        <Link to="/fixtures">← All football</Link>
+        <Link to="/">← All football</Link>
       </div>
       <header className="football-heading competition-hero">
-        <StadiumBackdrop selectionKey={name} />
+        {section !== "table" && <StadiumBackdrop selectionKey={name} />}
         <div className="heading-copy">
-          <span className="eyebrow">Competition centre</span>
-          <h1>{name}</h1>
-          <p>The fixtures, the results, the race.</p>
+          <h1 className="competition-title">{competitionLogo("", name) && <img src={competitionLogo("", name)} width="64" height="64" alt="" />}<span>{name}</span></h1>
         </div>
       </header>
       <nav className="competition-tabs" aria-label="Competition sections">
-        {["fixtures", "results", "table"].map((value) => (
+        {(supportsTable ? ["fixtures", "results", "table"] : ["fixtures", "results"]).map((value) => (
           <button
             key={value}
             aria-current={section === value ? "page" : undefined}

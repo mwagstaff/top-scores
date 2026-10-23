@@ -1,19 +1,21 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { Link, useSearchParams } from "react-router-dom";
+import { competitionDateCounts, preferredCompetitionDate } from "../competitionDates";
+import { loadCompetitions } from "../catalog";
 import { cachedDay, loadDay } from "../dayStore";
 import {
   competitionPath,
+  rankedTVMatches,
   dateLabel,
-  isUKRelevant,
   matchPath,
   moveDate,
   ukChannels,
   ukDate,
   validDate,
 } from "../football";
-import { isMatchFinished, isMatchLive } from "../matchState";
+import { isMatchFinished } from "../matchState";
 import { usePreferences } from "../preferences";
-import { FixtureRow } from "./FixtureRow";
+import { BroadcastChannels, FixtureRow, WatchabilityRating } from "./FixtureRow";
 import { PageMeta } from "./PageMeta";
 import { StadiumBackdrop } from "./StadiumBackdrop";
 import type { Match, MatchesMode } from "../types";
@@ -30,35 +32,51 @@ export function MatchesScreen({
   tv?: boolean;
   competition?: string;
 }) {
+  const dateRail = useRef<HTMLDivElement>(null);
   const [params, setParams] = useSearchParams();
+  const [competitionAliases, setCompetitionAliases] = useState<string[]>([]);
+  useEffect(() => { let active = true; if (competition) loadCompetitions().then(items => { if (active) { const entry = items.find(item => item.name === competition || item.aliases.includes(competition)); setCompetitionAliases(entry ? [entry.name, ...entry.aliases] : []); } }).catch(() => {}); return () => { active = false; }; }, [competition]);
   const { preferences } = usePreferences();
   const today = ukDate();
-  const requestedDate = params.get("date");
-  const date = validDate(requestedDate)
-    ? requestedDate
-    : mode === "results"
-      ? moveDate(today, -1)
-      : today;
-  const scope =
-    params.get("scope") ||
-    (competition
-      ? "all"
-      : preferences.englishPremierLeagueTeamsOnly
-        ? "epl"
-        : "uk");
-  const epl = scope === "epl" && !competition;
-  const dayScope = epl
-    ? new URLSearchParams({
-        major_uefa: String(preferences.majorUEFAClubGamesEnabled),
-        home_nations: String(preferences.homeNationsFilterEnabled),
-        major_tournaments: String(preferences.majorTournamentsFilterEnabled),
-      }).toString()
-    : false;
-  const filter = tv ? "tv" : params.get("view") || "all";
   const seed = useInitialSeed();
+  const [todayFinished, setTodayFinished] = useState<boolean | undefined>(() =>
+    seed?.date === today && seed.matches ? seed.matches.map(normalizeMatch).some(isMatchFinished) : undefined);
+  useEffect(() => {
+    if (mode !== "results") return;
+    let cancelled = false;
+    const check = async () => {
+      if (document.visibilityState !== "visible") return;
+      try {
+        let day = await loadDay(today);
+        while (day.hasMore && !day.matches.some(isMatchFinished) && !cancelled)
+          day = await loadDay(today, false, true, day.page + 1);
+        if (!cancelled) setTodayFinished(day.matches.some(isMatchFinished));
+      } catch { /* Do not hide today when its status is unknown. */ }
+    };
+    void check();
+    const timer = window.setInterval(check, 60_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [mode, today]);
+  const latestResultDate = todayFinished === false ? moveDate(today, -1) : today;
+  const requestedDate = params.get("date");
+  const candidateDate = validDate(requestedDate) ? requestedDate : mode === "results" ? latestResultDate : today;
+  const date = tv && candidateDate < today ? today : mode === "results" && candidateDate > latestResultDate ? latestResultDate : candidateDate;
+  useEffect(() => {
+    if (validDate(requestedDate) && requestedDate !== date) {
+      setParams(current => { const next = new URLSearchParams(current); next.set("date", date); return next; }, { replace: true });
+    }
+  }, [requestedDate, date, setParams]);
+  const scope = ["top", "epl"].includes(params.get("scope") || "")
+    ? params.get("scope")!
+    : "all";
+  const dayScope = competition || scope === "all" ? false : scope;
+  const filteredScope = Boolean(dayScope);
+  const filter =
+    tv ? "tv" : "all";
+
   const seededDay = useMemo(
     () =>
-      !epl && seed?.date === date && seed.matches
+      !filteredScope && seed?.date === date && seed.matches
         ? {
             matches: seed.matches.map(normalizeMatch),
             fetchedAt: seed.fetchedAt,
@@ -68,7 +86,7 @@ export function MatchesScreen({
             totalCount: seed.matches.length,
           }
         : undefined,
-    [seed, date, epl],
+    [seed, date, filteredScope],
   );
   const [query, setQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
@@ -166,6 +184,35 @@ export function MatchesScreen({
     }, 1500);
     return () => window.clearTimeout(timer);
   }, [key, Boolean(payload)]);
+  useEffect(() => {
+    if (!competition || requestedDate) return;
+    let active = true;
+    void loadCompetitions().then(items => {
+      const entry = items.find(item => item.name === competition || item.aliases.includes(competition));
+      return preferredCompetitionDate([...new Set([competition, ...(entry ? [entry.name, ...entry.aliases] : [])])], today, mode === 'results');
+    }).then(nextDate => {
+      if (active && nextDate) setParams(current => { if (current.has('date')) return current; const next = new URLSearchParams(current); next.set('date', nextDate); return next; }, { replace: true });
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [competition, requestedDate, today, mode, setParams]);
+  const [dateCountsReady, setDateCountsReady] = useState(false);
+  const [dateCounts, setDateCounts] = useState<Record<string, number>>({});
+  useEffect(() => {
+    let active = true;
+    setDateCounts({});
+    setDateCountsReady(false);
+    if (competition) {
+      const names = [...new Set([competition, ...competitionAliases])];
+      void competitionDateCounts(names, moveDate(date, -15), moveDate(date, 15), mode === 'results')
+        .then(counts => { if (active) { setDateCounts(counts); setDateCountsReady(true); } }).catch(() => {});
+    }
+    return () => { active = false; };
+  }, [competition, competitionAliases, date, mode]);
+  useEffect(() => {
+    const rail = dateRail.current;
+    const selected = rail?.querySelector<HTMLElement>('[aria-pressed="true"]');
+    if (rail && selected) rail.scrollLeft += selected.getBoundingClientRect().left - rail.getBoundingClientRect().left - (rail.clientWidth - selected.clientWidth) / 2;
+  }, [date]);
   const change = (values: Record<string, string>) =>
     setParams((current) => {
       const next = new URLSearchParams(current);
@@ -178,38 +225,18 @@ export function MatchesScreen({
   const relevant = useMemo(
     () =>
       (payload?.matches || []).filter((match) => {
-        if (competition && match.league !== competition) return false;
+        if (competition && match.league !== competition && !competitionAliases.includes(match.league)) return false;
         const legacyComps = params.get("comps")?.split(",");
         if (legacyComps && !legacyComps.includes(match.league)) return false;
-        if (!competition && scope === "uk" && !isUKRelevant(match))
-          return false;
-        if (
-          !competition &&
-          preferences.competitionFilterEnabled &&
-          !preferences.selectedLeagues.includes(match.league)
-        )
-          return false;
         if (mode === "results" && !isMatchFinished(match)) return false;
-        if (
-          preferences.channelFilterEnabled &&
-          mode === "fixtures" &&
-          !match.tvChannels.some((channel) =>
-            preferences.selectedChannels.some((selected) =>
-              channel.name
-                .toLowerCase()
-                .includes(selected.replace(" (all)", "").toLowerCase()),
-            ),
-          )
-        )
-          return false;
+        if (tv && isMatchFinished(match)) return false;
         return true;
       }),
-    [payload, competition, scope, mode, preferences, params],
+    [payload, competition, competitionAliases, scope, mode, tv, preferences, params],
   );
   const matches = useMemo(
     () =>
       relevant.filter((match) => {
-        if (filter === "live" && !isMatchLive(match)) return false;
         if (filter === "tv" && !ukChannels(match.tvChannels).length)
           return false;
         return `${match.homeTeam} ${match.awayTeam} ${match.league} ${match.tvChannels.map((c) => c.name).join(" ")}`
@@ -252,18 +279,10 @@ export function MatchesScreen({
           ] as const,
       );
   }, [matches, preferences.matchGroupSortOrder, rating]);
-  const tvMatches = relevant
-    .filter(
-      (match) => ukChannels(match.tvChannels).length && !isMatchFinished(match),
-    )
-    .slice(0, 3);
-  const title =
-    competition ||
-    (tv
-      ? "Football on TV"
-      : mode === "results"
-        ? "The final whistle."
-        : "Your football. Today.");
+  const tvMatches = rankedTVMatches(relevant).slice(0, 3);
+  const otherTVMatches =
+    relevant.filter((match) => ukChannels(match.tvChannels).length).length -
+    tvMatches.length;
   const loading = !payload && !error;
   return (
     <>
@@ -280,30 +299,22 @@ export function MatchesScreen({
         />
       )}
       {!competition && (
-        <header className="football-heading">
-          <StadiumBackdrop ready={Boolean(payload)} />
-          <div className="heading-copy">
-            <span className="eyebrow">
-              {tv
-                ? "The UK TV guide"
-                : mode === "results"
-                  ? "Results & scorelines"
-                  : "The beautiful game, at a glance"}
-            </span>
-            <h1>{title}</h1>
-            <p>
-              {tv
-                ? "Every listed UK broadcast. Find your next match."
-                : mode === "results"
-                  ? "Every goal. Every result. All in one place."
-                  : "The scores you follow. The matches you’ll watch."}
-            </p>
-          </div>
+        <header className="football-heading compact-heading">
+          <StadiumBackdrop ready={Boolean(payload)} homes={mode === "fixtures" && !tv ? relevant.map(match => ({ name: match.homeTeam, id: match.homeTeamId })) : undefined} />
+          <h1>
+            {tv
+              ? "Football on TV"
+              : mode === "results"
+                ? "Results"
+                : "Scores & fixtures"}
+          </h1>
         </header>
       )}
-      <div className="scores-layout">
+      <div
+        className={`scores-layout${mode === "results" ? " results-layout" : ""}`}
+      >
         <section
-          className="scores-primary"
+          className={`scores-primary${mode === "fixtures" && !tv ? " fixtures-with-side-tv" : ""}`}
           aria-label={
             competition ? `${competition} matches` : "Football matches"
           }
@@ -311,23 +322,48 @@ export function MatchesScreen({
           <div className="date-navigator">
             <button
               aria-label="Previous day"
+              disabled={tv && date <= today}
               onClick={() => change({ date: moveDate(date, -1) })}
             >
               ←
             </button>
-            <div className="date-shortcuts">
-              {[-1, 0, 1].map((offset) => (
-                <button
-                  key={offset}
-                  aria-pressed={date === moveDate(today, offset)}
-                  onClick={() => change({ date: moveDate(today, offset) })}
-                >
-                  {offset < 0 ? "Yesterday" : offset > 0 ? "Tomorrow" : "Today"}
-                </button>
-              ))}
+            <div ref={dateRail} className="date-shortcuts" aria-label="Match dates">
+              {Array.from({ length: 31 }, (_, index) => index - 15).map((offset) => {
+                const day = moveDate(date, offset);
+                if ((tv && day < today) || (mode === "results" && day > latestResultDate)) return null;
+                const instant = new Date(`${day}T12:00:00Z`);
+                return (
+                  <button
+                    key={day}
+                    disabled={Boolean(competition && (!dateCountsReady || !dateCounts[day]))}
+                    className={`date-offset-${Math.abs(offset)}`}
+                    aria-label={`${dateLabel(day)}${dateCounts[day] ? `, ${dateCounts[day]} ${dateCounts[day] === 1 ? "match" : "matches"}` : ""}`}
+                    aria-pressed={day === date}
+                    onClick={() => change({ date: day })}
+                  >
+                    <span>
+                      {day === today
+                        ? "Today"
+                        : instant.toLocaleDateString("en-GB", {
+                            weekday: "short",
+                            timeZone: "Europe/London",
+                          })}
+                    </span>
+                    <span>
+                      {instant.toLocaleDateString("en-US", {
+                        month: "short",
+                        day: "numeric",
+                        timeZone: "Europe/London",
+                      })}
+                    </span>
+                    {dateCounts[day] > 0 && <span className="date-count" aria-hidden="true">{dateCounts[day]}</span>}
+                  </button>
+                );
+              })}
             </div>
             <button
               aria-label="Next day"
+              disabled={mode === "results" && date >= latestResultDate}
               onClick={() => change({ date: moveDate(date, 1) })}
             >
               →
@@ -337,47 +373,15 @@ export function MatchesScreen({
               <input
                 aria-label="Choose a date"
                 type="date"
+                min={tv ? today : undefined}
+                max={mode === "results" ? latestResultDate : undefined}
                 value={date}
                 onChange={(e) => {
-                  if (validDate(e.target.value))
+                  if (validDate(e.target.value) && (!tv || e.target.value >= today) && (mode !== "results" || e.target.value <= latestResultDate))
                     change({ date: e.target.value });
                 }}
               />
             </label>
-          </div>
-          <div className="match-filter-bar">
-            <div className="filter-tabs" role="group" aria-label="Match view">
-              {(tv
-                ? [["tv", "On UK TV"]]
-                : [
-                    ["all", "All matches"],
-                    ["live", "Live"],
-                    ["tv", "On UK TV"],
-                  ]
-              ).map(([value, label]) => (
-                <button
-                  key={value}
-                  aria-pressed={filter === value}
-                  onClick={() => change({ view: value })}
-                >
-                  {value === "live" && <span className="live-dot" />}
-                  {label}
-                  {value === "live" && (
-                    <span className="filter-count">
-                      {relevant.filter(isMatchLive).length}
-                    </span>
-                  )}
-                </button>
-              ))}
-            </div>
-            <button
-              className="refresh-button"
-              disabled={busy}
-              onClick={() => setRefresh((v) => v + 1)}
-              aria-label="Refresh matches"
-            >
-              ↻
-            </button>
           </div>
           <div className="match-search-row">
             <button
@@ -405,15 +409,9 @@ export function MatchesScreen({
               </label>
             )}
             {!competition && (
-              <select
-                aria-label="Competition scope"
-                value={scope}
-                onChange={(e) => change({ scope: e.target.value, comps: "" })}
-              >
-                <option value="uk">UK favourites + TV</option>
-                <option value="all">All competitions</option>
-                <option value="epl">Premier League focus</option>
-              </select>
+              <div className="scope-toggles" role="group" aria-label="Competition scope">
+                {[["all", "All competitions"], ["top", "Show top teams"], ["epl", "Show Premier League teams"]].map(([value, label]) => <button key={value} aria-pressed={scope === value} onClick={() => change({ scope: value, comps: "" })}>{value === 'top' && <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M7 3h10v5a5 5 0 0 1-10 0V3Zm0 2H3v3a4 4 0 0 0 5 4m9-7h4v3a4 4 0 0 1-5 4M12 13v6m-5 2h10m-8-2h6" /></svg>}{value === 'epl' && <img src="/competition-logos/FantasyPremierLeagueLion.webp" width="22" height="22" alt="" />}<span>{label}</span></button>)}
+              </div>
             )}
           </div>
           <div className="fixture-date-heading">
@@ -464,7 +462,12 @@ export function MatchesScreen({
                   <span>{games.length}</span>
                 </div>
                 {games.map((match) => (
-                  <FixtureRow match={match} key={match.id} />
+                  <FixtureRow
+                    match={match}
+                    key={match.id}
+                    showBroadcast={mode !== "results"}
+                    showRating={tv}
+                  />
                 ))}
               </section>
             ))
@@ -473,9 +476,7 @@ export function MatchesScreen({
               <div className="football-empty">
                 <span aria-hidden="true">◷</span>
                 <h3>
-                  {filter === "live"
-                    ? "No matches live right now"
-                    : query
+                  {query
                       ? "No matches found"
                       : filter === "tv"
                         ? "No UK broadcasts listed"
@@ -527,7 +528,11 @@ export function MatchesScreen({
             </button>
           )}
           <div className="scores-footnote">
-            <span>All times UK · TV listings may change</span>
+            <span>
+              {mode === "results"
+                ? "All times UK"
+                : "All times UK · TV listings may change"}
+            </span>
             {payload?.lastUpdated && (
               <span>
                 Updated{" "}
@@ -540,23 +545,12 @@ export function MatchesScreen({
             )}
           </div>
         </section>
-        {!competition && (
+        {!competition && mode !== "results" && (
           <aside className="watch-sidebar" aria-label="UK viewing guide">
-            <span className="eyebrow">Make a night of it</span>
-            <h2>
-              On the box<span className="brand-period">.</span>
-            </h2>
-            <p>
-              UK broadcasts for{" "}
-              {date === today ? "today" : dateLabel(date, true)}.
-            </p>
+            <h2>TV Guide</h2>
             {tvMatches.map((match) => (
-              <Link
-                className="watch-pick"
-                to={matchPath(match)}
-                state={{ match }}
-                key={match.id}
-              >
+              <div className="watch-pick" key={match.id}>
+                <Link className="watch-pick-details" to={matchPath(match)} state={{ match }}>
                 <span className="watch-time">
                   {match.time}
                   <span>UK</span>
@@ -566,12 +560,10 @@ export function MatchesScreen({
                   <small>v</small>
                   {match.awayTeam}
                 </strong>
-                <span className="watch-channel">
-                  {ukChannels(match.tvChannels)
-                    .map((channel) => channel.name)
-                    .join(" · ")}
-                </span>
-              </Link>
+                <WatchabilityRating match={match} />
+                </Link>
+                <BroadcastChannels channels={ukChannels(match.tvChannels)} matchLabel={`${match.homeTeam} v ${match.awayTeam}`} />
+              </div>
             ))}
             {!tvMatches.length && (
               <p className="watch-empty">
@@ -581,13 +573,19 @@ export function MatchesScreen({
               </p>
             )}
             <Link className="text-link" to={`/tv?date=${date}`}>
-              Full TV guide <span aria-hidden="true">→</span>
+              <span>
+                Full TV Guide
+                {!loading && (
+                  <small className="guide-more-count">
+                    {otherTVMatches}
+                    {payload?.hasMore ? "+" : ""} more{" "}
+                    {otherTVMatches === 1 ? "match" : "matches"}{" "}
+                    {date === today ? "today" : `on ${dateLabel(date, true)}`}
+                  </small>
+                )}
+              </span>
+              <span aria-hidden="true">→</span>
             </Link>
-            <div className="sidebar-note">
-              <span className="eyebrow">Follow the football</span>
-              <p>From the first whistle to the last kick.</p>
-              <Link to="/tables">Explore the tables →</Link>
-            </div>
           </aside>
         )}
       </div>

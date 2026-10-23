@@ -1540,10 +1540,12 @@ struct MatchesView: View {
         )
 
         let competitionID = displayedLeague.matches.first?.leagueId
-        let canOpenTable = competitionID != nil && TableCompetitionAvailability.supportsTable(
-            competitionID: competitionID,
-            competitionName: competitionName
-        )
+        let canOpenTable = fixtureBrowser.competitions.first { entry in
+            entry.stableID == competitionID || entry.allNames.contains {
+                $0.caseInsensitiveCompare(competitionName) == .orderedSame
+            }
+        }?.supportsTable == true
+
         let heading = HStack(spacing: 11) {
             LeagueBadgeImage(
                 competitionID: displayedLeague.matches.first?.leagueId,

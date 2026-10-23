@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import Top_Scores
 
@@ -101,35 +102,10 @@ struct TableCompetitionOrderingTests {
         ])
     }
 
-    @Test func excludesKnockoutOnlyCompetitionsByBSDIDAndLegacyName() {
-        let excluded = [
-            ("39", "FA Cup"), ("40", "EFL Cup"), ("41", "Copa del Rey"),
-            ("43", "DFB-Pokal"), ("42", "Coppa Italia"),
-            ("44", "Coupe de France"), ("90", "UEFA Super Cup"),
-            ("31", "International Friendly")
-        ]
-        for (id, name) in excluded {
-            #expect(!TableCompetitionAvailability.supportsTable(competitionID: id, competitionName: ""))
-            #expect(!TableCompetitionAvailability.supportsTable(competitionID: nil, competitionName: name))
-        }
-        #expect(!TableCompetitionAvailability.supportsTable(
-            competitionID: "english-league-cup", competitionName: "Carabao Cup"
-        ))
-        #expect(!TableCompetitionAvailability.supportsTable(
-            competitionID: "fa-cup", competitionName: "English FA Cup"
-        ))
-
-        let retained = [
-            table("1", "Premier League"),
-            table("7", "UEFA Champions League"),
-            table("8", "UEFA Europa League"),
-            table("83", "UEFA Conference League"),
-            table("27", "FIFA World Cup 2026"),
-            table("64", "UEFA Nations League"),
-            table("91", "National League")
-        ]
-        let all = excluded.map { table($0.0, $0.1) } + retained
-        #expect(TableCompetitionAvailability.eligibleLeagues(all) == retained)
+    @Test func decodesServerTableEligibility() throws {
+        let data = Data(#"{"name":"FA Cup","weight":65,"supports_table":false}"#.utf8)
+        let entry = try JSONDecoder().decode(CompetitionCatalogEntry.self, from: data)
+        #expect(entry.supportsTable == false)
     }
 
     @Test func keepsWorldCupAndRegionalQualifiersTogetherRegardlessOfWeights() {

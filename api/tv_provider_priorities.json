@@ -1,0 +1,81 @@
+{
+  "providers": [
+    {
+      "id": "bbc",
+      "priority": 10,
+      "aliases": [
+        "bbc"
+      ]
+    },
+    {
+      "id": "itv",
+      "priority": 20,
+      "aliases": [
+        "itv",
+        "stv"
+      ]
+    },
+    {
+      "id": "channel4",
+      "priority": 30,
+      "aliases": [
+        "channel 4",
+        "channel4",
+        "more4",
+        "e4"
+      ]
+    },
+    {
+      "id": "channel5",
+      "priority": 40,
+      "aliases": [
+        "channel 5",
+        "channel5",
+        "5action",
+        "5star",
+        "5usa"
+      ]
+    },
+    {
+      "id": "sky",
+      "priority": 50,
+      "aliases": [
+        "sky"
+      ]
+    },
+    {
+      "id": "tnt",
+      "priority": 60,
+      "aliases": [
+        "tnt",
+        "bt sport"
+      ]
+    },
+    {
+      "id": "now",
+      "priority": 70,
+      "aliases": [
+        "now tv",
+        "nowtv",
+        "now"
+      ]
+    },
+    {
+      "id": "hbo",
+      "priority": 80,
+      "aliases": [
+        "hbo",
+        "max"
+      ]
+    },
+    {
+      "id": "premier",
+      "priority": 90,
+      "aliases": [
+        "premier sport",
+        "premiersport"
+      ]
+    }
+  ],
+  "other_priority": 1000
+}

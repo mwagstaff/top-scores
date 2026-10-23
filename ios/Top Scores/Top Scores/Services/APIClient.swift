@@ -1517,6 +1517,7 @@ struct CompetitionCatalogEntry: Codable, Hashable, Sendable {
     let weight: Double
     let region: String?
     let logoURL: String?
+    var supportsTable: Bool? = nil
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -1525,6 +1526,7 @@ struct CompetitionCatalogEntry: Codable, Hashable, Sendable {
         case weight
         case region
         case logoURL = "logo_url"
+        case supportsTable = "supports_table"
     }
 
     nonisolated var stableID: String {

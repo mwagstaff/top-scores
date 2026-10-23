@@ -1,11 +1,25 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizedKey } from "../team-logos.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const webRoot = path.resolve(__dirname, "..");
 const repoRoot = path.resolve(webRoot, "..");
+// Include the canonical API rules in standalone website deployments.
+const sharedRoot = path.join(webRoot, "server-shared");
+fs.mkdirSync(sharedRoot, { recursive: true });
+for (const [source, destination] of [
+  ["broadcast_priorities.js", "broadcast_priorities.cjs"],
+  ["tv_provider_priorities.json", "tv_provider_priorities.json"],
+]) {
+  const sourcePath = path.join(repoRoot, "api", source);
+  const destinationPath = path.join(sharedRoot, destination);
+  if (fs.existsSync(sourcePath)) fs.copyFileSync(sourcePath, destinationPath);
+  else if (!fs.existsSync(destinationPath)) throw new Error(`Missing bundled server dependency: ${destination}`);
+}
+
 const outputRoot = path.join(webRoot, "public", "generated-assets");
 const outputTeamLogosRoot = path.join(outputRoot, "team-logos");
 const outputTvLogosRoot = path.join(outputRoot, "tv-logos");
@@ -22,15 +36,17 @@ const teamLogoManifestPath = path.join(
   "team_logo_assets.json"
 );
 const mediaAssetsRoot = path.join(repoRoot, "ios", "Top Scores", "Media.xcassets");
+const teamIdentityCatalogPath = path.join(repoRoot, "ios", "Top Scores", "Top Scores", "team_colors.json");
 const tvLogosRoot = path.join(repoRoot, "ios", "Top Scores", "Top Scores", "tv-logos");
 const appIconSourcePath = path.join(
   repoRoot,
   "ios",
   "Top Scores",
-  "Top Scores Share Extension",
-  "top-scores-logo.png"
+  "Media.xcassets",
+  "TopScoresAppIcon.appiconset",
+  "icon-ios-1024x1024.png"
 );
-const sourceInputs = [teamLogoManifestPath, mediaAssetsRoot, tvLogosRoot, appIconSourcePath];
+const sourceInputs = [teamLogoManifestPath, teamIdentityCatalogPath, mediaAssetsRoot, tvLogosRoot, appIconSourcePath];
 
 if (hasSourceAssets()) {
   const tempRoot = path.join(webRoot, "public", `.generated-assets-${process.pid}-${Date.now()}`);
@@ -48,8 +64,8 @@ if (hasSourceAssets()) {
 
   await copyAppIcons(tempAppIconPath, tempFaviconPath, tempAppleTouchIconPath);
   copyFplLion(tempFplLionPath);
-  const teamEntries = copyTeamLogos(tempTeamLogosRoot);
-  copyTvLogos(tempTvLogosRoot);
+  const teamEntries = await copyTeamLogos(tempTeamLogosRoot);
+  await copyTvLogos(tempTvLogosRoot);
 
   fs.writeFileSync(tempManifestPath, JSON.stringify(teamEntries, null, 2));
   replaceOutputRoot(tempRoot);
@@ -117,13 +133,15 @@ async function copyAppIcons(appIconDestinationPath, faviconDestinationPath, appl
   const sourceBuffer = fs.readFileSync(appIconSourcePath);
 
   await sharp(sourceBuffer)
-    .resize(96, 96, { fit: "cover" })
-    .png({ compressionLevel: 9, palette: true })
+    .resize(144, 144, { fit: "cover" })
+    .sharpen({ sigma: 0.6 })
+    .png({ compressionLevel: 9 })
     .toFile(appIconDestinationPath);
 
   await sharp(sourceBuffer)
     .resize(32, 32, { fit: "cover" })
-    .png({ compressionLevel: 9, palette: true })
+    .sharpen({ sigma: 0.6 })
+    .png({ compressionLevel: 9 })
     .toFile(faviconDestinationPath);
 
   await sharp(sourceBuffer)
@@ -132,12 +150,14 @@ async function copyAppIcons(appIconDestinationPath, faviconDestinationPath, appl
     .toFile(appleTouchDestinationPath);
 }
 
-function copyTeamLogos(destinationRoot) {
+async function copyTeamLogos(destinationRoot) {
+  const { default: sharp } = await import("sharp");
   if (!fs.existsSync(teamLogoManifestPath)) {
     throw new Error(`Missing team logo manifest: ${teamLogoManifestPath}`);
   }
 
   const assetNames = JSON.parse(fs.readFileSync(teamLogoManifestPath, "utf8"));
+  const catalog = JSON.parse(fs.readFileSync(teamIdentityCatalogPath, "utf8"));
   const manifest = [];
 
   for (const assetName of assetNames) {
@@ -149,17 +169,36 @@ function copyTeamLogos(destinationRoot) {
 
     const filename = `${slugify(assetName)}.png`;
     const destination = path.join(destinationRoot, filename);
-    fs.copyFileSync(sourceFile, destination);
+    await sharp(sourceFile).resize(96, 96, { fit: "inside", withoutEnlargement: true }).png({ compressionLevel: 9, palette: true }).toFile(destination);
     manifest.push({
       name: assetName,
       relativePath: path.posix.join("team-logos", filename),
+      aliases: [],
     });
+  }
+
+  const exactNames = new Map(manifest.map((entry) => [entry.name.toLowerCase(), entry]));
+  const normalizedNames = new Map(manifest.map((entry) => [normalizedKey(entry.name), entry]));
+  const assignedNames = new Set();
+  for (const identity of [...catalog.teams, ...catalog.identity_groups]) {
+    const names = [identity.name, ...identity.aliases];
+    const entry = names.map((name) => exactNames.get(name.toLowerCase())).find(Boolean) ||
+      names.map((name) => normalizedNames.get(normalizedKey(name))).find(Boolean);
+    if (!entry) continue;
+    for (const name of names) {
+      const key = normalizedKey(name);
+      // Match iOS's first identity for ambiguous aliases, such as three-letter abbreviations.
+      if (assignedNames.has(key)) continue;
+      assignedNames.add(key);
+      if (name !== entry.name) entry.aliases.push(name);
+    }
   }
 
   return manifest;
 }
 
-function copyTvLogos(destinationRoot) {
+async function copyTvLogos(destinationRoot) {
+  const { default: sharp } = await import("sharp");
   if (!fs.existsSync(tvLogosRoot)) {
     throw new Error(`Missing TV logos directory: ${tvLogosRoot}`);
   }
@@ -169,10 +208,10 @@ function copyTvLogos(destinationRoot) {
       continue;
     }
 
-    fs.copyFileSync(
-      path.join(tvLogosRoot, entry),
-      path.join(destinationRoot, entry)
-    );
+    await sharp(path.join(tvLogosRoot, entry))
+      .resize(192, 72, { fit: "inside", withoutEnlargement: true })
+      .png({ compressionLevel: 9, palette: true })
+      .toFile(path.join(destinationRoot, entry));
   }
 }
 

@@ -76,3 +76,20 @@ export function loadStadiumCatalog(): Promise<StadiumCatalog> {
       throw error;
     }));
 }
+
+// Only genuine home-team artwork enters the preferred pool; generic fallbacks
+// must not outweigh teams with a matching stadium.
+export function homeStadiums(catalog: StadiumCatalog, homes: { name: string; id?: string | null }[]): StadiumAsset[] {
+  const teams = new Set(homes.map(home => selectStadium(catalog, home.name, home.id))
+    .filter(asset => asset?.role === "team").flatMap(asset => asset!.team_ids));
+  const preferred = catalog.assets.filter(asset => asset.role === "team" && asset.team_ids.some(id => teams.has(id)));
+  return preferred.length ? preferred : catalog.assets.filter(asset => asset.role === "generic_backdrop");
+}
+export function randomStadium(assets: StadiumAsset[], previous?: string): StadiumAsset | undefined {
+  const others = assets.filter(asset => asset.sha256 !== previous);
+  const pool = others.length ? others : assets;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+export function requiresPhotoCredit(asset: StadiumAsset): boolean {
+  return Boolean(asset.credit?.attribution && !/top[ -]?scores/i.test(asset.credit.author || asset.credit.attribution));
+}

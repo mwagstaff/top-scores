@@ -200,7 +200,7 @@ struct TablesView: View {
     init() {
         let apiBaseURL = PreferencesStore.resolvedAPIBaseURL()
         let cachedResponse = LeagueTablesCache.load(for: apiBaseURL)?.response
-        let initialLeagues = TableCompetitionAvailability.eligibleLeagues(cachedResponse?.leagues ?? [])
+        let initialLeagues = cachedResponse?.leagues ?? []
 
         _leagues = State(initialValue: initialLeagues)
         _selectedLeagueID = State(initialValue: Self.defaultLeagueID(from: initialLeagues))
@@ -699,7 +699,7 @@ struct TablesView: View {
     }
 
     private func apply(response: LeagueTablesResponse) {
-        leagues = TableCompetitionAvailability.eligibleLeagues(response.leagues)
+        leagues = response.leagues
         selectedLeagueID = resolvedLeagueID(
             from: leagues,
             currentSelection: selectedLeagueID

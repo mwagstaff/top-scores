@@ -33,6 +33,6 @@ See [the frontend design contract](../docs/FRONTEND_DESIGN.md) for colour, layou
 
 Routes: `/fixtures`, `/tv`, `/results`, `/tables`, `/preferences`, `/matches/:id`, and `/competitions/:name`. Dates and competition sections are linkable query parameters. All football times use Europe/London.
 
-`npm run build` creates both the client `dist/` and the React server bundle `dist-server/`. Deploy both alongside `server.mjs`, `page-document.mjs` and `artwork.mjs`; do not deploy only `dist/`. `sharp` is a production dependency for bounded, cached artwork variants. The test runner uses native TypeScript/module hooks; use Node 26, as used for validation.
+`npm run build` creates both the client `dist/` and the React server bundle `dist-server/`. Deploy both alongside `server.mjs`, `page-document.mjs`, `artwork.mjs` and `team-logos.mjs`; do not deploy only `dist/`. `sharp` is a production dependency for bounded, cached artwork variants. The test runner uses native TypeScript/module hooks; use Node 26, as used for validation.
 
 Run `npm run check` and `npm test` before building. `npm start` starts the website, using the existing API; never start the Node API as part of website testing. Public initial fixture data has a bounded 10-second server cache. Browser preferences remain private to local storage. Set `TOP_SCORES_WEB_ORIGIN` when the canonical production origin changes.

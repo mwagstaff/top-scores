@@ -49,10 +49,14 @@ const matchLink = (match) =>
 
 // A bounded, short-lived cache serves public HTML and its matching client seed.
 // Preferences stay in the browser and never enter a shared server cache.
-export function createPageRenderer(apiBaseUrl, renderContent) {
+export function createPageRenderer(
+  apiBaseUrl,
+  renderContent,
+  present = (value) => value,
+) {
   const cache = new Map();
   const pending = new Map();
-  async function data(path) {
+  async function rawData(path) {
     const cached = cache.get(path);
     if (cached && Date.now() - cached.time < 10_000) return cached;
     if (pending.has(path)) return pending.get(path);
@@ -81,6 +85,10 @@ export function createPageRenderer(apiBaseUrl, renderContent) {
     pending.set(path, work);
     return work;
   }
+  async function data(path) {
+    const result = await rawData(path);
+    return { ...result, value: present(result.value) };
+  }
   return async function render(template, originalUrl, origin) {
     const url = new URL(originalUrl, origin);
     let title = "Live scores & fixtures",
@@ -91,8 +99,7 @@ export function createPageRenderer(apiBaseUrl, renderContent) {
       status = 200;
     const date = validDate(url.searchParams.get("date"))
       ? url.searchParams.get("date")
-      : url.pathname === "/results" ||
-          (url.pathname.startsWith("/competitions/") &&
+      : (url.pathname.startsWith("/competitions/") &&
             url.searchParams.get("section") === "results")
         ? new Date(Date.parse(`${todayUK()}T12:00:00Z`) - 86400000)
             .toISOString()
@@ -130,7 +137,7 @@ export function createPageRenderer(apiBaseUrl, renderContent) {
         seed = { match, fetchedAt: result.time };
         title = `${match.home_team} v ${match.away_team}`;
         description = `${title}: ${match.league}, ${match.date} at ${match.time} UK. Scores, match updates and UK TV coverage.`;
-        content = `<p><a href="/fixtures?date=${escape(match.date)}">← Back to matches</a></p><h1>${escape(title)}</h1><p>${escape(match.league)} · ${escape(match.date)} · ${escape(match.time)} UK</p><h2>${match.home_score != null ? `${escape(match.home_score)} – ${escape(match.away_score)}` : escape(match.time)}</h2><p>${escape(match.score_status || "Upcoming")}</p><h2>Where to watch in the UK</h2><p>${escape(ukChannels(match).join(" · ") || "No UK broadcast confirmed.")}</p>`;
+        content = `<p><a href="/?date=${escape(match.date)}">← Back to matches</a></p><h1>${escape(title)}</h1><p>${escape(match.league)} · ${escape(match.date)} · ${escape(match.time)} UK</p><h2>${match.home_score != null ? `${escape(match.home_score)} – ${escape(match.away_score)}` : escape(match.time)}</h2><p>${escape(match.score_status || "Upcoming")}</p><h2>Where to watch in the UK</h2><p>${escape(ukChannels(match).join(" · ") || "No UK broadcast confirmed.")}</p>`;
       } else {
         title = "Match unavailable";
         content =
@@ -193,6 +200,10 @@ export function createPageRenderer(apiBaseUrl, renderContent) {
       } else
         content +=
           "<p>Scores are temporarily unavailable. Please try again.</p>";
+    } else if (/^\/teams\/[^/]+$/.test(url.pathname)) {
+      title = `${decodeURIComponent(url.pathname.slice(7))} · Team details`;
+      description = `${title}: season statistics, fixtures, results, squad and manager.`;
+      content = `<h1>${escape(title)}</h1><p>Loading team details…</p>`;
     } else if (url.pathname === "/tables") {
       title = "League tables";
       content = "<h1>League tables</h1><p>Standings and live positions.</p>";
@@ -203,12 +214,12 @@ export function createPageRenderer(apiBaseUrl, renderContent) {
     } else {
       title = "Page not found";
       content =
-        "<h1>Page not found</h1><a href='/fixtures'>Back to football</a>";
+        "<h1>Page not found</h1><a href='/'>Back to football</a>";
       status = 404;
     }
-    const canonical = `${origin}${url.pathname === "/" ? "/fixtures" : url.pathname}${validDate(url.searchParams.get("date")) && !matchRoute ? `?date=${date}` : ""}`;
+    const canonical = `${origin}${url.pathname === "/fixtures" ? "/" : url.pathname}${validDate(url.searchParams.get("date")) && !matchRoute ? `?date=${date}` : ""}`;
     const head = `<link rel="canonical" href="${escape(canonical)}"><meta property="og:title" content="${escape(title)} · Top Scores"><meta property="og:description" content="${escape(description)}"><meta property="og:url" content="${escape(canonical)}"><meta property="og:image" content="${escape(origin)}/generated-assets/apple-touch-icon.png">${status !== 200 ? '<meta name="robots" content="noindex">' : ""}`;
-    let root = `<div class="server-page"><a class="wordmark" href="/fixtures">top scores.</a><nav aria-label="Primary"><a href="/fixtures">Scores & fixtures</a><a href="/tv">On UK TV</a><a href="/results">Results</a><a href="/tables">Tables</a></nav><main>${content}</main></div>`;
+    let root = `<div class="server-page"><a class="wordmark" href="/">top scores.</a><nav aria-label="Primary"><a href="/">Scores & fixtures</a><a href="/tv">On TV</a><a href="/results">Results</a><a href="/tables">Tables</a></nav><main>${content}</main></div>`;
     if (renderContent && status === 200) {
       seed = {
         ...seed,

@@ -4,7 +4,7 @@ const { createEloImportRunner } = require("./elo_import_job");
 function harness(overrides = {}) {
   const requests = [], delays = [];
   const run = createEloImportRunner({
-    alertmanagerUrls: ["http://email:9093", "http://push:19093"],
+    alertmanagerUrls: ["http://primary:19093", "http://secondary:19093"],
     fetchImpl: async (url, options) => { requests.push({ url, alert: JSON.parse(options.body)[0] }); return { ok: true, text: async () => "" }; },
     wait: async ms => delays.push(ms), random: () => 0,
     now: () => Date.parse("2026-10-18T20:00:00Z"), host: "sky",
@@ -12,7 +12,7 @@ function harness(overrides = {}) {
   });
   return { run, requests, delays };
 }
-test("alerts both channels only after four failed attempts with exponential backoff", async () => {
+test("alerts configured destinations only after four failed attempts with exponential backoff", async () => {
   const h = harness(); let count = 0;
   const result = await h.run("club_elo_rankings", "Club Elo", async () => {
     count++; assert.equal(h.requests.length, 0);
@@ -20,7 +20,7 @@ test("alerts both channels only after four failed attempts with exponential back
   });
   assert.equal(count, 4); assert.deepEqual(h.delays, [5000, 10000, 20000]);
   assert.equal(result.retries_exhausted, true); assert.equal(h.requests.length, 2);
-  assert.deepEqual(h.requests.map(r => r.url), ["http://email:9093/api/v2/alerts", "http://push:19093/api/v2/alerts"]);
+  assert.deepEqual(h.requests.map(r => r.url), ["http://primary:19093/api/v2/alerts", "http://secondary:19093/api/v2/alerts"]);
   assert.match(h.requests[0].alert.annotations.description, /4 attempts.*stale publication date.*2026-10-01/);
   assert.ok(h.requests[0].alert.endsAt > h.requests[0].alert.startsAt);
 });
@@ -53,13 +53,44 @@ test("holds the overlap guard across backoff", async () => {
 test("delivery retries are independent and do not re-run the import", async () => {
   const calls = []; let count = 0;
   const h = harness({ fetchImpl: async url => {
-    calls.push(url); if (url.includes("email")) throw new Error("unreachable");
+    calls.push(url); if (url.includes("primary")) throw new Error("unreachable");
     return {ok:true, text:async()=>""};
   }});
   const result = await h.run("club", "Club Elo", async () => { count++; return {success:false}; });
   assert.equal(count, 4); assert.equal(result.retries_exhausted, true);
-  assert.equal(calls.filter(u => u.includes("email")).length, 3);
-  assert.equal(calls.filter(u => u.includes("push")).length, 1);
+  assert.equal(calls.filter(u => u.includes("primary")).length, 3);
+  assert.equal(calls.filter(u => u.includes("secondary")).length, 1);
+});
+test("defaults to the active Alertmanager for failure and recovery", async (t) => {
+  const original = process.env.ELO_ALERTMANAGER_URLS;
+  t.after(() => {
+    if (original === undefined) delete process.env.ELO_ALERTMANAGER_URLS;
+    else process.env.ELO_ALERTMANAGER_URLS = original;
+  });
+  delete process.env.ELO_ALERTMANAGER_URLS;
+  const h = harness({ alertmanagerUrls: undefined });
+  await h.run("club", "Club Elo", async () => ({ success: false }));
+  await h.run("club", "Club Elo", async () => ({ success: true }));
+  assert.deepEqual(h.requests.map(r => r.url), [
+    "http://127.0.0.1:19093/api/v2/alerts",
+    "http://127.0.0.1:19093/api/v2/alerts",
+  ]);
+  assert.match(h.requests[0].alert.annotations.summary, /failed/);
+  assert.match(h.requests[1].alert.annotations.summary, /recovered/);
+});
+test("preserves comma-separated Alertmanager environment overrides", async (t) => {
+  const original = process.env.ELO_ALERTMANAGER_URLS;
+  t.after(() => {
+    if (original === undefined) delete process.env.ELO_ALERTMANAGER_URLS;
+    else process.env.ELO_ALERTMANAGER_URLS = original;
+  });
+  process.env.ELO_ALERTMANAGER_URLS = " http://primary:19093/ , , http://secondary:19093 ";
+  const h = harness({ alertmanagerUrls: undefined });
+  await h.run("club", "Club Elo", async () => ({ success: true }));
+  assert.deepEqual(h.requests.map(r => r.url), [
+    "http://primary:19093/api/v2/alerts",
+    "http://secondary:19093/api/v2/alerts",
+  ]);
 });
 test("successful next run resolves the same alert fingerprint", async () => {
   const h = harness();

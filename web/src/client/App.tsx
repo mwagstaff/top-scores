@@ -1,4 +1,4 @@
-import { Route, Routes } from "react-router-dom";
+import { Navigate, useLocation, Route, Routes } from "react-router-dom";
 import { lazy, Suspense, type ComponentType } from "react";
 import { AppShell } from "./components/AppShell";
 import { MatchesScreen } from "./components/MatchesScreen";
@@ -15,20 +15,29 @@ const TablesScreen = lazy(() =>
 const MatchPage = lazy(() => import("./components/MatchPage"));
 const CompetitionPage = lazy(() => import("./components/CompetitionPage"));
 
+const TeamPage = lazy(() => import("./components/TeamPage"));
+
 interface Pages {
+  TeamPage: ComponentType;
   MatchPage: ComponentType;
   CompetitionPage: ComponentType;
   TablesScreen: ComponentType;
   PreferencesScreen: ComponentType;
 }
 const defaultPages = {
+  TeamPage,
   MatchPage,
   CompetitionPage,
   TablesScreen,
   PreferencesScreen,
 };
+function FixturesRedirect() {
+  const location = useLocation();
+  return <Navigate replace to={`/${location.search}${location.hash}`} />;
+}
+
 export default function App({ pages = defaultPages }: { pages?: Pages }) {
-  const { MatchPage, CompetitionPage, TablesScreen, PreferencesScreen } = pages;
+  const { MatchPage, CompetitionPage, TablesScreen, PreferencesScreen, TeamPage } = pages;
   return (
     <AppShell>
       <Suspense
@@ -40,9 +49,10 @@ export default function App({ pages = defaultPages }: { pages?: Pages }) {
       >
         <Routes>
           <Route path="/" element={<MatchesScreen mode="fixtures" />} />
-          <Route path="/fixtures" element={<MatchesScreen mode="fixtures" />} />
+          <Route path="/fixtures" element={<FixturesRedirect />} />
           <Route path="/results" element={<MatchesScreen mode="results" />} />
           <Route path="/tv" element={<MatchesScreen tv />} />
+          <Route path="/teams/:name" element={<TeamPage />} />
           <Route path="/matches/:id" element={<MatchPage />} />
           <Route path="/competitions/:name" element={<CompetitionPage />} />
           <Route path="/tables" element={<TablesScreen />} />
@@ -52,7 +62,7 @@ export default function App({ pages = defaultPages }: { pages?: Pages }) {
             element={
               <div className="football-empty">
                 <h1>Page not found</h1>
-                <a href="/fixtures">Back to football</a>
+                <a href="/">Back to football</a>
               </div>
             }
           />

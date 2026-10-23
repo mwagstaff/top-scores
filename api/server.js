@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+const { supportsTable, eligibleTables } = require("./table_availability");
 if (require.main === module) require("./runtime_logging").installTimestampedConsole();
 const {
   NOTIFICATION_RIVALRIES,
@@ -153,6 +154,7 @@ const { registerGoalGuesserRoutes } = require("./goal_guesser");
 const { registerGoalGuesserTestHarnessRoutes } = require("./goal_guesser_test_harness");
 const { registerStadiumArtworkRoutes } = require("./stadium_artwork");
 const { calculateWatchability } = require("./watchability");
+const { broadcastPriorities } = require("./broadcast_priorities");
 const majorClubDerbies = require("./major_club_derbies.json");
 
 function parseEnvBoolean(value, fallback = false) {
@@ -8392,6 +8394,11 @@ function resolveApiTeamShortName(rawValue, lookup = null) {
   return String(entry.short_name).trim() || null;
 }
 
+// Apply presentation rules after response caches, so configuration edits reach existing clients.
+function applyPublicMatchPresentation(value, lookup = null) {
+  return broadcastPriorities.apply(applyTeamShortNamesToApiValue(value, lookup));
+}
+
 function applyTeamShortNamesToApiValue(value, lookup = null) {
   const resolvedLookup =
     lookup && typeof lookup.get === "function"
@@ -13986,6 +13993,7 @@ function buildCompetitionCatalog() {
       weight: entry.weight,
       region: entry.region,
       logo_url: entry.logo_url,
+      supports_table: supportsTable(entry.id, entry.name, Array.from(entry.aliases)),
     }))
     .sort((left, right) => {
       if (left.weight !== right.weight) return right.weight - left.weight;
@@ -25099,6 +25107,7 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
       canonicalUpdatedAt,
       mergedDataset.updated_at,
       bbcRangeDataset.updated_at,
+      broadcastPriorities.updatedAt,
     ]);
     setLastModifiedHeaders(res, latestUpdated);
     res.set("X-Operational-Source", canonicalSource);
@@ -25315,7 +25324,7 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
     );
     if (includeMeta) {
       res.json({
-        matches: applyTeamShortNamesToApiValue(pagedWithLeagueId, teamShortNameLookup),
+        matches: applyPublicMatchPresentation(pagedWithLeagueId, teamShortNameLookup),
         pagination: {
           page,
           page_size: pageSize,
@@ -25329,7 +25338,7 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
       });
       return;
     }
-    res.json(applyTeamShortNamesToApiValue(pagedWithLeagueId, teamShortNameLookup));
+    res.json(applyPublicMatchPresentation(pagedWithLeagueId, teamShortNameLookup));
   } catch (err) {
     console.warn("Failed to serve /matches from cache:", err.message || err);
     res.status(500).json({ error: "Failed to serve matches from cache" });
@@ -25482,7 +25491,7 @@ app.post(`${API_PREFIX}/matches/states`, async (req, res) => {
   }
 
   res.json(
-    applyTeamShortNamesToApiValue(
+    applyPublicMatchPresentation(
       localizeMatchPayloads(payload, displayTimeZone),
       teamShortNameLookup
     )
@@ -25538,7 +25547,7 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
       updated_at: testMatch.updated_at,
     };
     res.json(
-      applyTeamShortNamesToApiValue(
+      applyPublicMatchPresentation(
         localizeMatchDetailsPayload(testMatchDetails),
         teamShortNameLookup
       )
@@ -25555,7 +25564,7 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
     const bsdDetailsWithImages = withConfiguredMatchDetailsPlayerImages(bsdDetails);
     res.set("X-Player-Image-Source", "bsd");
     res.json(
-      applyTeamShortNamesToApiValue(
+      applyPublicMatchPresentation(
         localizeMatchDetailsPayload(bsdDetailsWithImages),
         teamShortNameLookup
       )
@@ -26301,7 +26310,7 @@ app.get(`${API_PREFIX}/tables`, async (req, res) => {
     getBsdTablesForServing(),
     getBsdMatchesForServing(),
   ]);
-  const leagues = sortLeagueTablesForResponse(bsdTables).map((league) =>
+  const leagues = sortLeagueTablesForResponse(eligibleTables(bsdTables)).map((league) =>
     applyLiveResultsToBsdTable(league, bsdMatchesForTable(league, bsdMatches))
   );
   const updatedAt = cachedBsdTablesUpdatedAt;
@@ -26323,12 +26332,12 @@ app.get(`${API_PREFIX}/tables/:leagueId`, async (req, res) => {
     getBsdTablesForServing(),
     getBsdMatchesForServing(),
   ]);
-  const baseLeague = findLeagueTableById(bsdTables, req.params.leagueId);
+  const baseLeague = findLeagueTableById(eligibleTables(bsdTables), req.params.leagueId);
   if (!baseLeague) {
     res.status(404).json({
       error: "League table not found",
       league_id: normalizeLeagueTableId(req.params.leagueId),
-      available_leagues: bsdTables.map((item) => item.league_id).filter(Boolean),
+      available_leagues: eligibleTables(bsdTables).map((item) => item.league_id).filter(Boolean),
     });
     return;
   }
@@ -27068,7 +27077,7 @@ app.get(`${API_PREFIX}/bbc/live`, async (_req, res) => {
     return match;
   });
 
-  res.json(applyTeamShortNamesToApiValue(transformedMatches, teamShortNameLookup));
+  res.json(applyPublicMatchPresentation(transformedMatches, teamShortNameLookup));
 });
 
 app.get(`${API_PREFIX}/bbc/details`, async (req, res) => {
@@ -27125,7 +27134,7 @@ app.get(`${API_PREFIX}/bbc/details`, async (req, res) => {
   } else if (matchDetailsLastUpdated) {
     res.set("X-Last-Updated", matchDetailsLastUpdated);
   }
-  res.json(applyTeamShortNamesToApiValue(enrichedResponsePayload, teamShortNameLookup));
+  res.json(applyPublicMatchPresentation(enrichedResponsePayload, teamShortNameLookup));
 });
 
 app.post(`${API_PREFIX}/matches/backfill`, async (req, res) => {
@@ -33797,6 +33806,7 @@ module.exports = {
     buildResolvedTeamShortNameLookup,
     resolveApiTeamShortName,
     applyTeamShortNamesToApiValue,
+    applyPublicMatchPresentation,
     collectTeamShortNameScrapeCandidates,
     filterCacheStateDomainsForRuntimeRefresh,
     normalizeCompetitionFilterName,

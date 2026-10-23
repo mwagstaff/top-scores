@@ -1,15 +1,5 @@
+import { isMatchFinished } from "./matchState";
 import type { Match, TvChannel } from "./types";
-
-export const featuredCompetitions = [
-  "Premier League",
-  "UEFA Champions League",
-  "Championship",
-  "UEFA Europa League",
-  "Scottish Premiership",
-  "Women's Super League",
-  "FA Cup",
-  "UEFA Conference League",
-];
 
 export function ukDate(now = new Date()): string {
   return new Intl.DateTimeFormat("en-CA", {
@@ -22,9 +12,9 @@ export function ukDate(now = new Date()): string {
 export function validDate(value: string | null): value is string {
   return Boolean(
     value &&
-      /^\d{4}-\d{2}-\d{2}$/.test(value) &&
-      Number.isFinite(Date.parse(value)) &&
-      new Date(value).toISOString().slice(0, 10) === value,
+    /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+    Number.isFinite(Date.parse(value)) &&
+    new Date(value).toISOString().slice(0, 10) === value,
   );
 }
 export function moveDate(date: string, days: number): string {
@@ -60,15 +50,8 @@ export function ukChannels(channels: TvChannel[]): TvChannel[] {
     const name = channel.name.replace(/\s*\(UK\)$/i, "").trim();
     unique.set(name.toLowerCase(), { ...channel, name });
   }
-  const streaming = (name: string) =>
-    /hbo|max|now|prime|amazon|discovery|dazn|player|youtube|sky go|sky sports app/i.test(
-      name,
-    )
-      ? 1
-      : 0;
-  return [...unique.values()].sort(
-    (a, b) => streaming(a.name) - streaming(b.name),
-  );
+  // API order is the shared provider priority used by iOS as well.
+  return [...unique.values()];
 }
 export function isUKRelevant(match: Match): boolean {
   return (
@@ -89,4 +72,30 @@ export function competitionPath(name: string): string {
 }
 export function matchPath(match: Match): string {
   return `/matches/${encodeURIComponent(match.matchDetailsId || match.id)}?date=${match.date}`;
+}
+
+export function countCompetitions(matches: Match[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  const seen = new Set<string>();
+  for (const match of matches) {
+    if (seen.has(match.id)) continue;
+    seen.add(match.id);
+    counts[match.league] = (counts[match.league] || 0) + 1;
+  }
+  return counts;
+}
+
+// Ratings are supplied by the shared API watchability model; unknown ratings sort last.
+export function rankedTVMatches(matches: Match[]): Match[] {
+  return matches
+    .filter(
+      (match) => ukChannels(match.tvChannels).length && !isMatchFinished(match),
+    )
+    .sort(
+      (a, b) =>
+        (b.watchabilityIndex?.score ?? -1) -
+          (a.watchabilityIndex?.score ?? -1) ||
+        a.time.localeCompare(b.time) ||
+        a.id.localeCompare(b.id),
+    );
 }
