@@ -493,6 +493,12 @@ button:disabled {
   border-radius: 50%;
   flex-shrink: 0;
 }
+.competition-logo {
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
 .competition-heading > span,
 .competition-heading a > span:last-child {
   color: #91a3b8;

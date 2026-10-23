@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { competitionDateCounts, preferredCompetitionDate } from "../competitionDates";
+import { competitionLogo } from "../competitionLogos";
 import { loadCompetitions } from "../catalog";
 import { cachedDay, loadDay } from "../dayStore";
 import {
@@ -444,33 +445,40 @@ export function MatchesScreen({
               ))}
             </div>
           ) : groups.length ? (
-            groups.map(([league, games]) => (
-              <section className="fixture-competition" key={league}>
-                <div className="competition-heading">
-                  <Link to={competitionPath(league)}>
-                    <span className="competition-mark" aria-hidden="true">
-                      {league
-                        .replace(/^UEFA /, "")
-                        .split(" ")
-                        .slice(0, 2)
-                        .map((w) => w[0])
-                        .join("")}
-                    </span>
-                    <h3>{league}</h3>
-                    <span aria-hidden="true">↗</span>
-                  </Link>
-                  <span>{games.length}</span>
-                </div>
-                {games.map((match) => (
-                  <FixtureRow
-                    match={match}
-                    key={match.id}
-                    showBroadcast={mode !== "results"}
-                    showRating={tv}
-                  />
-                ))}
-              </section>
-            ))
+            groups.map(([league, games]) => {
+              const logo = competitionLogo(games[0].leagueId ?? "", league);
+              return (
+                <section className="fixture-competition" key={league}>
+                  <div className="competition-heading">
+                    <Link to={competitionPath(league)}>
+                      {logo ? (
+                        <img className="competition-logo" src={logo} alt="" width="26" height="26" loading="lazy" />
+                      ) : (
+                        <span className="competition-mark" aria-hidden="true">
+                          {league
+                            .replace(/^UEFA /, "")
+                            .split(" ")
+                            .slice(0, 2)
+                            .map((w) => w[0])
+                            .join("")}
+                        </span>
+                      )}
+                      <h3>{league}</h3>
+                      <span aria-hidden="true">↗</span>
+                    </Link>
+                    <span>{games.length}</span>
+                  </div>
+                  {games.map((match) => (
+                    <FixtureRow
+                      match={match}
+                      key={match.id}
+                      showBroadcast={mode !== "results"}
+                      showRating={tv}
+                    />
+                  ))}
+                </section>
+              );
+            })
           ) : (
             !error && (
               <div className="football-empty">
