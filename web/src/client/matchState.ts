@@ -1,4 +1,5 @@
 import type { Match } from "./types";
+import { displayTime } from "./timeFormatting";
 
 export function displayStatus(match: Match): string {
   const rawStatus = (match.scoreStatus || "").trim();
@@ -17,7 +18,7 @@ export function displayStatus(match: Match): string {
     return "-";
   }
 
-  return match.time;
+  return displayTime(match.time);
 }
 
 export function isMatchLive(match: Match): boolean {
@@ -36,6 +37,10 @@ export function isMatchFinished(match: Match): boolean {
   return ["FT", "AET", "PENS"].includes(status);
 }
 
+export function isMatchAbandoned(match: Match): boolean {
+  return (match.scoreStatus || "").trim().toUpperCase() === "ABANDONED";
+}
+
 export function aggregateSummary(match: Match): string | null {
   const firstLegHome = match.firstLegHomeScore;
   const firstLegAway = match.firstLegAwayScore;
@@ -50,4 +55,3 @@ export function aggregateSummary(match: Match): string | null {
 
   return null;
 }
-

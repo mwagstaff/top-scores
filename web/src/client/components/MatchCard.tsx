@@ -1,15 +1,15 @@
 import { useEffect, useMemo, useRef, useState, memo, type CSSProperties } from "react";
-import { clearMatchDetailsCache, fetchMatchDetails, fetchMatchSocial, fetchPlayerDetails, shouldRetryMatchDetails } from "../api";
+import { clearMatchDetailsCache, fetchMatchDetails, fetchMatchRatings, fetchMatchSocial, fetchPlayerDetails, shouldRetryMatchDetails } from "../api";
 import { MatchTeamLeaguePositionsLink } from "./MatchTeamLeaguePositionsLink";
 import { MatchCommentary } from "./MatchCommentary";
+import { TeamCrest } from "./FixtureRow";
+import { useTeamColorCatalog } from "../teamColors";
 
-// Neutral accent for teams without a configured brand colour,
-// so every card still shows a consistent home-left / away-right stripe.
-const NEUTRAL_EVENT_ACCENT = "#6b7280";
 import {
   aggregateSummary,
   displayStatus,
   isMatchFinished,
+  isMatchAbandoned,
   isMatchLive,
 } from "../matchGrouping";
 import type {
@@ -81,6 +81,8 @@ export function MatchCard({
   const aggregateText = aggregateSummary(match);
   const isLive        = isMatchLive(match);
   const isFinished    = isMatchFinished(match);
+  const isAbandoned   = isMatchAbandoned(match);
+  const showMatchUpdates = isLive || isFinished || isAbandoned;
   const isExpandable  = Boolean(match.matchDetailsId);
   const detailPanelId = `match-details-${match.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 
@@ -93,7 +95,7 @@ export function MatchCard({
   const showTvOnly = !hasScore && hasTvLogo;
   const showLiveScore = isLive && hasScore;
   // Right column: "P 3-4" when decided by penalties; otherwise status (FT / AET / 45' / 15:00)
-  const rightText  = penaltyShootoutDisplay(match) ?? status;
+  const rightText  = isAbandoned ? "ABD" : penaltyShootoutDisplay(match) ?? status;
   const homeDisplayName = displayTeamName(match.homeTeam, match.homeShortName, useShortTeamNames);
   const awayDisplayName = displayTeamName(match.awayTeam, match.awayShortName, useShortTeamNames);
 
@@ -281,7 +283,7 @@ export function MatchCard({
   );
 
   return (
-    <article className={`match-card${isLive ? " is-live" : highlightToday ? " is-highlighted" : ""}`}>
+    <article className={`match-card${isLive ? " is-live" : highlightToday ? " is-highlighted" : ""}${isAbandoned ? " is-abandoned" : ""}`}>
       {/* Use a button when expandable so the whole row is keyboard/click accessible */}
       {detailOnly ? null : isExpandable ? (
         <button
@@ -299,15 +301,19 @@ export function MatchCard({
         </div>
       )}
 
+      {isAbandoned && <div className="match-abandoned-note">Match abandoned</div>}
+
       {/* Expanded match details panel */}
       {isExpandable && isExpanded && (
         <div className="match-details-panel" id={detailPanelId}>
           <MatchTeamLeaguePositionsLink match={match} />
-          <div className="match-feed-picker" role="group" aria-label="Match updates">
-            <button type="button" aria-pressed={!showCommentary} onClick={() => setShowCommentary(false)}>Key events</button>
-            <button type="button" aria-pressed={showCommentary} onClick={() => setShowCommentary(true)}>Commentary</button>
-          </div>
-          {showCommentary && <MatchCommentary key={match.matchDetailsId} matchId={match.matchDetailsId!} isLive={isLive} />}
+          {showMatchUpdates && (
+            <div className="match-feed-picker" role="group" aria-label="Match updates">
+              <button type="button" aria-pressed={!showCommentary} onClick={() => setShowCommentary(false)}>Key events</button>
+              <button type="button" aria-pressed={showCommentary} onClick={() => setShowCommentary(true)}>Commentary</button>
+            </div>
+          )}
+          {showMatchUpdates && showCommentary && <MatchCommentary key={match.matchDetailsId} matchId={match.matchDetailsId!} isLive={isLive} />}
           {detailsLoading ? (
             <div className="match-details-message">Loading match details…</div>
           ) : detailsError ? (
@@ -315,12 +321,13 @@ export function MatchCard({
           ) : details ? (
             <ExpandedMatchDetails
               details={details}
+              isLive={isLive}
               tvChannels={detailOnly ? [] : match.tvChannels}
-              homeTeamId={match.homeTeamId}
-              awayTeamId={match.awayTeamId}
-              showEvents={!showCommentary}
+              homeTeam={match.homeTeam}
+              awayTeam={match.awayTeam}
+              showEvents={showMatchUpdates && !showCommentary}
             />
-          ) : showCommentary || socialItems.length > 0 ? null : socialLoading ? (
+          ) : !showMatchUpdates || showCommentary || socialItems.length > 0 ? null : socialLoading ? (
             <div className="match-details-message">Loading match details…</div>
           ) : (
             <div className="match-details-message">No additional match details available.</div>
@@ -602,24 +609,29 @@ function WhereToWatch({ channels }: { channels: TvChannel[] }) {
 
 function ExpandedMatchDetails({
   details,
+  isLive = false,
   tvChannels = [],
-  homeTeamId,
-  awayTeamId,
+  homeTeam,
+  awayTeam,
   showEvents = true,
 }: {
   details: MatchDetails;
+  isLive?: boolean;
   tvChannels?: TvChannel[];
-  homeTeamId?: string | null;
-  awayTeamId?: string | null;
+  homeTeam: string;
+  awayTeam: string;
   showEvents?: boolean;
 }) {
   const timelineEntries    = useMemo(() => buildTimelineEntries(details), [details]);
   const hasCompleteLineups = hasRenderableTeamLineups(details.teamLineups);
   const hasTvData          = tvChannels.length > 0;
   const [selectedTimelinePlayer, setSelectedTimelinePlayer] = useState<MatchLineupPlayer | null>(null);
-
-  const homeAccent = NEUTRAL_EVENT_ACCENT;
-  const awayAccent = NEUTRAL_EVENT_ACCENT;
+  const [newestFirst, setNewestFirst] = useState(true);
+  const teamColorCatalog = useTeamColorCatalog();
+  const homeTeamName = details.teamLineups?.home?.team || details.homeTeam || homeTeam;
+  const awayTeamName = details.teamLineups?.away?.team || details.awayTeam || awayTeam;
+  const homeColors = teamColorCatalog.lineupColors(homeTeamName, awayTeamName, "home");
+  const awayColors = teamColorCatalog.lineupColors(awayTeamName, homeTeamName, "away");
 
   if (timelineEntries.length === 0 && !hasCompleteLineups && !hasTvData) {
     return showEvents ? <div className="match-details-message">No additional match details available.</div> : null;
@@ -628,58 +640,67 @@ function ExpandedMatchDetails({
   return (
     <div className="match-details-body">
       {showEvents && timelineEntries.length > 0 && (
-        <section className="details-section">
-          <div className="details-section-title">Key events</div>
+        <section className="details-section match-events-section">
+          <div className="match-events-heading">
+            <div className="details-section-title">Match Events</div>
+            <button
+              type="button"
+              className="match-events-sort"
+              onClick={() => setNewestFirst((value) => !value)}
+              aria-label="Match events order"
+              aria-pressed={newestFirst}
+            >
+              <span aria-hidden="true">{newestFirst ? "↓" : "↑"}</span> {newestFirst ? "Newest" : "Oldest"}
+            </button>
+          </div>
           <div className="timeline-list">
-            {timelineEntries.map((entry) => {
+            {(newestFirst ? [...timelineEntries].reverse() : timelineEntries).map((entry) => {
               const isGoal = entry.kind === "goal" || entry.kind === "own-goal";
               const isSub  = entry.kind === "substitution";
-              const accent = entry.side === "home" ? homeAccent : awayAccent;
+              const colors = entry.side === "home" ? homeColors : awayColors;
+              const portraitColors = (entry.playerSide ?? entry.side) === "home" ? homeColors : awayColors;
+              const teamName = entry.side === "home" ? homeTeamName : awayTeamName;
+              const shortName = entry.side === "home" ? details.homeShortName : details.awayShortName;
               const rowClass = `timeline-row timeline-row-${entry.side}${isGoal ? " timeline-row-goal" : ""}${isSub ? " timeline-row-substitution" : ""}`;
-              const rowStyle = { "--event-accent": accent } as CSSProperties;
-              const key = `${entry.side}-${entry.kind}-${entry.minute}-${entry.player}`;
-
-              if (isSub) {
-                return (
-                  <div key={key} className={rowClass} style={rowStyle}>
-                    <TimelineSubstitutionContent entry={entry} onSelectPlayer={setSelectedTimelinePlayer} />
-                  </div>
-                );
-              }
+              const rowStyle = {
+                "--event-accent": colors.background,
+                "--event-foreground": colors.foreground,
+                "--portrait-accent": portraitColors.background,
+                "--portrait-foreground": portraitColors.foreground,
+              } as CSSProperties;
+              const key = `${entry.side}-${entry.kind}-${entry.minute}-${entry.player}-${entry.playerOffName ?? ""}`;
 
               return (
-                <button
-                  key={key}
-                  type="button"
-                  className={rowClass}
-                  style={rowStyle}
-                  onClick={() => entry.lineupPlayer?.idPlayer && setSelectedTimelinePlayer(entry.lineupPlayer)}
-                  disabled={!entry.lineupPlayer?.idPlayer}
-                  aria-label={entry.lineupPlayer?.idPlayer ? `Show ${entry.player} details` : entry.text}
-                >
-                  {entry.side === "away" && <TimelinePlayerPortrait player={entry.lineupPlayer} kind={entry.kind} />}
-                  {entry.side === "home" ? (
-                    <>
-                      <span className="timeline-minute">{entry.minute}</span>
-                      <span className={`timeline-kind timeline-kind-${entry.kind}`}>{entry.icon}</span>
-                      <span className="timeline-text">{entry.text}</span>
-                      <TimelinePlayerPortrait player={entry.lineupPlayer} kind={entry.kind} />
-                    </>
-                  ) : (
-                    <>
-                      <span className="timeline-text">{entry.text}</span>
-                      <span className={`timeline-kind timeline-kind-${entry.kind}`}>{entry.icon}</span>
-                      <span className="timeline-minute">{entry.minute}</span>
-                    </>
-                  )}
-                </button>
+                <div key={key} className={rowClass} style={rowStyle}>
+                  <div className="timeline-team"><TeamCrest name={teamName} shortName={shortName} /><span>{teamName}</span></div>
+                  <div className="timeline-event-main">
+                    <span className="timeline-minute">{entry.minute}</span>
+                    <span className="timeline-rail" aria-hidden="true">
+                      <span className={`timeline-kind timeline-kind-${entry.kind}`}>{isSub ? "⇄" : entry.icon}</span>
+                    </span>
+                    {isSub ? (
+                      <TimelineSubstitutionContent entry={entry} onSelectPlayer={setSelectedTimelinePlayer} />
+                    ) : (
+                      <button
+                        type="button"
+                        className="timeline-event-content"
+                        onClick={() => entry.lineupPlayer?.idPlayer && setSelectedTimelinePlayer(entry.lineupPlayer)}
+                        disabled={!entry.lineupPlayer?.idPlayer}
+                        aria-label={`${teamName}, ${entry.minute}, ${entry.text}${entry.lineupPlayer?.idPlayer ? ". Show player details" : ""}`}
+                      >
+                        <span className="timeline-text">{entry.text}</span>
+                        <TimelinePlayerPortrait player={entry.lineupPlayer} kind={entry.kind} name={entry.player} />
+                      </button>
+                    )}
+                  </div>
+                </div>
               );
             })}
           </div>
         </section>
       )}
 
-      {hasCompleteLineups && <LineupSection details={details} teamLineups={details.teamLineups!} />}
+      {hasCompleteLineups && <LineupSection details={details} teamLineups={details.teamLineups!} isLive={isLive} />}
       {hasTvData && <WhereToWatch channels={tvChannels} />}
       {selectedTimelinePlayer && (
         <PlayerDetailsDialog
@@ -728,9 +749,9 @@ function MatchSocialSection({ items }: { items: MatchSocialItem[] }) {
   );
 }
 
-function TimelinePlayerPortrait({ player, kind }: { player: MatchLineupPlayer | null; kind: string }) {
+function TimelinePlayerPortrait({ player, kind, name }: { player: MatchLineupPlayer | null; kind: string; name: string }) {
   if (!player) {
-    return <span className="lineup-player-portrait timeline-player-portrait-placeholder" aria-hidden="true" />;
+    return <span className="lineup-player-portrait timeline-player-portrait-placeholder" aria-hidden="true">{playerInitials(name)}</span>;
   }
   return <LineupPlayerPortrait player={player} className={`timeline-player-portrait-${kind}`} />;
 }
@@ -742,37 +763,32 @@ function TimelineSubstitutionContent({
   entry: TimelineEntry;
   onSelectPlayer: (player: MatchLineupPlayer) => void;
 }) {
-  const isHome = entry.side === "home";
-  const minute = <span className="timeline-minute">{entry.minute}</span>;
-  const block = (
-    <div className={`timeline-sub-rows${isHome ? "" : " timeline-sub-rows-away"}`}>
-      <TimelineSubLine
-        player={entry.lineupPlayerOff ?? null}
-        name={entry.playerOffName ?? ""}
-        isOut
-        isHome={isHome}
-        onSelectPlayer={onSelectPlayer}
-      />
-      <TimelineSubLine
-        player={entry.lineupPlayer}
-        name={entry.playerOnName ?? ""}
-        isOut={false}
-        isHome={isHome}
-        onSelectPlayer={onSelectPlayer}
-      />
+  return (
+    <div className="timeline-substitution-content">
+      <div className="timeline-sub-rows">
+        <TimelineSubLine
+          player={entry.lineupPlayerOff ?? null}
+          name={entry.playerOffName ?? ""}
+          isOut
+          onSelectPlayer={onSelectPlayer}
+        />
+        <TimelineSubLine
+          player={entry.lineupPlayer}
+          name={entry.playerOnName ?? ""}
+          isOut={false}
+          onSelectPlayer={onSelectPlayer}
+        />
+      </div>
+      <button
+        type="button"
+        className="timeline-sub-portrait"
+        onClick={() => entry.lineupPlayer?.idPlayer && onSelectPlayer(entry.lineupPlayer)}
+        disabled={!entry.lineupPlayer?.idPlayer}
+        aria-label={`Show ${entry.playerOnName ?? entry.player} details`}
+      >
+        <TimelinePlayerPortrait player={entry.lineupPlayer} kind={entry.kind} name={entry.player} />
+      </button>
     </div>
-  );
-
-  return isHome ? (
-    <>
-      {minute}
-      {block}
-    </>
-  ) : (
-    <>
-      {block}
-      {minute}
-    </>
   );
 }
 
@@ -780,24 +796,14 @@ function TimelineSubLine({
   player,
   name,
   isOut,
-  isHome,
   onSelectPlayer,
 }: {
   player: MatchLineupPlayer | null;
   name: string;
   isOut: boolean;
-  isHome: boolean;
   onSelectPlayer: (player: MatchLineupPlayer) => void;
 }) {
-  const pill = (
-    <span className={`timeline-sub-pill timeline-sub-pill-${isOut ? "out" : "in"}`}>
-      <span className="timeline-sub-pill-arrow" aria-hidden="true">{isOut ? "↓" : "↑"}</span>
-      {isOut ? "OUT" : "IN"}
-    </span>
-  );
-  const nameEl = <span className="timeline-sub-name">{name}</span>;
-  const photo  = <span className="timeline-sub-photo-placeholder" aria-hidden="true" />;
-
+  const nameEl = <span className="timeline-sub-name">{abbreviatePlayerName(name)}</span>;
   return (
     <button
       type="button"
@@ -806,19 +812,8 @@ function TimelineSubLine({
       disabled={!player?.idPlayer}
       aria-label={player?.idPlayer ? `Show ${name} details` : `${isOut ? "Off" : "On"}: ${name}`}
     >
-      {isHome ? (
-        <>
-          {pill}
-          {nameEl}
-          {photo}
-        </>
-      ) : (
-        <>
-          {photo}
-          {nameEl}
-          {pill}
-        </>
-      )}
+      <span className={`timeline-sub-arrow timeline-sub-arrow-${isOut ? "out" : "in"}`} aria-hidden="true">{isOut ? "↓" : "↑"}</span>
+      {nameEl}
     </button>
   );
 }
@@ -829,12 +824,36 @@ function TimelineSubLine({
 interface LineupSectionProps {
   details: MatchDetails;
   teamLineups: MatchTeamLineups;
+  isLive: boolean;
 }
 
-function LineupSection({ details, teamLineups }: LineupSectionProps) {
+function LineupSection({ details, teamLineups, isLive }: LineupSectionProps) {
   const homeLineup       = teamLineups.home!;
   const awayLineup       = teamLineups.away!;
   const [selectedPlayer, setSelectedPlayer] = useState<MatchLineupPlayer | null>(null);
+  const [ratings, setRatings] = useState<{ matchId: string; byPlayer: Record<string, number> } | null>(null);
+  const [ratingsError, setRatingsError] = useState(false);
+  const [ratingsRetry, setRatingsRetry] = useState(0);
+  const teamColorCatalog = useTeamColorCatalog();
+
+  useEffect(() => {
+    if (!/^\d+$/.test(details.id)) return;
+    const controller = new AbortController();
+    const loadRatings = () => {
+      void fetchMatchRatings(details.id, controller.signal)
+        .then((byPlayer) => {
+          setRatings({ matchId: details.id, byPlayer });
+          setRatingsError(false);
+        })
+        .catch(() => { if (!controller.signal.aborted) setRatingsError(true); });
+    };
+    loadRatings();
+    const interval = isLive ? window.setInterval(loadRatings, 60_000) : null;
+    return () => {
+      controller.abort();
+      if (interval !== null) window.clearInterval(interval);
+    };
+  }, [details.id, isLive, ratingsRetry]);
 
   const homeLookup = buildLineupEventLookup({
     goals: details.homeGoalScorers, assists: details.homeAssists,
@@ -849,47 +868,74 @@ function LineupSection({ details, teamLineups }: LineupSectionProps) {
 
   const homeTeamName     = homeLineup.team || details.homeTeam || "Home";
   const awayTeamName     = awayLineup.team || details.awayTeam || "Away";
+  const homeColors = teamColorCatalog.lineupColors(homeTeamName, awayTeamName, "home");
+  const awayColors = teamColorCatalog.lineupColors(awayTeamName, homeTeamName, "away");
+  const playerRatings = ratings?.matchId === details.id ? ratings.byPlayer : {};
+
+  const hasSubstitutes = homeLineup.substitutes.length > 0 || awayLineup.substitutes.length > 0 || homeLineup.substitutions.length > 0 || awayLineup.substitutions.length > 0;
 
   return (
+    <>
     <section className="details-section lineup-section">
       <div className="details-section-title">Starting Line-ups</div>
+      {ratingsError ? (
+        <button className="lineup-ratings-note lineup-ratings-retry" type="button" onClick={() => setRatingsRetry((value) => value + 1)}>
+          Ratings temporarily unavailable · Retry
+        </button>
+      ) : (
+        <div className="lineup-ratings-note">Match ratings out of 10 · – means not available</div>
+      )}
+      <div className="lineup-pitch-header">
+        <span>{homeTeamName}</span><span>{homeLineup.formation}</span>
+      </div>
 
       <div className="lineup-pitch">
-        <div className="lineup-pitch-markings" aria-hidden="true">
-          <div className="lineup-pitch-outline" />
-          <div className="lineup-pitch-halfway" />
-          <div className="lineup-pitch-centre-circle" />
-          <div className="lineup-pitch-centre-spot" />
-          <div className="lineup-pitch-penalty lineup-pitch-penalty-top" />
-          <div className="lineup-pitch-penalty lineup-pitch-penalty-bottom" />
-          <div className="lineup-pitch-six-yard lineup-pitch-six-yard-top" />
-          <div className="lineup-pitch-six-yard lineup-pitch-six-yard-bottom" />
-        </div>
-
         <div className="lineup-pitch-content">
           <LineupHalf
-            teamName={homeTeamName}
             starters={homeLineup.startingLineup}
             lookup={homeLookup}
             side="home"
+            teamColor={homeColors.background}
+            teamOutline={homeColors.foreground}
+            ratings={playerRatings}
             onSelectPlayer={setSelectedPlayer}
           />
           <LineupHalf
-            teamName={awayTeamName}
             starters={awayLineup.startingLineup}
             lookup={awayLookup}
             side="away"
+            teamColor={awayColors.background}
+            teamOutline={awayColors.foreground}
+            ratings={playerRatings}
             onSelectPlayer={setSelectedPlayer}
           />
         </div>
       </div>
+      <div className="lineup-pitch-header lineup-pitch-header-away">
+        <span>{awayTeamName}</span><span>{awayLineup.formation}</span>
+      </div>
+      <div className="lineup-marker-legend" aria-label="Line-up markers">
+        <span>⚽ Goal</span><span><b className="lineup-legend-assist">A</b> Assist</span>
+        <span><b className="lineup-legend-card lineup-legend-yellow" /> Yellow</span>
+        <span><b className="lineup-legend-card lineup-legend-red" /> Red</span>
+        <span><b className="lineup-sub-arrow lineup-sub-arrow-on">↑</b> Sub in</span>
+        <span><b className="lineup-sub-arrow lineup-sub-arrow-off">↓</b> Sub out</span>
+      </div>
+    </section>
+    {hasSubstitutes && (
+      <section className="details-section lineup-substitutes-section">
+        <div className="details-section-title">Substitutes</div>
+        <LineupSubstitutesTable lineup={homeLineup} teamName={homeTeamName} lookup={homeLookup} teamColor={homeColors.background} teamOutline={homeColors.foreground} ratings={playerRatings} onSelectPlayer={setSelectedPlayer} />
+        <LineupSubstitutesTable lineup={awayLineup} teamName={awayTeamName} lookup={awayLookup} teamColor={awayColors.background} teamOutline={awayColors.foreground} ratings={playerRatings} onSelectPlayer={setSelectedPlayer} />
+      </section>
+    )}
       {selectedPlayer && (
         <PlayerDetailsDialog
           player={selectedPlayer}
           onClose={() => setSelectedPlayer(null)}
         />
       )}
-    </section>
+    </>
   );
 }
 
@@ -897,19 +943,20 @@ function LineupSection({ details, teamLineups }: LineupSectionProps) {
 // ── Lineup half ───────────────────────────────────────────────────
 
 interface LineupHalfProps {
-  teamName: string;
   starters: MatchLineupPlayer[];
   lookup: MatchLineupEventLookup;
   side: "home" | "away";
+  teamColor: string;
+  teamOutline: string;
+  ratings: Record<string, number>;
   onSelectPlayer: (player: MatchLineupPlayer) => void;
 }
 
-function LineupHalf({ teamName, starters, lookup, side, onSelectPlayer }: LineupHalfProps) {
+function LineupHalf({ starters, lookup, side, teamColor, teamOutline, ratings, onSelectPlayer }: LineupHalfProps) {
   const groupedRows = buildDisplayLineupRows(starters, side);
 
   return (
-    <div className={`lineup-half lineup-half-${side}`}>
-      {side === "home" && <div className="lineup-team-label">{teamName.toUpperCase()}</div>}
+    <div className={`lineup-half lineup-half-${side}`} style={{ "--lineup-team-color": teamColor, "--lineup-team-outline": teamOutline } as CSSProperties}>
 
       <div className="lineup-half-rows">
         {groupedRows.map((row, rowIndex) => (
@@ -924,6 +971,7 @@ function LineupHalf({ teamName, starters, lookup, side, onSelectPlayer }: Lineup
                 player={player}
                 summary={lookup.summaryFor(player)}
                 replacementSummary={lookup.replacementSummaryFor(player)}
+                ratings={ratings}
                 onSelectPlayer={onSelectPlayer}
               />
             ))}
@@ -931,7 +979,6 @@ function LineupHalf({ teamName, starters, lookup, side, onSelectPlayer }: Lineup
         ))}
       </div>
 
-      {side === "away" && <div className="lineup-team-label lineup-team-label-away">{teamName.toUpperCase()}</div>}
     </div>
   );
 }
@@ -943,57 +990,75 @@ interface LineupPlayerMarkerProps {
   player: MatchLineupPlayer;
   summary: MatchLineupPlayerEventSummary;
   replacementSummary: MatchLineupPlayerEventSummary | null;
+  ratings: Record<string, number>;
   onSelectPlayer: (player: MatchLineupPlayer) => void;
 }
 
-function LineupPlayerMarker({ player, summary, replacementSummary, onSelectPlayer }: LineupPlayerMarkerProps) {
+function LineupPlayerMarker({ player, summary, replacementSummary, ratings, onSelectPlayer }: LineupPlayerMarkerProps) {
   const replacementPlayer = summary.substitution?.playerOn ?? null;
   const badgeItems        = buildPlayerBadgeItems(summary);
   const replacementBadges = replacementSummary ? buildPlayerBadgeItems(replacementSummary) : [];
+  const [showReplacement, setShowReplacement] = useState(false);
+  const rating = player.idPlayer ? ratings[player.idPlayer] : undefined;
+  const replacementRating = replacementPlayer?.idPlayer ? ratings[replacementPlayer.idPlayer] : undefined;
+  const displayedPlayer = showReplacement && replacementPlayer ? replacementPlayer : player;
+  const substitutionMinute = summary.substitution ? formattedMatchMinute(summary.substitution.minute) : "";
 
   return (
     <button
-      className="lineup-player"
+      className={`lineup-player${replacementPlayer ? " lineup-player-swappable" : ""}${showReplacement ? " is-showing-replacement" : ""}`}
       type="button"
-      onClick={() => player.idPlayer && onSelectPlayer(player)}
-      disabled={!player.idPlayer}
-      aria-label={player.idPlayer ? `Show ${player.name} details` : player.name}
+      onPointerEnter={(event) => { if (replacementPlayer && (event.pointerType === "mouse" || event.pointerType === "pen")) setShowReplacement(true); }}
+      onPointerLeave={() => setShowReplacement(false)}
+      onFocus={(event) => { if (replacementPlayer && event.currentTarget.matches(":focus-visible")) setShowReplacement(true); }}
+      onBlur={() => setShowReplacement(false)}
+      onClick={() => displayedPlayer.idPlayer && onSelectPlayer(displayedPlayer)}
+      disabled={!player.idPlayer && !replacementPlayer?.idPlayer}
+      aria-label={replacementPlayer
+        ? `Show ${displayedPlayer.name} details. ${player.name} was replaced by ${replacementPlayer.name} at ${substitutionMinute}. Hover or focus to preview the replacement.`
+        : player.idPlayer ? `Show ${player.name} details` : player.name}
     >
-      <LineupPlayerPortrait player={player} />
-
-      {badgeItems.length > 0 && (
-        <div className="lineup-player-badges">
-          {badgeItems.map((badge) => (
-            <LineupEventBadge key={`${player.number}-${badge.kind}`} badge={badge} />
-          ))}
+      <div className="lineup-player-face lineup-player-face-starter" aria-hidden="true">
+        <div className="lineup-player-photo-wrap">
+          <LineupPlayerPortrait player={player} className="lineup-player-portrait-team" />
+          <span className={`lineup-player-rating${rating === undefined ? " lineup-player-rating-empty" : rating >= 8 ? " lineup-player-rating-high" : rating >= 6 ? " lineup-player-rating-mid" : " lineup-player-rating-low"}`}>
+            {rating === undefined ? "–" : rating.toFixed(1)}
+          </span>
+          {replacementPlayer && (
+            <>
+              <span className="lineup-player-badges">
+                {badgeItems.map((badge) => <LineupEventBadge key={`${player.number}-${badge.kind}`} badge={badge} />)}
+              </span>
+              <span className="lineup-player-sub-cue"><span className="lineup-sub-arrow lineup-sub-arrow-off">↓</span> {substitutionMinute}</span>
+            </>
+          )}
+        </div>
+        {!replacementPlayer && badgeItems.length > 0 && (
+          <span className="lineup-player-badges">
+            {badgeItems.map((badge) => <LineupEventBadge key={`${player.number}-${badge.kind}`} badge={badge} />)}
+          </span>
+        )}
+        <span className="lineup-player-name-row">
+          <span className="lineup-player-name">{condensedLineupPlayerName(player.name)}</span>
+        </span>
+      </div>
+      {replacementPlayer && (
+        <div className="lineup-player-face lineup-player-face-replacement" aria-hidden="true">
+          <div className="lineup-player-photo-wrap">
+            <LineupPlayerPortrait player={replacementPlayer} className="lineup-player-portrait-team" />
+            <span className={`lineup-player-rating${replacementRating === undefined ? " lineup-player-rating-empty" : replacementRating >= 8 ? " lineup-player-rating-high" : replacementRating >= 6 ? " lineup-player-rating-mid" : " lineup-player-rating-low"}`}>
+              {replacementRating === undefined ? "–" : replacementRating.toFixed(1)}
+            </span>
+            <span className="lineup-player-badges">
+              {replacementBadges.map((badge) => <LineupEventBadge key={`${replacementPlayer.number}-${badge.kind}`} badge={badge} />)}
+            </span>
+            <span className="lineup-player-sub-cue"><span className="lineup-sub-arrow lineup-sub-arrow-on">↑</span> {substitutionMinute}</span>
+          </div>
+          <span className="lineup-player-name-row">
+            <span className="lineup-player-name">{condensedLineupPlayerName(replacementPlayer.name)}</span>
+          </span>
         </div>
       )}
-
-      <div className="lineup-player-text">
-        <div className="lineup-player-name-row">
-          {summary.substitution && <span className="lineup-sub-arrow lineup-sub-arrow-off">↓</span>}
-          <span className="lineup-player-name">{player.name}</span>
-        </div>
-
-        {replacementPlayer && (
-          <>
-            <div className="lineup-player-name-row lineup-player-name-row-sub">
-              <span className="lineup-sub-arrow lineup-sub-arrow-on">↑</span>
-              <span className="lineup-player-name">
-                {condensedLineupPlayerName(replacementPlayer.name)}{" "}
-                ({formattedMatchMinute(summary.substitution?.minute ?? "")})
-              </span>
-            </div>
-            {replacementBadges.length > 0 && (
-              <div className="lineup-player-badges">
-                {replacementBadges.map((badge) => (
-                  <LineupEventBadge key={`${replacementPlayer.number}-${badge.kind}`} badge={badge} />
-                ))}
-              </div>
-            )}
-          </>
-        )}
-      </div>
     </button>
   );
 }
@@ -1162,45 +1227,46 @@ function PlayerFact({ label, value, meta }: { label: string; value: string; meta
 
 // ── Substitutes table ─────────────────────────────────────────────
 
-function LineupSubstitutesTable({ lineup }: { lineup: MatchTeamLineup }) {
+function LineupSubstitutesTable({ lineup, teamName, lookup, teamColor, teamOutline, ratings, onSelectPlayer }: {
+  lineup: MatchTeamLineup;
+  teamName: string;
+  lookup: MatchLineupEventLookup;
+  teamColor: string;
+  teamOutline: string;
+  ratings: Record<string, number>;
+  onSelectPlayer: (player: MatchLineupPlayer) => void;
+}) {
+  const substitutes = [...lineup.substitutes];
+  for (const substitution of lineup.substitutions) {
+    if (!substitutes.some((player) => player.idPlayer && substitution.playerOn.idPlayer
+      ? player.idPlayer === substitution.playerOn.idPlayer
+      : player.number === substitution.playerOn.number && player.name === substitution.playerOn.name)) {
+      substitutes.push(substitution.playerOn);
+    }
+  }
+  if (substitutes.length === 0) return null;
   return (
-    <section className="lineup-substitutes-table">
+    <div className="lineup-substitutes-table" style={{ "--lineup-team-color": teamColor, "--lineup-team-outline": teamOutline } as CSSProperties}>
       <div className="lineup-substitutes-title">
-        {(lineup.team || "Team").toUpperCase()} SUBSTITUTES
+        {teamName.toUpperCase()} SUBSTITUTES
       </div>
-
       <div className="lineup-substitutes-card">
-        {lineup.substitutes.map((substitute, index) => {
-          const substitution =
-            lineup.substitutions.find((item) => item.playerOn.number === substitute.number) ?? null;
+        {substitutes.map((substitute) => {
+          const summary = lookup.summaryFor(substitute);
+          const rating = substitute.idPlayer ? ratings[substitute.idPlayer] : undefined;
           return (
-            <div
-              key={`${lineup.team}-${substitute.number}-${substitute.name}`}
-              className="lineup-substitute-row"
-            >
-              <div className="lineup-substitute-number">{substitute.number}</div>
-              <div className="lineup-substitute-copy">
-                <div className="lineup-substitute-name">
-                  {condensedLineupPlayerName(substitute.name)}
-                </div>
-                {substitution && (
-                  <div className="lineup-substitute-meta">
-                    <span className="lineup-sub-arrow lineup-sub-arrow-on">↑</span>
-                    <span>
-                      {formattedMatchMinute(substitution.minute)} for{" "}
-                      {condensedLineupPlayerName(substitution.playerOff.name)}
-                    </span>
-                  </div>
-                )}
-              </div>
-              {index < lineup.substitutes.length - 1 && (
-                <div className="lineup-substitute-divider" />
-              )}
-            </div>
+            <button key={`${lineup.team}-${substitute.idPlayer || substitute.number}-${substitute.name}`} className="lineup-substitute-row" type="button" onClick={() => onSelectPlayer(substitute)} disabled={!substitute.idPlayer} aria-label={`Show ${substitute.name} details`}>
+              <span className="lineup-substitute-photo-wrap">
+                <LineupPlayerPortrait player={substitute} className="lineup-player-portrait-team" />
+                {rating !== undefined && <span className="lineup-substitute-rating">{rating.toFixed(1)}</span>}
+              </span>
+              <span className="lineup-substitute-name">{condensedLineupPlayerName(substitute.name)}</span>
+              {summary.substitution && <span className="lineup-substitute-meta"><span className="lineup-sub-arrow lineup-sub-arrow-on">↑</span>{formattedMatchMinute(summary.substitution.minute)}</span>}
+            </button>
           );
         })}
       </div>
-    </section>
+    </div>
   );
 }
 
@@ -1426,6 +1492,7 @@ function buildPlayerBadgeItems(summary: MatchLineupPlayerEventSummary): LineupEv
 
 interface TimelineEntry {
   side: "home" | "away";
+  playerSide?: "home" | "away";
   minute: string;
   player: string;
   lineupPlayer: MatchLineupPlayer | null;
@@ -1440,7 +1507,7 @@ interface TimelineEntry {
   lineupPlayerOff?: MatchLineupPlayer | null;
 }
 
-function buildTimelineEntries(details: MatchDetails) {
+export function buildTimelineEntries(details: MatchDetails) {
   const homeAssistLookup = buildAssistLookup(details.homeAssists);
   const awayAssistLookup = buildAssistLookup(details.awayAssists);
   const homePlayers = timelinePlayerCandidates(details.teamLineups?.home);
@@ -1472,7 +1539,7 @@ function buildTimelineEntries(details: MatchDetails) {
         const parsed = parseMinute(minute);
         if (!parsed) continue;
         const lineupPlayer = playerForEvent(scorer.player, side);
-        entries.push({ side, minute: parsed.display, player: scorer.player,
+        entries.push({ side: side === "home" ? "away" : "home", playerSide: side, minute: parsed.display, player: scorer.player,
           lineupPlayer,
           text: `${abbreviatePlayerName(scorer.player)} (OG)`,
           kind: "own-goal", icon: "⚽",

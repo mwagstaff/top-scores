@@ -4,25 +4,27 @@ import { competitionDateCounts, preferredCompetitionDate } from "../competitionD
 import { competitionLogo } from "../competitionLogos";
 import { loadCompetitions } from "../catalog";
 import { cachedDay, loadDay } from "../dayStore";
+import { nextTVGuideDay } from "../tvGuide";
 import {
   competitionPath,
+  displayTime,
   rankedTVMatches,
   dateLabel,
   matchPath,
   moveDate,
   ukChannels,
-  ukDate,
+  localDate,
   validDate,
 } from "../football";
-import { isMatchFinished } from "../matchState";
-import { usePreferences } from "../preferences";
+import { isMatchAbandoned, isMatchFinished } from "../matchState";
 import { BroadcastChannels, FixtureRow, WatchabilityRating } from "./FixtureRow";
 import { PageMeta } from "./PageMeta";
 import { StadiumBackdrop } from "./StadiumBackdrop";
-import type { Match, MatchesMode } from "../types";
+import { defaultPreferences, type Match, type MatchesMode } from "../types";
 import { useInitialSeed } from "../bootstrap";
 import { normalizeMatch } from "../api";
 import { fetchTeamRankings } from "../api";
+import { readMatchViewPreferences, saveMatchViewPreferences, useMatchViewPreferences, type MatchScope } from "../matchViewPreferences";
 
 export function MatchesScreen({
   mode = "fixtures",
@@ -35,13 +37,14 @@ export function MatchesScreen({
 }) {
   const dateRail = useRef<HTMLDivElement>(null);
   const [params, setParams] = useSearchParams();
+  const savedView = useMatchViewPreferences();
   const [competitionAliases, setCompetitionAliases] = useState<string[]>([]);
   useEffect(() => { let active = true; if (competition) loadCompetitions().then(items => { if (active) { const entry = items.find(item => item.name === competition || item.aliases.includes(competition)); setCompetitionAliases(entry ? [entry.name, ...entry.aliases] : []); } }).catch(() => {}); return () => { active = false; }; }, [competition]);
-  const { preferences } = usePreferences();
-  const today = ukDate();
+  const preferences = defaultPreferences;
+  const today = localDate();
   const seed = useInitialSeed();
   const [todayFinished, setTodayFinished] = useState<boolean | undefined>(() =>
-    seed?.date === today && seed.matches ? seed.matches.map(normalizeMatch).some(isMatchFinished) : undefined);
+    seed?.date === today && seed.matches ? seed.matches.map(normalizeMatch).some((match) => isMatchFinished(match) || isMatchAbandoned(match)) : undefined);
   useEffect(() => {
     if (mode !== "results") return;
     let cancelled = false;
@@ -49,9 +52,9 @@ export function MatchesScreen({
       if (document.visibilityState !== "visible") return;
       try {
         let day = await loadDay(today);
-        while (day.hasMore && !day.matches.some(isMatchFinished) && !cancelled)
+        while (day.hasMore && !day.matches.some((match) => isMatchFinished(match) || isMatchAbandoned(match)) && !cancelled)
           day = await loadDay(today, false, true, day.page + 1);
-        if (!cancelled) setTodayFinished(day.matches.some(isMatchFinished));
+        if (!cancelled) setTodayFinished(day.matches.some((match) => isMatchFinished(match) || isMatchAbandoned(match)));
       } catch { /* Do not hide today when its status is unknown. */ }
     };
     void check();
@@ -67,9 +70,9 @@ export function MatchesScreen({
       setParams(current => { const next = new URLSearchParams(current); next.set("date", date); return next; }, { replace: true });
     }
   }, [requestedDate, date, setParams]);
-  const scope = ["top", "epl"].includes(params.get("scope") || "")
-    ? params.get("scope")!
-    : "all";
+  const requestedScope = params.get("scope");
+  const scope: MatchScope = requestedScope === "top" || requestedScope === "epl" || requestedScope === "all"
+    ? requestedScope : savedView.scope;
   const dayScope = competition || scope === "all" ? false : scope;
   const filteredScope = Boolean(dayScope);
   const filter =
@@ -101,6 +104,23 @@ export function MatchesScreen({
   const [refresh, setRefresh] = useState(0);
   const [rating, setRating] = useState<((name: string) => number) | null>(null);
   const key = `${date}:${dayScope}`;
+  const detailsAvailable = !tv && date <= today;
+  const requestedDetails = params.get("details");
+  const showDetails = detailsAvailable && (requestedDetails === "1" || (requestedDetails !== "0" && savedView.showDetails));
+  useEffect(() => {
+    const storedView = readMatchViewPreferences();
+    const changes: { scope?: MatchScope; showDetails?: boolean } = {};
+    const next = new URLSearchParams(params);
+    if (requestedScope === "all" || requestedScope === "top" || requestedScope === "epl") {
+      if (storedView.scope !== requestedScope) changes.scope = requestedScope;
+    } else next.set("scope", storedView.scope);
+    if (!detailsAvailable) next.delete("details");
+    else if (requestedDetails === "1" || requestedDetails === "0") {
+      if (storedView.showDetails !== (requestedDetails === "1")) changes.showDetails = requestedDetails === "1";
+    } else next.set("details", storedView.showDetails ? "1" : "0");
+    if (Object.keys(changes).length) saveMatchViewPreferences(changes);
+    if (next.toString() !== params.toString()) setParams(next, { replace: true });
+  }, [params, requestedScope, requestedDetails, savedView, detailsAvailable, setParams]);
   const payload = data.key === key ? data.value : cachedDay(date, dayScope);
   useEffect(() => {
     if (!preferences.matchGroupSortOrder.toLowerCase().includes("teamscore"))
@@ -150,7 +170,7 @@ export function MatchesScreen({
           window.clearTimeout(timer);
           timer = window.setTimeout(
             run,
-            date === ukDate()
+            date === localDate()
               ? 10_000
               : preferences.refreshIntervalMinutes * 60_000,
           );
@@ -197,15 +217,23 @@ export function MatchesScreen({
     return () => { active = false; };
   }, [competition, requestedDate, today, mode, setParams]);
   const [dateCountsReady, setDateCountsReady] = useState(false);
-  const [dateCounts, setDateCounts] = useState<Record<string, number>>({});
+  const [dateActivity, setDateActivity] = useState<{ counts: Record<string, number>; liveDates: Record<string, boolean>; finishedDates: Record<string, boolean> }>({ counts: {}, liveDates: {}, finishedDates: {} });
+  const { counts: dateCounts, liveDates, finishedDates } = dateActivity;
   useEffect(() => {
     let active = true;
-    setDateCounts({});
+    setDateActivity({ counts: {}, liveDates: {}, finishedDates: {} });
     setDateCountsReady(false);
     if (competition) {
       const names = [...new Set([competition, ...competitionAliases])];
-      void competitionDateCounts(names, moveDate(date, -15), moveDate(date, 15), mode === 'results')
-        .then(counts => { if (active) { setDateCounts(counts); setDateCountsReady(true); } }).catch(() => {});
+      const update = () => {
+        if (document.visibilityState !== "visible") return;
+        void competitionDateCounts(names, moveDate(date, -15), moveDate(date, 15), mode === 'results')
+          .then(activity => { if (active) { setDateActivity(activity); setDateCountsReady(true); } }).catch(() => {});
+      };
+      update();
+      const timer = window.setInterval(update, 60_000);
+      document.addEventListener("visibilitychange", update);
+      return () => { active = false; window.clearInterval(timer); document.removeEventListener("visibilitychange", update); };
     }
     return () => { active = false; };
   }, [competition, competitionAliases, date, mode]);
@@ -229,8 +257,8 @@ export function MatchesScreen({
         if (competition && match.league !== competition && !competitionAliases.includes(match.league)) return false;
         const legacyComps = params.get("comps")?.split(",");
         if (legacyComps && !legacyComps.includes(match.league)) return false;
-        if (mode === "results" && !isMatchFinished(match)) return false;
-        if (tv && isMatchFinished(match)) return false;
+        if (mode === "results" && !isMatchFinished(match) && !isMatchAbandoned(match)) return false;
+        if (tv && (isMatchFinished(match) || isMatchAbandoned(match))) return false;
         return true;
       }),
     [payload, competition, competitionAliases, scope, mode, tv, preferences, params],
@@ -280,10 +308,34 @@ export function MatchesScreen({
           ] as const,
       );
   }, [matches, preferences.matchGroupSortOrder, rating]);
-  const tvMatches = rankedTVMatches(relevant).slice(0, 3);
-  const otherTVMatches =
-    relevant.filter((match) => ukChannels(match.tvChannels).length).length -
-    tvMatches.length;
+  const selectedTVMatches = rankedTVMatches(relevant);
+  const guideKey = `${date}:${dayScope}:${params.get("comps") || ""}`;
+  const [futureTV, setFutureTV] = useState<{
+    key: string;
+    status: "loading" | "found" | "empty" | "error";
+    day?: { date: string; matches: Match[] };
+  } | null>(null);
+  useEffect(() => {
+    if (!payload || selectedTVMatches.length || competition || mode === "results") return;
+    let active = true;
+    const included = params.get("comps")?.split(",");
+    setFutureTV({ key: guideKey, status: "loading" });
+    void nextTVGuideDay(date, payload, dayScope, match => !included || included.includes(match.league), 14, () => active)
+      .then(day => {
+        if (active) setFutureTV({ key: guideKey, status: day ? "found" : "empty", day: day || undefined });
+      })
+      .catch(() => {
+        if (active) setFutureTV({ key: guideKey, status: "error" });
+      });
+    return () => { active = false; };
+  }, [guideKey, Boolean(payload), selectedTVMatches.length, competition, mode]);
+  const fallback = futureTV?.key === guideKey && !selectedTVMatches.length ? futureTV : null;
+  const guideMatches = selectedTVMatches.length ? selectedTVMatches : fallback?.day?.matches || [];
+  const guideDate = selectedTVMatches.length ? date : fallback?.day?.date || date;
+  const tvMatches = guideMatches.slice(0, 3);
+  const otherTVMatches = guideMatches.length - tvMatches.length;
+  const guideCountIncomplete = Boolean(selectedTVMatches.length && payload?.hasMore);
+  const guideDayLabel = guideDate === today ? "today" : guideDate === moveDate(today, 1) ? "tomorrow" : `on ${dateLabel(guideDate, true)}`;
   const loading = !payload && !error;
   return (
     <>
@@ -332,32 +384,31 @@ export function MatchesScreen({
               {Array.from({ length: 31 }, (_, index) => index - 15).map((offset) => {
                 const day = moveDate(date, offset);
                 if ((tv && day < today) || (mode === "results" && day > latestResultDate)) return null;
-                const instant = new Date(`${day}T12:00:00Z`);
+                const [year, month, dayOfMonth] = day.split("-").map(Number);
+                const instant = new Date(year, month - 1, dayOfMonth);
                 return (
                   <button
                     key={day}
                     disabled={Boolean(competition && (!dateCountsReady || !dateCounts[day]))}
                     className={`date-offset-${Math.abs(offset)}`}
-                    aria-label={`${dateLabel(day)}${dateCounts[day] ? `, ${dateCounts[day]} ${dateCounts[day] === 1 ? "match" : "matches"}` : ""}`}
+                    aria-label={`${dateLabel(day)}${dateCounts[day] ? `, ${dateCounts[day]} ${dateCounts[day] === 1 ? "match" : "matches"}${liveDates[day] ? ", live match in progress" : finishedDates[day] ? ", all matches finished" : ""}` : ""}`}
                     aria-pressed={day === date}
                     onClick={() => change({ date: day })}
                   >
                     <span>
                       {day === today
                         ? "Today"
-                        : instant.toLocaleDateString("en-GB", {
+                        : instant.toLocaleDateString(undefined, {
                             weekday: "short",
-                            timeZone: "Europe/London",
                           })}
                     </span>
                     <span>
-                      {instant.toLocaleDateString("en-US", {
+                      {instant.toLocaleDateString(undefined, {
                         month: "short",
                         day: "numeric",
-                        timeZone: "Europe/London",
                       })}
                     </span>
-                    {dateCounts[day] > 0 && <span className="date-count" aria-hidden="true">{dateCounts[day]}</span>}
+                    {dateCounts[day] > 0 && <span className={`date-count${liveDates[day] ? " is-live" : finishedDates[day] ? " is-finished" : ""}`} aria-hidden="true">{dateCounts[day]}</span>}
                   </button>
                 );
               })}
@@ -411,9 +462,10 @@ export function MatchesScreen({
             )}
             {!competition && (
               <div className="scope-toggles" role="group" aria-label="Competition scope">
-                {[["all", "All competitions"], ["top", "Show top teams"], ["epl", "Show Premier League teams"]].map(([value, label]) => <button key={value} aria-pressed={scope === value} onClick={() => change({ scope: value, comps: "" })}>{value === 'top' && <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M7 3h10v5a5 5 0 0 1-10 0V3Zm0 2H3v3a4 4 0 0 0 5 4m9-7h4v3a4 4 0 0 1-5 4M12 13v6m-5 2h10m-8-2h6" /></svg>}{value === 'epl' && <img src="/competition-logos/FantasyPremierLeagueLion.webp" width="22" height="22" alt="" />}<span>{label}</span></button>)}
+                {[["all", "All competitions"], ["top", "Top teams"], ["epl", "Premier League teams"]].map(([value, label]) => <button key={value} aria-pressed={scope === value} onClick={() => change({ scope: value, comps: "" })}>{value === 'top' && <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M7 3h10v5a5 5 0 0 1-10 0V3Zm0 2H3v3a4 4 0 0 0 5 4m9-7h4v3a4 4 0 0 1-5 4M12 13v6m-5 2h10m-8-2h6" /></svg>}{value === 'epl' && <img src="/competition-logos/FantasyPremierLeagueLion.webp" width="22" height="22" alt="" />}<span>{label}</span></button>)}
               </div>
             )}
+            {detailsAvailable && <label className="match-details-toggle"><input type="checkbox" checked={showDetails} onChange={event => change({ details: event.target.checked ? "1" : "0" })} />Show details</label>}
           </div>
           <div className="fixture-date-heading">
             <h2>{dateLabel(date)}</h2>
@@ -474,6 +526,7 @@ export function MatchesScreen({
                       key={match.id}
                       showBroadcast={mode !== "results"}
                       showRating={tv}
+                      showDetails={showDetails}
                     />
                   ))}
                 </section>
@@ -501,7 +554,6 @@ export function MatchesScreen({
                     change({
                       date: today,
                       view: "all",
-                      scope: "all",
                       comps: "",
                     });
                   }}
@@ -535,33 +587,36 @@ export function MatchesScreen({
               {busy ? "Loading…" : "Load more matches"}
             </button>
           )}
-          <div className="scores-footnote">
-            <span>
-              {mode === "results"
-                ? "All times UK"
-                : "All times UK · TV listings may change"}
-            </span>
-            {payload?.lastUpdated && (
+          {payload?.lastUpdated && (
+            <div className="scores-footnote">
               <span>
                 Updated{" "}
-                {new Intl.DateTimeFormat("en-GB", {
-                  timeZone: "Europe/London",
+                {new Intl.DateTimeFormat(undefined, {
                   hour: "2-digit",
                   minute: "2-digit",
                 }).format(new Date(payload.lastUpdated))}
               </span>
-            )}
-          </div>
+            </div>
+          )}
         </section>
         {!competition && mode !== "results" && (
           <aside className="watch-sidebar" aria-label="UK viewing guide">
             <h2>TV Guide</h2>
+            {!selectedTVMatches.length && !loading && !payload?.hasMore && fallback?.day?.date !== date && (
+              <p className="watch-empty">
+                {date === today ? "No more matches on TV today." : `No matches on TV on ${dateLabel(date, true)}.`}
+              </p>
+            )}
+            {fallback?.day && fallback.day.date !== date && (
+              <p className="watch-next-date">
+                {fallback.day.date === moveDate(today, 1) ? "Tomorrow on TV" : `${dateLabel(fallback.day.date)} on TV`}
+              </p>
+            )}
             {tvMatches.map((match) => (
               <div className="watch-pick" key={match.id}>
                 <Link className="watch-pick-details" to={matchPath(match)} state={{ match }}>
                 <span className="watch-time">
-                  {match.time}
-                  <span>UK</span>
+                  {displayTime(match.time)}
                 </span>
                 <strong>
                   {match.homeTeam}
@@ -577,18 +632,25 @@ export function MatchesScreen({
               <p className="watch-empty">
                 {loading
                   ? "Finding broadcasts…"
-                  : "No upcoming UK broadcasts listed for this selection."}
+                  : fallback?.status === "error"
+                      ? "Unable to load upcoming TV listings."
+                      : fallback?.status === "empty"
+                        ? "No UK broadcasts found in the next 14 days."
+                        : "Finding the next matches on TV…"}
               </p>
             )}
-            <Link className="text-link" to={`/tv?date=${date}`}>
+            <Link className="text-link" to={`/tv?date=${guideDate}`}>
               <span>
                 Full TV Guide
                 {!loading && (
                   <small className="guide-more-count">
-                    {otherTVMatches}
-                    {payload?.hasMore ? "+" : ""} more{" "}
-                    {otherTVMatches === 1 ? "match" : "matches"}{" "}
-                    {date === today ? "today" : `on ${dateLabel(date, true)}`}
+                    {otherTVMatches > 0
+                      ? `${otherTVMatches}${guideCountIncomplete ? "+" : ""} more ${otherTVMatches === 1 && !guideCountIncomplete ? "match" : "matches"} on TV ${guideDayLabel}`
+                      : tvMatches.length
+                        ? guideCountIncomplete
+                          ? `More matches on TV may be listed ${guideDayLabel}`
+                          : `See all matches on TV ${guideDayLabel}`
+                        : "Browse TV listings"}
                   </small>
                 )}
               </span>

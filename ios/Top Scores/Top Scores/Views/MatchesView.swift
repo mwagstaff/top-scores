@@ -441,6 +441,7 @@ struct MatchesView: View {
     @State private var calendarSubscriptionErrorMessage = ""
     @State private var showsCalendarSubscriptionError = false
     @State private var isTVListingsPresented = false
+    @State private var showsMatchDetails = false
     @State private var isTeamSearchPresented = false
     @State private var pendingTeamSearchDestination: TeamDetailsContext?
     @State private var navigationTeam: TeamDetailsContext?
@@ -825,6 +826,9 @@ struct MatchesView: View {
             rebuildFixtureBrowseGrouping()
         }
         .onChange(of: fixtureBrowser.selectedDateKey) { _, dateKey in
+            if let dateKey, dateKey > fixtureBrowser.todayDateKey {
+                showsMatchDetails = false
+            }
             handleFixtureBrowserDateChange(dateKey)
         }
         .onChange(of: preferences.showPostponedGames) { _, _ in
@@ -857,20 +861,9 @@ struct MatchesView: View {
     private var scoresHeroHeader: some View {
         FootballHeroHeader(title: scoresHeaderTitle, subtitle: scoresHeaderSubtitle)
         .animation(accessibilityReduceMotion ? nil : .easeOut(duration: 0.18), value: isTVListingsPresented)
-        .overlay(alignment: .topLeading) {
-            if mode == .fixtures {
-                HStack(spacing: 8) {
-                    if canShowTVListings {
-                        tvListingsHeaderButton
-                    }
-                    teamSearchHeaderButton
-                }
-                .padding(.leading, 14)
-            }
-        }
         .overlay(alignment: .topTrailing) {
             if mode == .fixtures {
-                fixtureHeaderActions
+                fixtureHeaderMenu
                     .padding(.trailing, 14)
             }
         }
@@ -882,106 +875,41 @@ struct MatchesView: View {
         )
     }
 
-    private var tvListingsHeaderButton: some View {
-        Button(action: toggleTVListings) {
-            Image(systemName: isTVListingsPresented ? "tv.fill" : "tv")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(isTVListingsPresented ? Color.white : Color.accentColor)
-                .frame(width: 44, height: 44)
-                .background(
-                    Color.accentColor.opacity(isTVListingsPresented ? 0.88 : 0.12),
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                )
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Color.accentColor.opacity(isTVListingsPresented ? 1 : 0.58), lineWidth: 1)
-                }
-                .shadow(
-                    color: isTVListingsPresented ? Color.accentColor.opacity(0.34) : .clear,
-                    radius: 8
-                )
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(isTVListingsPresented ? "Show scores" : "Show TV listings")
-        .accessibilityValue(isTVListingsPresented ? "TV listings selected" : "Scores selected")
-        .accessibilityHint(
-            isTVListingsPresented
-                ? "Returns to the standard Scores view"
-                : "Shows televised matches for the selected date"
-        )
+    private var canShowMatchDetails: Bool {
+        guard let selectedDateKey = fixtureBrowser.selectedDateKey else { return false }
+        return selectedDateKey <= fixtureBrowser.todayDateKey
     }
 
-    private var teamSearchHeaderButton: some View {
-        Button(action: presentTeamSearch) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(Color.accentColor)
-                .frame(width: 44, height: 44)
-                .background(
-                    Color.accentColor.opacity(0.12),
-                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-                )
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Color.accentColor.opacity(0.58), lineWidth: 1)
+    private var fixtureHeaderMenu: some View {
+        Menu {
+            if canShowTVListings {
+                Button(isTVListingsPresented ? "Scores" : "TV Today", systemImage: "tv", action: toggleTVListings)
+            }
+            Button("Search teams", systemImage: "magnifyingglass", action: presentTeamSearch)
+            Button("Calendar", systemImage: "calendar", action: presentFixtureDatePicker)
+                .disabled(fixtureBrowser.availableDays.isEmpty)
+            if canShowMatchDetails && !isTVListingsPresented {
+                Toggle(isOn: $showsMatchDetails) {
+                    Label("Show details", systemImage: "list.bullet.rectangle")
                 }
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Search teams")
-        .accessibilityHint("Opens team search")
-    }
-
-    private var fixtureHeaderActions: some View {
-        HStack(spacing: 8) {
+            }
             if fixturesCoordinator.isFixtureSaveRecoveryButtonVisible {
-                Button(action: restoreFixtureSavePrompt) {
-                    Image(systemName: "bookmark.fill")
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(Color.primary)
-                        .frame(width: 44, height: 44)
-                        .background(Color.accentColor.opacity(0.20), in: Circle())
-                        .overlay {
-                            Circle()
-                                .stroke(Color.accentColor.opacity(0.88), lineWidth: 1)
-                        }
-                        .shadow(color: Color.accentColor.opacity(0.42), radius: 9)
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Save current Match View")
-                .accessibilityHint("Shows the save favourites prompt again")
-                .transition(fixtureRecoveryButtonTransition)
+                Button("Save current Match View", systemImage: "bookmark.fill", action: restoreFixtureSavePrompt)
             }
-
-            Button(action: presentFixtureDatePicker) {
-                Image(systemName: "calendar")
-                    .font(.system(size: 18, weight: .semibold))
-                    .foregroundStyle(Color.primary)
-                    .frame(width: 44, height: 44)
-                    .background(Color.accentColor.opacity(0.12), in: Circle())
-                    .overlay {
-                        Circle()
-                            .stroke(Color.accentColor.opacity(0.48), lineWidth: 1)
-                    }
-                    .shadow(
-                        color: isFixtureDatePickerPresented
-                            ? Color.accentColor.opacity(0.24)
-                            : .clear,
-                        radius: 8
-                    )
-            }
-            .buttonStyle(.plain)
-            .disabled(fixtureBrowser.availableDays.isEmpty)
-            .accessibilityLabel("Choose fixture date")
-            .accessibilityValue(scoresHeaderSubtitle ?? "No date selected")
-            .accessibilityHint("Opens a calendar to jump to another date")
-            .crashBreadcrumb("fixture_date_picker", isPresented: isFixtureDatePickerPresented)
-            .popover(isPresented: $isFixtureDatePickerPresented) {
-                fixtureDatePickerPopover
-                    .presentationCompactAdaptation(.sheet)
-                    .presentationDetents([.medium])
-                    .presentationDragIndicator(.visible)
-            }
-
+        } label: {
+            Image(systemName: "ellipsis")
+                .font(.system(size: 19, weight: .semibold))
+                .foregroundStyle(Color.primary)
+                .frame(width: 44, height: 44)
+                .background(Color.accentColor.opacity(0.12), in: Circle())
+        }
+        .accessibilityLabel("Match options")
+        .crashBreadcrumb("fixture_date_picker", isPresented: isFixtureDatePickerPresented)
+        .popover(isPresented: $isFixtureDatePickerPresented) {
+            fixtureDatePickerPopover
+                .presentationCompactAdaptation(.sheet)
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
         }
     }
 
@@ -1188,12 +1116,6 @@ struct MatchesView: View {
                 showsCalendarSubscriptionError = true
             }
         }
-    }
-
-    private var fixtureRecoveryButtonTransition: AnyTransition {
-        accessibilityReduceMotion
-            ? .opacity
-            : .scale(scale: 0.74).combined(with: .opacity)
     }
 
     private func restoreFixtureSavePrompt() {
@@ -1760,6 +1682,8 @@ struct MatchesView: View {
             MatchesListRowLabel(
                 match: match,
                 isFixtureMode: mode == .fixtures,
+                showDetails: mode == .fixtures && showsMatchDetails && canShowMatchDetails && !isTVListingsPresented,
+                apiBaseURL: preferences.apiBaseURL,
                 rowPreferences: matchRowPreferences,
                 fantasyContext: fantasyViewModel.matchRowContext
             )
@@ -4821,12 +4745,16 @@ private struct FixtureDateCarouselTile: View {
 struct MatchesListRowLabel: View, Equatable {
     let match: Match
     let isFixtureMode: Bool
+    var showDetails: Bool = false
+    var apiBaseURL: String = ""
     let rowPreferences: MatchRowPreferences
     let fantasyContext: FantasyMatchRowContext
 
     var body: some View {
         MatchRow(
             match: match,
+            showTeamEvents: showDetails,
+            apiBaseURL: apiBaseURL,
             showLeague: false,
             showFantasyBadge: isFixtureMode,
             showFantasyPlayerContributions: isFixtureMode,

@@ -10320,6 +10320,7 @@ function normalizeMatchStatusValue(status) {
 
   const token = normalized.toUpperCase();
   if (MATCH_STATUS_POSTPONED_TOKENS.has(token)) return "POSTPONED";
+  if (token === "ABANDONED" || token === "MATCH ABANDONED") return "ABANDONED";
   if (token === "PENS" || token === "PEN" || token === "PEN.") return "Pens";
   if (token === "HALF TIME" || token === "HALF-TIME") return "HT";
   if (token === "FULL TIME" || token === "FULL-TIME") return "FT";
@@ -10396,6 +10397,11 @@ function pickPreferredMatchStatus(existingStatus, incomingStatus, options = {}) 
   const incomingMinute = parseMatchStatusMinute(incoming);
   const incomingLive =
     incomingMinute !== null || MATCH_STATUS_IN_PROGRESS_TOKENS.has(incomingToken);
+
+  if (incomingToken === "ABANDONED") return incoming;
+  if (existingToken === "ABANDONED") {
+    return incomingFinished || incomingLive ? incoming : existing;
+  }
 
   if (existingPostponed && !incomingPostponed) {
     if (incomingFinished || incomingLive) return incoming;
@@ -17133,7 +17139,7 @@ function teamMatchesSelectionAliasAware(teamName, selection, manualMappings = nu
 }
 
 function matchesFilters(match, filters) {
-  const { leagues, teams, channels, dateFrom, dateTo, filterMode, manualMappings } = filters;
+  const { leagues, teams, channels, dateFrom, dateTo, filterMode, manualMappings, timeZone } = filters;
 
   const matchLeague = normalizeCompetitionFilterName(match.league || "");
   const leagueOk =
@@ -17169,7 +17175,9 @@ function matchesFilters(match, filters) {
   if (!channelOk) return false;
 
   if (dateFrom || dateTo) {
-    const matchDate = match.date || "";
+    const matchDate = timeZone
+      ? zonedDateTimeToZonedDateTime(match.date, match.time, MATCH_DISPLAY_TIME_ZONE, timeZone).date
+      : match.date || "";
     if (dateFrom && matchDate < dateFrom) return false;
     if (dateTo && matchDate > dateTo) return false;
   }
@@ -19864,6 +19872,7 @@ function buildMatchQueryResponseCacheKey(options = {}) {
     source: options.source || "bsd",
     date_from: options.dateFrom || null,
     date_to: options.dateTo || null,
+    time_zone: options.timeZone || null,
     leagues: Array.isArray(options.leagues) ? options.leagues : [],
     teams: Array.isArray(options.teams) ? options.teams : [],
     channels: Array.isArray(options.channels) ? options.channels : [],
@@ -25159,6 +25168,7 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
         source: matchSource,
         dateFrom,
         dateTo,
+        timeZone: displayTimeZone,
         leagues,
         teams,
         channels,
@@ -25196,6 +25206,7 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
             filterMode,
             dateFrom,
             dateTo,
+            timeZone: displayTimeZone,
             manualMappings,
           })
         )
@@ -25225,7 +25236,9 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
       // Inject all test matches if they match filters.
       for (const testMatch of allTestMatches) {
         if (testMatch && testMatch.is_test_match) {
-          const testMatchDate = testMatch.date;
+          const testMatchDate = displayTimeZone
+            ? zonedDateTimeToZonedDateTime(testMatch.date, testMatch.time, MATCH_DISPLAY_TIME_ZONE, displayTimeZone).date
+            : testMatch.date;
           if (testMatchDate >= dateFrom && testMatchDate <= dateTo) {
             const matchesLeagueFilter =
               leagues.length === 0 ||
@@ -32955,6 +32968,23 @@ app.post(`${API_PREFIX}/test-harness/match/delete`, (req, res) => {
 const matchMonitor = require("./match_monitor");
 
 const SERVER_BASE_URL = `http://localhost:${PORT}${API_PREFIX}`;
+matchMonitor.setTVReminderProvider({
+  matches: async () => {
+    const now = Date.now();
+    return filterMatchesByCompetition(await getBsdMatchesForServing())
+      .filter((match) => {
+        const kickoff = Date.parse(match.kickoff_at);
+        const id = String(match.match_details_id || match.id || "").toLowerCase();
+        return kickoff > now && kickoff <= now + 31 * 60 * 1000 && !cachedDeletedMatchIds.has(id);
+      })
+      .map((match) => ({
+        ...match,
+        watchability_index: watchabilityIndexForMatch(match, competitionWeightForLeagueName(match.league)),
+      }));
+  },
+  visible: matchesVisibleForScoresPreferences,
+});
+
 // BSD is the sole source of truth for match data (scores, status, TV channels).
 // Both providers read the same getBsdMatchesForServing() cache so the details
 // lookup and the operational match list are always the same record under the
@@ -33762,6 +33792,7 @@ module.exports = {
     setMatchListLastKnownPayload,
     overlayCurrentDayBsdProjection,
     buildMatchQueryResponseCacheKey,
+    matchesFilters,
     buildCanonicalMatchWriteAuditEntry,
     transformBbcLiveMatchWithDetails,
     mergeConfirmedVarDisallowedGoalsIntoPayload,

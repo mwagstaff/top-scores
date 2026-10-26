@@ -1,5 +1,6 @@
 import { compareCompetitions } from "../competitionOrdering";
 import "../styles.css";
+import "../tableScores.css";
 import { competitionLogo } from "../competitionLogos";
 import { useEffect, useMemo, useReducer, useState, useRef } from "react";
 import { loadCompetitions, type Competition } from "../catalog";
@@ -7,7 +8,12 @@ import { teamPath } from "../catalog";
 import { Link, useSearchParams } from "react-router-dom";
 import { fetchLeagueTables } from "../api";
 import type { LeagueTable, LeagueTableRow, LeagueTableZone } from "../types";
+import { fetchTableMatches, tableScoresByTeam, type TableScore } from "../tableScores";
+import { matchPath, localDate } from "../football";
+import { teamIdentityKeys, useTeamColorCatalog } from "../teamColors";
+import type { Match } from "../types";
 import { PageMeta } from "./PageMeta";
+import { saveMatchViewPreferences, useMatchViewPreferences } from "../matchViewPreferences";
 import { StadiumBackdrop } from "./StadiumBackdrop";
 
 interface TablesState {
@@ -27,6 +33,9 @@ const initialState: TablesState = {
 };
 
 export function TablesScreen({ competition }: { competition?: string }) {
+  useTeamColorCatalog();
+  const [scoreMatches, setScoreMatches] = useState<{ leagueID: string; matches: Match[] } | null>(null);
+  const [scoresError, setScoresError] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<Competition[]>([]);
   useEffect(() => { let active = true; loadCompetitions().then(items => { if (active) setCatalog(items); }).catch(() => {}); return () => { active = false; }; }, []);
   const carousel = useRef<HTMLElement>(null);
@@ -34,7 +43,7 @@ export function TablesScreen({ competition }: { competition?: string }) {
   const [reloadToken, reload] = useReducer((value) => value + 1, 0);
   const [searchParams, setSearchParams] = useSearchParams();
   const [highlightedRowId, setHighlightedRowId] = useState<string | null>(null);
-  const [showStats, setShowStats] = useState(true);
+  const { showStats } = useMatchViewPreferences();
   const [carouselEdges, setCarouselEdges] = useState({ start: true, end: true });
 
   useEffect(() => {
@@ -156,6 +165,28 @@ export function TablesScreen({ competition }: { competition?: string }) {
     };
   }, [sortedLeagues.length, selectedLeague?.leagueID, catalog]);
 
+  const scoreDate = localDate();
+  const scoreLeagueID = selectedLeague?.leagueID;
+  const scoreLeagueName = selectedLeague?.leagueName;
+  const scoreLeagueNames = JSON.stringify([...new Set([scoreLeagueName, ...(catalog.find(item => item.id === scoreLeagueID || item.name === scoreLeagueName || item.aliases.includes(scoreLeagueName || ""))?.aliases || [])].filter((name): name is string => Boolean(name)))]);
+  useEffect(() => {
+    if (!scoreLeagueID) return;
+    const controller = new AbortController();
+    setScoresError(null);
+    void fetchTableMatches(JSON.parse(scoreLeagueNames), scoreDate, controller.signal)
+      .then(matches => {
+        if (!controller.signal.aborted) setScoreMatches({ leagueID: scoreLeagueID, matches });
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setScoreMatches(null);
+          setScoresError('Today’s scores are unavailable.');
+        }
+      });
+    return () => controller.abort();
+  }, [scoreLeagueID, scoreLeagueNames, scoreDate, reloadToken]);
+  const scores = tableScoresByTeam(scoreMatches && scoreMatches.leagueID === scoreLeagueID ? scoreMatches.matches : [], scoreDate);
+
   const scrollCompetitions = (direction: number) => {
     const rail = carousel.current;
     rail?.scrollBy({
@@ -197,14 +228,15 @@ export function TablesScreen({ competition }: { competition?: string }) {
 
           {selectedLeague ? (
             <>
-              <LeagueTableHero league={selectedLeague} showStats={showStats} onShowStatsChange={setShowStats} />
+              <LeagueTableHero league={selectedLeague} showStats={showStats} onShowStatsChange={value => saveMatchViewPreferences({ showStats: value })} />
               {leagueHasLiveRows(selectedLeague) ? (
                 <div className="tables-live-note">
                   <span className="tables-live-dot" aria-hidden="true" />
                   Live in-play standings. Provisional, subject to change.
                 </div>
               ) : null}
-              <LeagueTableCard league={selectedLeague} highlightedRowId={highlightedRowId} showStats={showStats} />
+              {scoresError && <div className="refresh-notice" role="status">{scoresError} <button onClick={() => reload()}>Try again</button></div>}
+              <LeagueTableCard league={selectedLeague} highlightedRowId={highlightedRowId} showStats={showStats} scores={scores} />
               {state.lastUpdated ? (
                 <div className="tables-updated">Updated {formatLastUpdated(state.lastUpdated)}</div>
               ) : null}
@@ -259,10 +291,12 @@ function LeagueTableCard({
   league,
   highlightedRowId = null,
   showStats,
+  scores,
 }: {
   league: LeagueTable;
   highlightedRowId?: string | null;
   showStats: boolean;
+  scores: Map<string, TableScore>;
 }) {
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const visibleStageName = normalizeStageName(league.stageName);
@@ -290,11 +324,12 @@ function LeagueTableCard({
   return (
 
       <div className="league-table-scroll" role="region" aria-label={`${league.leagueName} standings${showStats ? ", scroll horizontally for all statistics" : ""}`} tabIndex={showStats ? 0 : undefined}>
-      <div className={`league-table${showStats ? " has-stats" : ""}`}>
+      <div className={`league-table${showStats ? " has-stats" : ""}${scores.size ? " has-scores" : ""}`}>
         <div className="league-table-heading">
           <span className="table-cell table-cell-position" aria-hidden="true" />
           <span className="table-cell table-cell-logo" aria-hidden="true" />
           <span className="table-cell table-cell-team">Team</span>
+          {scores.size > 0 && <span className="table-cell table-cell-score">Today</span>}
           <span className="table-cell table-cell-played" title="Played">P</span>
           {showStats && <>
             <span className="table-cell table-cell-stat" title="Won">W</span>
@@ -321,6 +356,7 @@ function LeagueTableCard({
             ) : null}
 
             {group.rows.map((row, index) => {
+              const score = teamIdentityKeys(row.team).map(key => scores.get(key)).find(Boolean);
               const isExpanded = expandedRows.has(row.id);
               const boundary = isBenefitBoundary(group.rows, index);
               const activeZone = zoneAtPosition(league.zones, row.position);
@@ -359,6 +395,11 @@ function LeagueTableCard({
                     </span>
                     <TableTeamLogo teamName={row.team} />
                     <Link to={teamPath(row.team, undefined, league.leagueName)} className="table-cell table-cell-team table-team-name">{row.team}</Link>
+                    {scores.size > 0 && <span className="table-cell table-cell-score">
+                      {score && <Link to={matchPath(score.match)} state={{ match: score.match }} className={`table-score-pill is-${score.outcome}`} aria-label={`${row.team}, ${score.label}`}>
+                        {score.scored}-{score.conceded}
+                      </Link>}
+                    </span>}
                     <span className="table-cell table-cell-played">{row.played}</span>
                     {showStats && <>
                       <span className="table-cell table-cell-stat">{row.won}</span>

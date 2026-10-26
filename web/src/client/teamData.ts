@@ -1,6 +1,6 @@
 import { fetchLeagueTables, normalizeMatch } from './api';
-import { moveDate, ukDate } from './football';
-import { isMatchFinished } from './matchState';
+import { browserTimeZone, localDate, moveDate } from './football';
+import { isMatchAbandoned, isMatchFinished } from './matchState';
 import type { LeagueTablesPayload, Match } from './types';
 export interface SquadPlayer { id: string; name: string; jersey_number?: number; nationality?: string; specific_position?: string; position?: string; market_value_gbp?: number; cutout_url?: string; fpl_profile_url?: string; availability?: string; injury_type?: string }
 export interface TeamManager { id: string; name: string; country?: string; preferred_formation?: string; tactical_profile?: string; image_url?: string; matches_total?: number; wins?: number; draws?: number; losses?: number; win_pct?: number }
@@ -25,11 +25,11 @@ export function loadTeam(name: string, suppliedId?: string, refresh = false): Pr
     const result: TeamData = { id: suppliedId, names: [name], fixtures: [], results: [], players: [], errors: [], pending: ['Current season', 'Upcoming fixtures', 'Previous matches', 'Players', 'Manager'] };
     const publish = (section?: string) => { if (section) result.pending = result.pending?.filter(item => item !== section); const snapshot = { ...result, errors: [...result.errors] }; snapshots.set(key, snapshot); listeners.get(key)?.forEach(listener => listener(snapshot)); };
     publish();
-    const today = ukDate();
+    const today = localDate();
     const matches = async (mode: string) => {
-      const query = new URLSearchParams({ team: name, mode, start: mode === 'fixtures' ? today : moveDate(today, -365), end: mode === 'fixtures' ? '9999-12-31' : today, sort: mode === 'fixtures' ? 'asc' : 'desc', filter_mode: 'intersection', page_size: '200', page: '1', time_zone: 'Europe/London' });
+      const query = new URLSearchParams({ team: name, mode, start: mode === 'fixtures' ? today : moveDate(today, -365), end: mode === 'fixtures' ? '9999-12-31' : today, sort: mode === 'fixtures' ? 'asc' : 'desc', filter_mode: 'intersection', page_size: '200', page: '1', time_zone: browserTimeZone() });
       const raw = await json(`matches?${query}`);
-      return (Array.isArray(raw) ? raw : raw.matches || []).map(normalizeMatch).filter((match: Match) => mode === 'results' ? isMatchFinished(match) : !isMatchFinished(match));
+      return (Array.isArray(raw) ? raw : raw.matches || []).map(normalizeMatch).filter((match: Match) => mode === 'results' ? isMatchFinished(match) || isMatchAbandoned(match) : !isMatchFinished(match) && !isMatchAbandoned(match));
     };
     const tasks = [
       matches('fixtures').then(data => { result.fixtures = data; }).catch(() => result.errors.push('Upcoming fixtures')).finally(() => publish('Upcoming fixtures')),

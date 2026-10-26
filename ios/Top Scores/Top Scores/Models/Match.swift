@@ -1131,6 +1131,9 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
     }
 
     var extendedMatchStatusText: String? {
+        if isAbandoned {
+            return "Match abandoned"
+        }
         if isExtraTimeInProgress {
             return "Extra time being played"
         }
@@ -1263,12 +1266,16 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
         MatchStatusFormatter.isPostponed(scoreStatus)
     }
 
+    nonisolated var isAbandoned: Bool {
+        MatchStatusFormatter.isAbandoned(scoreStatus)
+    }
+
     nonisolated var isFinalRound: Bool {
         leagueSubcategory?.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare("Final") == .orderedSame
     }
 
     nonisolated var isUpcomingScorelessFixture: Bool {
-        if isPostponed {
+        if isPostponed || isAbandoned {
             return false
         }
         return Self.isUpcomingScorelessFixture(
@@ -2025,6 +2032,7 @@ enum MatchStatusFormatter {
     private nonisolated static let inProgressTokens: Set<String> = ["1H", "2H", "HT", "ET", "INPLAY", "LIVE"]
     private nonisolated static let completeTokens: Set<String> = ["FT", "AET", "PENS"]
     private nonisolated static let postponedTokens: Set<String> = ["POSTPONED", "MATCH POSTPONED"]
+    private nonisolated static let abandonedTokens: Set<String> = ["ABANDONED", "MATCH ABANDONED"]
     private nonisolated static let minutePattern = #"^\d{1,3}(?:\+\d{1,2})?'?$"#
     private nonisolated static let extraTimeMinutePattern = #"^ET\s+(\d{1,3}(?:\+\d{1,2})?)'?$"#
     private nonisolated static let penaltyProgressPattern = #"^P\s+(\d+)\s*-\s*(\d+)$"#
@@ -2084,12 +2092,21 @@ enum MatchStatusFormatter {
         canonicalStatus(rawStatus) == "POSTPONED"
     }
 
+    nonisolated static func isAbandoned(_ rawStatus: String?) -> Bool {
+        canonicalStatus(rawStatus) == "ABANDONED"
+    }
+
     nonisolated static func preferredStatus(current: String?, incoming: String?) -> String? {
         let currentStatus = normalizedStatus(current)
         let incomingStatus = normalizedStatus(incoming)
 
         guard let currentStatus else { return incomingStatus }
         guard let incomingStatus else { return currentStatus }
+
+        if incomingStatus == "ABANDONED" { return incomingStatus }
+        if currentStatus == "ABANDONED" {
+            return isFinished(incomingStatus) || isInProgress(incomingStatus) ? incomingStatus : currentStatus
+        }
 
         let currentState = statusState(for: currentStatus)
         let incomingState = statusState(for: incomingStatus)
@@ -2279,6 +2296,9 @@ enum MatchStatusFormatter {
         let uppercased = value.uppercased()
         if postponedTokens.contains(uppercased) {
             return "POSTPONED"
+        }
+        if abandonedTokens.contains(uppercased) {
+            return "ABANDONED"
         }
         return uppercased
     }

@@ -321,16 +321,19 @@ async function upsertUserPreferences(record) {
     _id: String(record.deviceToken).trim(),
     updatedAt: record.updatedAt || nowIso,
   };
-  const insertFields = {};
-  if (!Object.prototype.hasOwnProperty.call(doc, "createdAt")) {
-    insertFields.createdAt = nowIso;
-  }
+  // Redis commits can reach Mongo out of order across API/monitor processes.
+  // Keep the newest committed record, including its preferences and lifecycle.
   await collection("user_devices").updateOne(
     { _id: doc._id },
-    {
-      $set: doc,
-      ...(Object.keys(insertFields).length > 0 ? { $setOnInsert: insertFields } : {}),
-    },
+    [{ $replaceWith: { $cond: [
+      { $lte: [{ $ifNull: ["$storageRevision", 0] }, doc.storageRevision || 0] },
+      { $mergeObjects: [
+        "$$ROOT",
+        { $literal: doc },
+        { createdAt: { $ifNull: ["$createdAt", { $literal: doc.createdAt || nowIso }] } },
+      ] },
+      "$$ROOT",
+    ] } }],
     { upsert: true }
   );
   return stripMongoId(doc);

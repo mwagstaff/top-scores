@@ -283,6 +283,26 @@ struct PreferencesView: View {
                     }
 
                     if preferences.notificationsEnabled {
+                        Section("Matches on TV") {
+                            Toggle("TV match reminders", isOn: $preferences.tvMatchRemindersEnabled)
+                            if preferences.tvMatchRemindersEnabled {
+                                Picker("Minimum watchability", selection: $preferences.tvMatchReminderMinimumScore) {
+                                    Text("All televised matches").tag(0)
+                                    Text("Good Watch or better").tag(55)
+                                    Text("Highly Watchable or better").tag(70)
+                                    Text("Must Watch only").tag(85)
+                                }
+                                Picker("Remind me", selection: $preferences.tvMatchReminderMinutes) {
+                                    ForEach([5, 10, 15, 30], id: \.self) { minutes in
+                                        Text("\(minutes) minutes before").tag(minutes)
+                                    }
+                                }
+                            }
+                            Text("Follows your Scores team, competition and channel preferences. Matches with the same kick-off time share one reminder. Streaming delay does not apply.")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
+
                         Section("Notification Events") {
                             NotificationEventToggle(label: "Goals", eventType: "goal", eventTypes: notificationEventTypesBinding)
                             NotificationEventToggle(label: "Kick offs", eventType: "kickoff", eventTypes: notificationEventTypesBinding)

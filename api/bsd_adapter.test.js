@@ -109,10 +109,31 @@ test("mapBsdStatus: future scoreless started event remains upcoming", () => {
   );
 });
 
-test("mapBsdStatus: postponed/abandoned/interrupted → POSTPONED", () => {
+test("mapBsdStatus: abandoned play stays visible, pre-kickoff postponements stay hidden", () => {
   assert.equal(mapBsdStatus({ status: "postponed" }), "POSTPONED");
   assert.equal(mapBsdStatus({ status: "abandoned" }), "POSTPONED");
   assert.equal(mapBsdStatus({ status: "interrupted" }), "POSTPONED");
+  assert.equal(mapBsdStatus({ status: "interrupted", period: "1T", current_minute: 179, home_score: 1, away_score: 0 }), "ABANDONED");
+  assert.equal(mapBsdStatus({ status: "postponed", period: "1T", home_score: 0, away_score: 0 }), "ABANDONED");
+  assert.equal(mapBsdStatus({ status: "abandoned", current_minute: 14, home_score: 0, away_score: 0 }), "ABANDONED");
+});
+
+test("interrupted Barrow fixture retains its score without becoming a finished result", () => {
+  const match = bsdEventToCanonicalMatch({
+    id: 588260,
+    league_id: 91,
+    home_team: "Barrow AFC",
+    away_team: "Forest Green Rovers",
+    event_date: "2026-10-24T14:00:00Z",
+    status: "interrupted",
+    period: "1T",
+    current_minute: 179,
+    home_score: 1,
+    away_score: 0,
+  });
+  assert.equal(match.score_status, "ABANDONED");
+  assert.equal(match.home_score, 1);
+  assert.equal(match.away_score, 0);
 });
 
 test("mapBsdStatus: future postponed and suspended events retain their status", () => {

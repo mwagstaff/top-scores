@@ -103,7 +103,7 @@ app.get("/brand/app-icon", (_req, res) => {
     return;
   }
 
-  res.sendFile(appIconPath);
+  res.sendFile(appIconPath, { maxAge: "1d" });
 });
 
 app.get("/favicon.ico", (_req, res) => {
@@ -112,7 +112,7 @@ app.get("/favicon.ico", (_req, res) => {
     return;
   }
 
-  res.sendFile(faviconPath);
+  res.sendFile(faviconPath, { maxAge: "1d" });
 });
 
 app.get("/apple-touch-icon.png", (_req, res) => {
@@ -121,7 +121,7 @@ app.get("/apple-touch-icon.png", (_req, res) => {
     return;
   }
 
-  res.sendFile(appleTouchIconPath);
+  res.sendFile(appleTouchIconPath, { maxAge: "1d" });
 });
 
 app.get("/logos/team/:teamName", (req, res) => {
@@ -244,6 +244,9 @@ async function start() {
 
   if (isProduction) {
     app.use("/assets", express.static(path.join(productionClientRoot, "assets"), { immutable: true, maxAge: "1y" }));
+    // A ?v= query string marks a versioned URL whose content never changes, so it can be cached indefinitely.
+    const versionedGeneratedAssets = express.static(generatedAssetsRoot, { immutable: true, maxAge: "1y" });
+    app.use("/generated-assets", (req, res, next) => (req.query.v ? versionedGeneratedAssets(req, res, next) : next()));
     app.use(express.static(productionClientRoot, { index: false, maxAge: "1h" }));
     app.get("/generated-assets/*", (_req, res) => {
       res.status(404).end();
@@ -254,7 +257,7 @@ async function start() {
     const manifest = JSON.parse(await fs.promises.readFile(path.join(productionClientRoot, ".vite/manifest.json"), "utf8"));
     const routeAssets = url => {
       const route = new URL(url, canonicalOrigin).pathname;
-      const component = route.startsWith("/matches/") ? "MatchPage" : route.startsWith("/competitions/") ? "CompetitionPage" : route === "/tables" ? "TablesScreen" : route === "/preferences" ? "PreferencesScreen" : null;
+      const component = route.startsWith("/matches/") ? "MatchPage" : route.startsWith("/competitions/") ? "CompetitionPage" : route === "/tables" ? "TablesScreen" : null;
       const visited = new Set(), css = new Set(), scripts = new Set();
       const visit = key => {
         if (visited.has(key) || !manifest[key]) return;
@@ -442,7 +445,9 @@ function loadTeamShortNameEntries() {
 
 function resolveTvLogo(channelName) {
   const normalized = stripDiacritics(channelName).toLowerCase();
-  if (normalized.includes("amazon")) return tvLogoIndex.get("amazon") || null;
+  if (normalized.includes("amazon") || normalized.includes("prime video") || normalized.includes("primevideo")) {
+    return tvLogoIndex.get("amazon") || null;
+  }
   if (normalized.includes("apple")) return tvLogoIndex.get("apple") || null;
   if (normalized.includes("bbc")) return tvLogoIndex.get("bbc") || null;
   if (normalized.includes("channel 4") || normalized.includes("channel4")) {

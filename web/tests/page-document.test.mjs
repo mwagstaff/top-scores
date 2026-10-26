@@ -73,6 +73,17 @@ test("match permalinks return server titles and real not-found responses", async
     globalThis.fetch = original;
   }
 });
+test("retired preferences URL returns a not-found response", async () => {
+  const result = await createPageRenderer("https://example.test/api")(
+    template,
+    "/preferences",
+    "https://football.test",
+  );
+  assert.equal(result.status, 404);
+  assert.match(result.html, /Page not found/);
+  assert.match(result.html, /noindex/);
+  assert.match(result.html, /href="https:\/\/skynolimit\.dev\/">Developed by Sky No Limit<\/a>/);
+});
 test("upstream failure still returns a usable page without fabricated fixtures", async () => {
   const original = globalThis.fetch;
   globalThis.fetch = async () => {

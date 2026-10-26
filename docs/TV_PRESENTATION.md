@@ -24,4 +24,4 @@ Pass both the full team name and the API-provided short name to the website logo
 
 Validation: provider ordering, hot config reload, cache immutability, nested response integration, existing watchability calibration, and web decoding/order preservation are covered by automated tests. Browser checks cover live pills, primary-logo rows, ratings and alternate-name crests.
 
-The website TV Guide sidebar sorts live/upcoming televised matches by descending API watchability score, then kickoff time. Unrated matches sort last. It shows three recommendations and counts other televised matches for the selected date; incomplete pagination is marked with a plus sign.
+The website TV Guide sidebar sorts live/upcoming televised matches by descending API watchability score, then kickoff time. Unrated matches sort last. It shows three recommendations and counts other live/upcoming televised matches for the selected date; incomplete pagination is marked with a plus sign. When none remain, it searches the next 14 days for UK broadcasts, shows matches from the first available date, and links the full guide to that date.

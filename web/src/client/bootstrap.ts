@@ -2,6 +2,7 @@ import { createContext, useContext } from "react";
 
 export interface Seed {
   rendered?: boolean;
+  locale?: string;
   date?: string;
   matches?: Record<string, unknown>[];
   match?: Record<string, unknown>;
@@ -11,9 +12,12 @@ export interface Seed {
 }
 export const initialSeed: Seed | null = (() => {
   try {
-    return JSON.parse(
+    if (Intl.DateTimeFormat().resolvedOptions().timeZone !== "Europe/London") return null;
+    const seed: Seed | null = JSON.parse(
       document.getElementById("football-seed")?.textContent || "null",
     );
+    if (seed?.rendered && seed.locale !== Intl.DateTimeFormat().resolvedOptions().locale) return null;
+    return seed;
   } catch {
     return null;
   }

@@ -25,6 +25,7 @@ const {
     setMatchListLastKnownPayload,
     overlayCurrentDayBsdProjection,
     buildMatchQueryResponseCacheKey,
+    matchesFilters,
     buildTeamRankingsResponseCacheKey,
     buildTeamRankingsBaseCacheKey,
     buildCanonicalMatchWriteAuditEntry,
@@ -1044,6 +1045,14 @@ test("normalizeTeamName canonicalizes team aliases from shared identity config",
 test("normalizeMatchStatusValue canonicalizes postponed status", () => {
   assert.equal(normalizeMatchStatusValue("Match Postponed"), "POSTPONED");
   assert.equal(normalizeMatchStatusValue("POSTPONED"), "POSTPONED");
+  assert.equal(normalizeMatchStatusValue("Match Abandoned"), "ABANDONED");
+});
+
+test("abandoned status replaces stale postponed or live status", () => {
+  assert.equal(pickPreferredMatchStatus("POSTPONED", "ABANDONED"), "ABANDONED");
+  assert.equal(pickPreferredMatchStatus("14", "ABANDONED"), "ABANDONED");
+  assert.equal(pickPreferredMatchStatus("ABANDONED", "POSTPONED"), "ABANDONED");
+  assert.equal(pickPreferredMatchStatus("ABANDONED", "FT"), "FT");
 });
 
 test("normalizeMatchStatusValue canonicalizes penalty shootout progress tallies", () => {
@@ -2297,6 +2306,24 @@ test("buildMatchQueryResponseCacheKey ignores pagination and changes with filter
     buildMatchQueryResponseCacheKey(baseOptions),
     buildMatchQueryResponseCacheKey({ ...baseOptions, homeNations: false })
   );
+  assert.notEqual(
+    buildMatchQueryResponseCacheKey({ ...baseOptions, timeZone: "Asia/Tokyo" }),
+    buildMatchQueryResponseCacheKey({ ...baseOptions, timeZone: "America/Los_Angeles" })
+  );
+});
+
+test("match date filtering uses the requested local day", () => {
+  const filters = {
+    leagues: [], teams: [], channels: [],
+    dateFrom: "2026-10-25", dateTo: "2026-10-25",
+  };
+  const earlyUK = { date: "2026-10-24", time: "23:30" };
+  const lateUK = { date: "2026-10-25", time: "23:30" };
+
+  assert.equal(matchesFilters(earlyUK, { ...filters, timeZone: "Asia/Tokyo" }), true);
+  assert.equal(matchesFilters(earlyUK, { ...filters, timeZone: "Europe/London" }), false);
+  assert.equal(matchesFilters(lateUK, { ...filters, timeZone: "America/Los_Angeles" }), true);
+  assert.equal(matchesFilters(lateUK, { ...filters, timeZone: "Asia/Tokyo" }), false);
 });
 
 test("older match-list rebuild cannot replace a newer live-score payload", () => {

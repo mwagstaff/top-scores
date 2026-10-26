@@ -48,7 +48,6 @@ const matchLink = (match) =>
   `/matches/${encodeURIComponent(match.match_details_id || [match.date, match.time, match.league, match.home_team, match.away_team].join("|"))}?date=${match.date}`;
 
 // A bounded, short-lived cache serves public HTML and its matching client seed.
-// Preferences stay in the browser and never enter a shared server cache.
 export function createPageRenderer(
   apiBaseUrl,
   renderContent,
@@ -168,7 +167,7 @@ export function createPageRenderer(
         sort: "asc",
       });
       const result = await data(`/matches?${query}`);
-      content = `<h1>${escape(title)}</h1><p>${escape(date)} · All times UK</p>`;
+      content = `<h1>${escape(title)}</h1><p>${escape(date)}</p>`;
       if (Array.isArray(result.value)) {
         seed = {
           date,
@@ -207,10 +206,6 @@ export function createPageRenderer(
     } else if (url.pathname === "/tables") {
       title = "League tables";
       content = "<h1>League tables</h1><p>Standings and live positions.</p>";
-    } else if (url.pathname === "/preferences") {
-      title = "Preferences";
-      content =
-        "<h1>Preferences</h1><p>Choose your teams, competitions and channels.</p>";
     } else {
       title = "Page not found";
       content =
@@ -218,13 +213,14 @@ export function createPageRenderer(
       status = 404;
     }
     const canonical = `${origin}${url.pathname === "/fixtures" ? "/" : url.pathname}${validDate(url.searchParams.get("date")) && !matchRoute ? `?date=${date}` : ""}`;
-    const head = `<link rel="canonical" href="${escape(canonical)}"><meta property="og:title" content="${escape(title)} · Top Scores"><meta property="og:description" content="${escape(description)}"><meta property="og:url" content="${escape(canonical)}"><meta property="og:image" content="${escape(origin)}/generated-assets/apple-touch-icon.png">${status !== 200 ? '<meta name="robots" content="noindex">' : ""}`;
-    let root = `<div class="server-page"><a class="wordmark" href="/">top scores.</a><nav aria-label="Primary"><a href="/">Scores & fixtures</a><a href="/tv">On TV</a><a href="/results">Results</a><a href="/tables">Tables</a></nav><main>${content}</main></div>`;
+    const head = `<link rel="canonical" href="${escape(canonical)}"><meta property="og:title" content="${escape(title)} · Top Scores"><meta property="og:description" content="${escape(description)}"><meta property="og:url" content="${escape(canonical)}"><meta property="og:image" content="${escape(origin)}/generated-assets/apple-touch-icon.png?v=2">${status !== 200 ? '<meta name="robots" content="noindex">' : ""}`;
+    let root = `<div class="server-page"><a class="wordmark" href="/">top scores.</a><nav aria-label="Primary"><a href="/">Scores & fixtures</a><a href="/tv">On TV</a><a href="/results">Results</a><a href="/tables">Tables</a></nav><main>${content}</main><footer class="site-footer"><span>Top Scores</span><a href="https://skynolimit.dev/">Developed by Sky No Limit</a></footer></div>`;
     if (renderContent && status === 200) {
       seed = {
         ...seed,
         fetchedAt: seed?.fetchedAt || Date.now(),
         rendered: true,
+        locale: Intl.DateTimeFormat().resolvedOptions().locale,
       };
       root = await renderContent(originalUrl, seed);
     }

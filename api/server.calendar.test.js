@@ -69,6 +69,24 @@ test("calendar selection follows active fixture view options and hides postponed
   assert.deepEqual(visible.map((match) => match.match_details_id), ["1"]);
 });
 
+test("calendar selection keeps an abandoned match when postponed games are hidden", () => {
+  const abandoned = {
+    ...postponed,
+    match_details_id: "588260",
+    home_team: "Barrow AFC",
+    away_team: "Forest Green Rovers",
+    home_score: 1,
+    away_score: 0,
+    score_status: "ABANDONED",
+  };
+  const visible = matchesVisibleForScoresPreferences(
+    [premierLeague, postponed, abandoned],
+    activePreferences(),
+    { fixtureViewContext, premierLeagueTeams: [] }
+  );
+  assert.deepEqual(visible.map((match) => match.match_details_id), ["1", "588260"]);
+});
+
 test("calendar selection honors explicit show all and postponed visibility", () => {
   const visible = matchesVisibleForScoresPreferences(
     [premierLeague, laLiga, postponed],

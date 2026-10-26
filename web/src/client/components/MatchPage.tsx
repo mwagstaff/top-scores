@@ -3,16 +3,17 @@ import { useEffect, useState } from "react";
 import { Link, useLocation, useParams } from "react-router-dom";
 import { cachedMatch, loadDay } from "../dayStore";
 import { normalizeMatch, normalizeMatchDetails } from "../api";
-import { competitionPath, dateLabel, ukChannels, validDate } from "../football";
+import { browserTimeZone, competitionPath, dateLabel, displayTime, ukChannels, validDate } from "../football";
 import {
   aggregateSummary,
   displayStatus,
   isMatchLive,
   isMatchFinished,
+  isMatchAbandoned,
 } from "../matchState";
 import { teamPath } from "../catalog";
-import { goalSummary } from "../goalSummary";
 import type { Match } from "../types";
+import { CompactMatchEvents } from "./CompactMatchEvents";
 import { MatchCard } from "./MatchCard";
 import { ChannelLogo, TeamCrest } from "./FixtureRow";
 import { StadiumBackdrop } from "./StadiumBackdrop";
@@ -66,7 +67,7 @@ export default function MatchPage() {
           return;
         }
         const response = await fetch(
-          `/api/v1/matches/${encodeURIComponent(id)}?time_zone=Europe%2FLondon`,
+          `/api/v1/matches/${encodeURIComponent(id)}?time_zone=${encodeURIComponent(browserTimeZone())}`,
           {
             signal: AbortSignal.any([
               controller.signal,
@@ -133,8 +134,6 @@ export default function MatchPage() {
     );
   const channels = ukChannels(match.tvChannels);
   const live = isMatchLive(match);
-  const homeGoals = goalSummary(match.matchDetails, "home");
-  const awayGoals = goalSummary(match.matchDetails, "away");
   return (
     <article className="match-page">
       <PageMeta
@@ -169,13 +168,13 @@ export default function MatchPage() {
               <strong>
                 {typeof match.homeScore === "number"
                   ? `${match.homeScore} – ${match.awayScore ?? "–"}`
-                  : match.time}
+                  : displayTime(match.time)}
               </strong>
               <span className={live ? "is-live" : ""}>
                 {live && <span className="live-dot" />}
                 {typeof match.homeScore === "number" || match.scoreStatus
                   ? displayStatus(match)
-                  : "KICK-OFF · UK"}
+                  : "KICK-OFF"}
               </span>
             </div>
             <div className="hero-team">
@@ -187,20 +186,8 @@ export default function MatchPage() {
               <h2><Link to={teamPath(match.awayTeam, match.awayTeamId, match.league)}>{match.awayTeam}</Link></h2>
             </div>
           </div>
-          {(live || isMatchFinished(match)) && (homeGoals.length > 0 || awayGoals.length > 0) && (
-            <div className="hero-goal-summary">
-              {[{ team: match.homeTeam, goals: homeGoals }, { team: match.awayTeam, goals: awayGoals }].map(({ team, goals }) => (
-                <ul key={team} aria-label={`${team} goals`}>
-                  {goals.map((goal, index) => (
-                    <li key={`${goal.minute}-${index}`} aria-label={goal.label}>
-                      <span className="goal-minute">{goal.minute}</span>{" "}
-                      <span>{goal.scorer}</span>{" "}
-                      {goal.assister && <span className="goal-assister">({goal.assister})</span>}
-                    </li>
-                  ))}
-                </ul>
-              ))}
-            </div>
+          {(live || isMatchFinished(match) || isMatchAbandoned(match)) && (
+            <CompactMatchEvents details={match.matchDetails} homeTeam={match.homeTeam} awayTeam={match.awayTeam} className="hero-goal-summary" />
           )}
           <p className="hero-match-date">
             {validDate(match.date) ? dateLabel(match.date) : match.date}
@@ -210,6 +197,7 @@ export default function MatchPage() {
                 ? ` · ${aggregateSummary(match)}`
                 : ""}
           </p>
+          {isMatchAbandoned(match) && <p className="hero-match-date">Match abandoned · score does not count</p>}
         </div>
       </header>
       {error && (
@@ -218,7 +206,7 @@ export default function MatchPage() {
           <button onClick={() => setRetry((v) => v + 1)}>Try again</button>
         </div>
       )}
-      {!isMatchFinished(match) && (
+      {!isMatchFinished(match) && !isMatchAbandoned(match) && (
         <section className="uk-broadcast-panel">
           <div>
             <span className="eyebrow">Where to watch</span>
@@ -235,7 +223,6 @@ export default function MatchPage() {
               <p>No UK broadcast confirmed.</p>
             )}
           </div>
-          <small>Listings may change. Check with your broadcaster.</small>
         </section>
       )}
       <MatchCard key={id} match={match} detailOnly />

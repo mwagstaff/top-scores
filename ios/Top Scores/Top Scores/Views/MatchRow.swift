@@ -64,9 +64,11 @@ struct MatchRow: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.colorScheme) private var colorScheme
     @ObservedObject private var teamColorCatalog = TeamColorCatalog.shared
+    @State private var loadedTeamEvents: MatchDetailsPayload?
 
     let match: Match
     var showTeamEvents: Bool = false
+    var apiBaseURL: String? = nil
     var showLeague: Bool = false
     var showBroadcastDetails: Bool = true
     var showFantasyBadge: Bool = true
@@ -88,6 +90,40 @@ struct MatchRow: View {
     var body: some View {
         matchCard
             .opacity(match.isPostponed ? 0.5 : 1.0)
+            .task(id: "\(match.matchDetailsID ?? match.id)|\(showTeamEvents)|\(match.isInProgress)|\(match.isFinished)|\(match.isAbandoned)") {
+                await loadTeamEventsIfNeeded()
+            }
+    }
+
+    private func loadTeamEventsIfNeeded() async {
+        guard showTeamEvents,
+              match.isInProgress || match.isFinished || match.isAbandoned,
+              let detailsID = match.matchDetailsID,
+              let apiBaseURL,
+              let baseURL = URL(string: apiBaseURL) else { return }
+
+        if !match.isInProgress, let cached = await MatchDetailsCache.shared.load(for: detailsID),
+           !Task.isCancelled {
+            loadedTeamEvents = cached
+        }
+
+        repeat {
+            do {
+                let details = try await APIClient(baseURL: baseURL).fetchMatchDetails(matchId: detailsID)
+                guard !Task.isCancelled else { return }
+                loadedTeamEvents = details
+                await MatchDetailsCache.shared.save(details, for: detailsID)
+            } catch {
+                if Task.isCancelled { return }
+            }
+            guard match.isInProgress else { return }
+            try? await Task.sleep(for: .seconds(30))
+        } while !Task.isCancelled
+    }
+
+    private var teamEventDetails: MatchDetailsPayload? {
+        guard showTeamEvents, loadedTeamEvents?.id == match.matchDetailsID else { return nil }
+        return loadedTeamEvents
     }
 
     private var matchCard: some View {
@@ -259,6 +295,11 @@ struct MatchRow: View {
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .center)
             }
+
+            if showTeamEvents && hasTeamMatchEvents {
+                MatchTeamEventListView(entries: teamEventEntries)
+                    .padding(.top, 4)
+            }
         }
         .padding(cardPadding)
         .fixedSize(horizontal: false, vertical: true)
@@ -306,12 +347,14 @@ struct MatchRow: View {
             Text(displayName)
                 .font(teamNameFont)
                 .foregroundStyle(.primary)
+                .opacity(match.isAbandoned ? 0.5 : 1.0)
                 .lineLimit(2)
 
             if let summary {
                 Text(Self.ordinal(summary.position))
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(Color.accentColor)
+                    .opacity(match.isAbandoned ? 0.5 : 1.0)
 
                 if !summary.form.isEmpty {
                     HStack(spacing: 3) {
@@ -361,6 +404,7 @@ struct MatchRow: View {
             Text(displayName)
                 .font(teamNameFont)
                 .foregroundStyle(.primary)
+                .opacity(match.isAbandoned ? 0.5 : 1.0)
                 .lineLimit(1)
                 .truncationMode(.tail)
 
@@ -368,6 +412,7 @@ struct MatchRow: View {
                 Text(Self.ordinal(summary.position))
                     .font(.caption2.weight(.bold))
                     .foregroundStyle(Color.accentColor)
+                    .opacity(match.isAbandoned ? 0.5 : 1.0)
 
                 if !summary.form.isEmpty {
                     HStack(spacing: 2) {
@@ -441,6 +486,9 @@ struct MatchRow: View {
         if match.isPostponed {
             return match.time
         }
+        if match.isAbandoned {
+            return "ABD"
+        }
         if let status = match.displayScoreStatus {
             return status
         }
@@ -466,7 +514,7 @@ struct MatchRow: View {
 
     private var fantasyPlayerContributions: [FantasyMatchContributionDisplay] {
         guard showFantasyPlayerContributions,
-              !match.isPostponed,
+              !match.isPostponed, !match.isAbandoned,
               rowPreferences.hasFantasyManagerEntry,
               fantasyContext.isEligibleFixture(match),
               let lookup = fantasyContext.lookup
@@ -490,7 +538,7 @@ struct MatchRow: View {
     }
 
     private var shouldShowFooterRow: Bool {
-        if match.isPostponed {
+        if match.isPostponed || match.isAbandoned {
             return false
         }
         return (showBroadcastDetails && !isMatchFinished) ||
@@ -567,7 +615,8 @@ struct MatchRow: View {
             MatchTimeStatusView(
                 text: centerStatusText,
                 isLive: match.isInProgress,
-                isLargePresentation: isLargePresentation
+                isLargePresentation: isLargePresentation,
+                accessibilityText: match.isAbandoned ? "Match abandoned" : nil
             )
             .fixedSize(horizontal: true, vertical: false)
 
@@ -589,6 +638,7 @@ struct MatchRow: View {
             }
         }
         .fixedSize(horizontal: true, vertical: false)
+        .opacity(match.isAbandoned ? 0.5 : 1.0)
     }
 
     private var aggregateHomeBracketText: String? {
@@ -760,7 +810,7 @@ struct MatchRow: View {
     }
 
     static func shouldShowCompactBroadcastLogo(for match: Match) -> Bool {
-        !match.isFinished
+        !match.isFinished && !match.isAbandoned
     }
 
     private var compactFixtureVerticalSpacing: CGFloat {
@@ -775,34 +825,18 @@ struct MatchRow: View {
         8
     }
 
-    private var homeTeamEvents: [MatchTeamTimelineEvent] {
-        MatchTimelineBuilder.teamTimelineEvents(
-            goals: match.homeGoalScorers,
-            assists: match.homeAssists,
-            redCards: match.homeRedCards
-        )
-    }
-
-    private var awayTeamEvents: [MatchTeamTimelineEvent] {
-        MatchTimelineBuilder.teamTimelineEvents(
-            goals: match.awayGoalScorers,
-            assists: match.awayAssists,
-            redCards: match.awayRedCards
-        )
-    }
-
     private var hasTeamMatchEvents: Bool {
-        !homeTeamEvents.isEmpty || !awayTeamEvents.isEmpty
+        !teamEventEntries.isEmpty
     }
 
     private var teamEventEntries: [MatchTeamEventEntry] {
         MatchTimelineBuilder.mergedTeamTimelineEvents(
-            homeGoals: match.homeGoalScorers,
-            homeAssists: match.homeAssists,
-            homeRedCards: match.homeRedCards,
-            awayGoals: match.awayGoalScorers,
-            awayAssists: match.awayAssists,
-            awayRedCards: match.awayRedCards
+            homeGoals: teamEventDetails?.homeGoalScorers ?? match.homeGoalScorers,
+            homeAssists: teamEventDetails?.homeAssists ?? match.homeAssists,
+            homeRedCards: teamEventDetails?.homeRedCards ?? match.homeRedCards,
+            awayGoals: teamEventDetails?.awayGoalScorers ?? match.awayGoalScorers,
+            awayAssists: teamEventDetails?.awayAssists ?? match.awayAssists,
+            awayRedCards: teamEventDetails?.awayRedCards ?? match.awayRedCards
         )
     }
 }
@@ -815,7 +849,7 @@ func fantasyParticipationBadgeVisibility(
     fantasyContext: FantasyMatchRowContext
 ) -> Bool {
     guard showFantasyBadge,
-          !match.isPostponed,
+          !match.isPostponed, !match.isAbandoned,
           rowPreferences.hasFantasyManagerEntry,
           isFantasyBadgeEnabled(
             for: layoutStyle,
@@ -1093,7 +1127,7 @@ private struct MatchEventIconView: View {
     }
 }
 
-private enum MatchEventKind {
+private enum MatchEventKind: Equatable {
     case goal
     case ownGoal
     case redCard
@@ -1179,13 +1213,15 @@ private enum MatchTimelineBuilder {
             goals: homeGoals,
             assists: homeAssists,
             redCards: homeRedCards
-        ).map { MatchTeamEventEntry(side: .home, event: $0) }
+        ).filter { $0.kind != .disallowedGoal }
+            .map { MatchTeamEventEntry(side: $0.kind == .ownGoal ? .away : .home, event: $0) }
 
         let awayEvents = teamTimelineEvents(
             goals: awayGoals,
             assists: awayAssists,
             redCards: awayRedCards
-        ).map { MatchTeamEventEntry(side: .away, event: $0) }
+        ).filter { $0.kind != .disallowedGoal }
+            .map { MatchTeamEventEntry(side: $0.kind == .ownGoal ? .home : .away, event: $0) }
 
         return (homeEvents + awayEvents).sorted { lhs, rhs in
             if lhs.event.minute.base != rhs.event.minute.base {
@@ -1433,6 +1469,7 @@ struct MatchTimeStatusView: View {
     let text: String
     let isLive: Bool
     var isLargePresentation: Bool = false
+    var accessibilityText: String? = nil
 
     @State private var isPulsing = false
 
@@ -1498,7 +1535,7 @@ struct MatchTimeStatusView: View {
                 }
             }
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(Text(verbatim: accessibilityStatusText))
+            .accessibilityLabel(Text(verbatim: accessibilityText ?? accessibilityStatusText))
             .onAppear {
                 isPulsing = shouldPulse
             }

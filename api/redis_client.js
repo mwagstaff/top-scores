@@ -811,34 +811,35 @@ function mergedLiveActivityState(existingState = {}, patch = {}) {
   };
 }
 
-// Preference syncs and ActivityKit callbacks arrive independently and can run
-// in different server processes. Merge lifecycle fields inside Redis so a
-// preference write that started earlier cannot erase a newly registered token.
-const SAVE_PREFERENCES_PRESERVING_LIVE_ACTIVITY_SCRIPT = `
-local incoming = cjson.decode(ARGV[1])
-local patch = cjson.decode(ARGV[2])
-local currentRaw = redis.call('GET', KEYS[1])
-local liveActivity = {}
-
-if currentRaw then
-  local current = cjson.decode(currentRaw)
-  if current.liveActivity then
-    liveActivity = current.liveActivity
-  end
-elseif incoming.liveActivity then
-  liveActivity = incoming.liveActivity
-end
-
-for key, value in pairs(patch) do
-  liveActivity[key] = value
-end
-
-incoming.liveActivity = liveActivity
-local encoded = cjson.encode(incoming)
-redis.call('SET', KEYS[1], encoded, 'EX', ARGV[3])
+// Compare the exact JSON read before replacing it. Merge in JavaScript so empty
+// arrays retain their type (Redis Lua cjson encodes empty arrays as objects).
+const SAVE_USER_PREFERENCES_SCRIPT = `
+local current = redis.call('GET', KEYS[1])
+if (current or '') ~= ARGV[1] then return 0 end
+redis.call('SET', KEYS[1], ARGV[2], 'EX', ARGV[3])
 redis.call('SADD', KEYS[2], ARGV[4])
-return encoded
+return 1
 `;
+
+async function mutateUserPreferences(redisClient, token, mutate) {
+  const key = buildUserPreferencesKey(token);
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const raw = await redisClient.get(key);
+    const current = raw
+      ? safeJsonParse(raw, `user preferences ${token}`)
+      : await mongoStore.getUserPreferences(token);
+    const next = mutate(current);
+    if (next === current) return current;
+    next.storageRevision = Math.max(0, Number(current?.storageRevision) || 0) + 1;
+    next.updatedAt = new Date().toISOString();
+    const saved = await redisClient.eval(SAVE_USER_PREFERENCES_SCRIPT, {
+      keys: [key, USER_PREFERENCES_INDEX_KEY],
+      arguments: [raw || "", JSON.stringify(next), String(USER_PREFERENCES_TTL_SECONDS), token],
+    });
+    if (saved) return next;
+  }
+  throw new Error("User preferences changed too frequently to save safely");
+}
 
 function mergePreferenceWriteLiveActivity(incomingState = {}, currentState = {}, patch = {}) {
   const incoming = incomingState && typeof incomingState === "object" ? incomingState : {};
@@ -853,11 +854,6 @@ function mergePreferenceWriteLiveActivity(incomingState = {}, currentState = {},
     ...incoming,
     liveActivity: mergedLiveActivityState(currentLiveActivity, patch),
   };
-}
-
-function recordUpdatedAtMs(record) {
-  const parsed = Date.parse(String(record && record.updatedAt ? record.updatedAt : "").trim());
-  return Number.isFinite(parsed) ? parsed : null;
 }
 
 function normalizedPreferencesRevision(value) {
@@ -884,19 +880,6 @@ function isStalePreferencesRevision(incoming, existing) {
   );
 }
 
-function freshestUserRecord(...records) {
-  return records
-    .filter((record) => record && typeof record === "object")
-    .sort((left, right) => {
-      const leftMs = recordUpdatedAtMs(left);
-      const rightMs = recordUpdatedAtMs(right);
-      if (leftMs === null && rightMs === null) return 0;
-      if (leftMs === null) return 1;
-      if (rightMs === null) return -1;
-      return rightMs - leftMs;
-    })[0] || null;
-}
-
 let notificationTeamSubscriptionResolver = null;
 function setNotificationTeamSubscriptionResolver(resolver) {
   notificationTeamSubscriptionResolver = typeof resolver === "function" ? resolver : null;
@@ -914,103 +897,83 @@ async function saveUserPreferences(
   }
 
   const normalizedToken = deviceToken.trim();
-  const key = buildUserPreferencesKey(normalizedToken);
 
   try {
     const redisClient = await getClient();
-    let existing = null;
-    if (options && options.mergeExisting !== false) {
-      const rawExisting = await redisClient.get(key);
-      existing = rawExisting
-        ? safeJsonParse(rawExisting, `user preferences ${normalizedToken}`)
-        : await mongoStore.getUserPreferences(normalizedToken);
-    }
-
-    const incomingPreferencesRevision = normalizedPreferencesRevision(
-      options && options.preferencesRevision
-    );
-    const existingPreferencesRevision = normalizedPreferencesRevision(
-      existing && existing.preferencesRevision
-    );
-    if (isStalePreferencesRevision(incomingPreferencesRevision, existingPreferencesRevision)) {
-      console.warn(
-        `[Redis] Ignoring stale preferences revision ${incomingPreferencesRevision} for ` +
-        `${normalizedToken.substring(0, 12)}...; latest is ${existingPreferencesRevision}`
+    const savedData = await mutateUserPreferences(redisClient, normalizedToken, (current) => {
+      const existing = options && options.mergeExisting === false ? null : current;
+      const incomingPreferencesRevision = normalizedPreferencesRevision(
+        options && options.preferencesRevision
       );
-      return attachRedisMetricMeta(existing, { payloadBytes: utf8ByteLength(JSON.stringify(existing)) });
-    }
+      const existingPreferencesRevision = normalizedPreferencesRevision(
+        current && current.preferencesRevision
+      );
+      if (isStalePreferencesRevision(incomingPreferencesRevision, existingPreferencesRevision)) {
+        console.warn(
+          `[Redis] Ignoring stale preferences revision ${incomingPreferencesRevision} for ` +
+          `${normalizedToken.substring(0, 12)}...; latest is ${existingPreferencesRevision}`
+        );
+        return current;
+      }
 
-    const resolvedAPNSToken = apnsToken !== undefined
-      ? normalizeOptionalToken(apnsToken)
-      : normalizeOptionalToken(existing && existing.apnsToken);
-    const resolvedIsDevelopmentBuild = typeof isDevelopmentBuild === "boolean"
-      ? isDevelopmentBuild
-      : Boolean(existing && existing.isDevelopmentBuild);
-    const resolvedPreferences =
-      preferences && typeof preferences === "object"
-        ? preferences
-        : existing && typeof existing.preferences === "object"
-          ? existing.preferences
-          : {};
-    const hasFantasyStatePatch =
-      options &&
-      Object.prototype.hasOwnProperty.call(options, "fantasy");
-    const resolvedFantasy = hasFantasyStatePatch
-      ? normalizeFantasyState(options.fantasy)
-      : existing && Object.prototype.hasOwnProperty.call(existing, "fantasy")
-        ? existing.fantasy
-        : null;
-    const liveActivityPatch = options && options.liveActivity
-      ? normalizeLiveActivityStatePatch(options.liveActivity)
-      : {};
-    const existingLiveActivity =
-      existing && existing.liveActivity && typeof existing.liveActivity === "object"
-        ? existing.liveActivity
+      const resolvedAPNSToken = apnsToken !== undefined
+        ? normalizeOptionalToken(apnsToken)
+        : normalizeOptionalToken(existing && existing.apnsToken);
+      const resolvedIsDevelopmentBuild = typeof isDevelopmentBuild === "boolean"
+        ? isDevelopmentBuild
+        : Boolean(existing && existing.isDevelopmentBuild);
+      const resolvedPreferences =
+        preferences && typeof preferences === "object"
+          ? preferences
+          : existing && typeof existing.preferences === "object"
+            ? existing.preferences
+            : {};
+      const hasFantasyStatePatch =
+        options &&
+        Object.prototype.hasOwnProperty.call(options, "fantasy");
+      const resolvedFantasy = hasFantasyStatePatch
+        ? normalizeFantasyState(options.fantasy)
+        : existing && Object.prototype.hasOwnProperty.call(existing, "fantasy")
+          ? existing.fantasy
+          : null;
+      const liveActivityPatch = options && options.liveActivity
+        ? normalizeLiveActivityStatePatch(options.liveActivity)
         : {};
+      const existingLiveActivity =
+        existing && existing.liveActivity && typeof existing.liveActivity === "object"
+          ? existing.liveActivity
+          : {};
 
-    const data = {
-      ...(existing && typeof existing === "object" ? existing : {}),
-      deviceToken: normalizedToken,
-      preferencesRevision: incomingPreferencesRevision ?? existingPreferencesRevision,
-      apnsToken: resolvedAPNSToken,
-      isDevelopmentBuild: resolvedIsDevelopmentBuild,
-      preferences: resolvedPreferences,
-      fantasy: resolvedFantasy,
-      liveActivity: {
-        ...existingLiveActivity,
-        ...liveActivityPatch,
-      },
-      updatedAt: new Date().toISOString(),
-    };
+      const data = {
+        ...(existing && typeof existing === "object" ? existing : {}),
+        deviceToken: normalizedToken,
+        preferencesRevision: incomingPreferencesRevision ?? existingPreferencesRevision,
+        apnsToken: resolvedAPNSToken,
+        isDevelopmentBuild: resolvedIsDevelopmentBuild,
+        preferences: resolvedPreferences,
+        fantasy: resolvedFantasy,
+        liveActivity: {
+          ...existingLiveActivity,
+          ...liveActivityPatch,
+        },
+        updatedAt: new Date().toISOString(),
+      };
 
-    if (notificationTeamSubscriptionResolver) {
-      const subscriptions = notificationTeamSubscriptionResolver(data);
-      if (JSON.stringify(subscriptions) !== JSON.stringify(data.notificationTeamSubscriptions)) {
-        data.notificationTeamSubscriptionsUpdatedAt = data.updatedAt;
+      if (notificationTeamSubscriptionResolver) {
+        const subscriptions = notificationTeamSubscriptionResolver(data);
+        if (JSON.stringify(subscriptions) !== JSON.stringify(data.notificationTeamSubscriptions)) {
+          data.notificationTeamSubscriptionsUpdatedAt = data.updatedAt;
+        }
+        data.notificationTeamSubscriptions = subscriptions;
       }
-      data.notificationTeamSubscriptions = subscriptions;
-    }
-    const serializedData = await redisClient.eval(
-      SAVE_PREFERENCES_PRESERVING_LIVE_ACTIVITY_SCRIPT,
-      {
-        keys: [key, USER_PREFERENCES_INDEX_KEY],
-        arguments: [
-          JSON.stringify(data),
-          JSON.stringify(liveActivityPatch),
-          String(USER_PREFERENCES_TTL_SECONDS),
-          normalizedToken,
-        ],
-      }
-    );
-    const savedData = safeJsonParse(
-      String(serializedData),
-      `atomically saved user preferences ${normalizedToken}`
-    );
+      return mergePreferenceWriteLiveActivity(data, current, liveActivityPatch);
+    });
+    const serializedData = JSON.stringify(savedData);
     await mongoStore.upsertUserPreferences(savedData).catch((error) => {
       console.warn("[Mongo] Failed mirroring user preferences:", error.message || error);
     });
     console.log(
-      `[Redis] Saved preferences for device: ${normalizedToken.substring(0, 12)}... (APNS: ${resolvedAPNSToken ? "Yes" : "No"}, Dev: ${resolvedIsDevelopmentBuild})`
+      `[Redis] Saved preferences for device: ${normalizedToken.substring(0, 12)}... (APNS: ${savedData.apnsToken ? "Yes" : "No"}, Dev: ${savedData.isDevelopmentBuild})`
     );
     return attachRedisMetricMeta(savedData, { payloadBytes: utf8ByteLength(serializedData) });
   } catch (error) {
@@ -1159,44 +1122,29 @@ async function updateUserLiveActivityState(deviceToken, liveActivityPatch = {}, 
   }
 
   const normalizedToken = deviceToken.trim();
-  const key = buildUserPreferencesKey(normalizedToken);
-  const nowIso = new Date().toISOString();
 
   try {
     const redisClient = await getClient();
-    const raw = await redisClient.get(key);
-    const existing = raw
-      ? safeJsonParse(raw, `user preferences ${normalizedToken}`)
-      : await mongoStore.getUserPreferences(normalizedToken);
-    // Live-activity callbacks can race with preference/fantasy sync writes.
-    // Re-read the latest record before persisting so we don't resurrect stale fantasy data.
-    const latestRaw = await redisClient.get(key);
-    const latest = latestRaw ? safeJsonParse(latestRaw, `user preferences latest ${normalizedToken}`) : null;
-    const freshest = freshestUserRecord(latest, existing);
-    const existingPreferences =
-      freshest && typeof freshest.preferences === "object" ? freshest.preferences : {};
-    const existingLiveActivity =
-      freshest && freshest.liveActivity && typeof freshest.liveActivity === "object"
-        ? freshest.liveActivity
-        : {};
-    const data = {
-      ...(freshest && typeof freshest === "object" ? freshest : {}),
-      deviceToken: normalizedToken,
-      apnsToken: normalizeOptionalToken(freshest && freshest.apnsToken),
-      isDevelopmentBuild:
-        typeof options.isDevelopmentBuild === "boolean"
-          ? options.isDevelopmentBuild
-          : Boolean(freshest && freshest.isDevelopmentBuild),
-      preferences: existingPreferences,
-      liveActivity: mergedLiveActivityState(existingLiveActivity, liveActivityPatch),
-      updatedAt: nowIso,
-    };
-
+    const data = await mutateUserPreferences(redisClient, normalizedToken, (freshest) => {
+      const existingPreferences =
+        freshest && typeof freshest.preferences === "object" ? freshest.preferences : {};
+      const existingLiveActivity =
+        freshest && freshest.liveActivity && typeof freshest.liveActivity === "object"
+          ? freshest.liveActivity
+          : {};
+      return {
+        ...(freshest && typeof freshest === "object" ? freshest : {}),
+        deviceToken: normalizedToken,
+        apnsToken: normalizeOptionalToken(freshest && freshest.apnsToken),
+        isDevelopmentBuild:
+          typeof options.isDevelopmentBuild === "boolean"
+            ? options.isDevelopmentBuild
+            : Boolean(freshest && freshest.isDevelopmentBuild),
+        preferences: existingPreferences,
+        liveActivity: mergedLiveActivityState(existingLiveActivity, liveActivityPatch),
+      };
+    });
     const serializedData = JSON.stringify(data);
-    const transaction = redisClient.multi();
-    transaction.set(key, serializedData, { EX: USER_PREFERENCES_TTL_SECONDS });
-    transaction.sAdd(USER_PREFERENCES_INDEX_KEY, normalizedToken);
-    await transaction.exec();
     await mongoStore.upsertUserPreferences(data).catch((error) => {
       console.warn("[Mongo] Failed mirroring live activity state:", error.message || error);
     });

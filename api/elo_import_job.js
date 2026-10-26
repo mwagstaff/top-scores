@@ -10,7 +10,7 @@ function createEloImportRunner({
   wait = sleep,
   random = Math.random,
   now = Date.now,
-  host = os.hostname(),
+  host = process.env.MONITORING_HOST || (os.hostname() === "ubuntu-4gb-hel1-2" ? "sky" : os.hostname()),
   logger = console,
 } = {}) {
   const running = new Set();

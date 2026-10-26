@@ -15,6 +15,7 @@ struct ContentView: View {
 
     @AppStorage("fantasy.managerEntryID") private var fantasyManagerEntryID = ""
     @State private var selectedTab = 0
+    @ObservedObject private var notificationManager = NotificationManager.shared
     @State private var fantasyTabBadge: String?
     @State private var fantasyTabShouldPulse = false
     @State private var fantasyTabHasLivePlayer = false
@@ -107,6 +108,9 @@ struct ContentView: View {
                 coordinator: fixturesCoordinator,
                 content: .teamPicker
             )
+        }
+        .sheet(item: $notificationManager.pendingTVReminder) { target in
+            TVReminderMatchesView(target: target)
         }
         .crashBreadcrumb("team_picker", isPresented: fixturesCoordinator.isTeamPickerPresented)
         .onChange(of: selectedTab) { _, tab in CrashBreadcrumbs.record("tab \(tab)") }

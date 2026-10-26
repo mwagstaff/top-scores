@@ -1,11 +1,12 @@
 import { normalizeMatch } from "./api";
 import type { Match, MatchesPayload } from "./types";
 import { initialSeed } from "./bootstrap";
+import { browserTimeZone } from "./football";
 
 export type DayEntry = MatchesPayload & { fetchedAt: number };
 const cache = new Map<string, DayEntry>();
 const pending = new Map<string, Promise<DayEntry>>();
-const storageKey = "top-scores.days.v2";
+const storageKey = `top-scores.days.v3:${browserTimeZone()}`;
 const keyFor = (date: string, epl: boolean | string) => `${date}:${epl}`;
 try {
   for (const [key, value] of JSON.parse(
@@ -73,7 +74,7 @@ export async function loadDay(
     const query = new URLSearchParams({
       start: date,
       end: date,
-      time_zone: "Europe/London",
+      time_zone: browserTimeZone(),
       page_size: "200",
       page: String(page),
       sort: "asc",

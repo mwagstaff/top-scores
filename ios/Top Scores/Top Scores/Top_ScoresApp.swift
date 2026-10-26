@@ -237,6 +237,10 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         diagnosticLog("[APNS] User interacted with push: %@", response.notification.request.identifier)
+        if response.actionIdentifier == UNNotificationDefaultActionIdentifier,
+           let target = TVReminderTarget(userInfo: response.notification.request.content.userInfo) {
+            NotificationManager.shared.pendingTVReminder = target
+        }
         completionHandler()
     }
 }

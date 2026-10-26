@@ -100,3 +100,13 @@ test("successful next run resolves the same alert fingerprint", async () => {
   assert.equal(h.requests[0].alert.startsAt, h.requests[2].alert.startsAt);
   assert.match(h.requests[2].alert.annotations.summary, /recovered/);
 });
+
+test("Sky OS hostname uses the registered monitoring host", async (t) => {
+  t.mock.method(require("node:os"), "hostname", () => "ubuntu-4gb-hel1-2");
+  const original = process.env.MONITORING_HOST;
+  delete process.env.MONITORING_HOST;
+  t.after(() => { if (original === undefined) delete process.env.MONITORING_HOST; else process.env.MONITORING_HOST = original; });
+  const h = harness({host:undefined});
+  await h.run("club", "Club Elo", async () => ({success:false}));
+  assert.equal(h.requests[0].alert.labels.host,"sky");
+});

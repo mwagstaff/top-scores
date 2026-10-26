@@ -195,6 +195,9 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
     let notificationHomeNationsFilterEnabled: Bool
     let notificationMajorTournamentsFilterEnabled: Bool
     let fantasyDeadlineRemindersEnabled: Bool
+    let tvMatchRemindersEnabled: Bool
+    let tvMatchReminderMinimumScore: Int
+    let tvMatchReminderMinutes: Int
     let showTodayUnfinishedFixturesBadge: Bool
     let fixturesViewDensity: FixturesViewDensity
     let showCompactFixtureTvLogo: Bool
@@ -274,6 +277,9 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         notificationHomeNationsFilterEnabled: Bool = PreferencesStore.defaultNotificationHomeNationsFilterEnabled,
         notificationMajorTournamentsFilterEnabled: Bool = PreferencesStore.defaultNotificationMajorTournamentsFilterEnabled,
         fantasyDeadlineRemindersEnabled: Bool = PreferencesStore.defaultFantasyDeadlineRemindersEnabled,
+        tvMatchRemindersEnabled: Bool = PreferencesStore.defaultTvMatchRemindersEnabled,
+        tvMatchReminderMinimumScore: Int = PreferencesStore.defaultTvMatchReminderMinimumScore,
+        tvMatchReminderMinutes: Int = PreferencesStore.defaultTvMatchReminderMinutes,
         showTodayUnfinishedFixturesBadge: Bool = PreferencesStore.defaultShowTodayUnfinishedFixturesBadge,
         fixturesViewDensity: FixturesViewDensity = PreferencesStore.defaultFixturesViewDensity,
         showCompactFixtureTvLogo: Bool = PreferencesStore.defaultShowCompactFixtureTvLogo,
@@ -313,6 +319,9 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         self.notificationHomeNationsFilterEnabled = notificationHomeNationsFilterEnabled
         self.notificationMajorTournamentsFilterEnabled = notificationMajorTournamentsFilterEnabled
         self.fantasyDeadlineRemindersEnabled = fantasyDeadlineRemindersEnabled
+        self.tvMatchRemindersEnabled = tvMatchRemindersEnabled
+        self.tvMatchReminderMinimumScore = tvMatchReminderMinimumScore
+        self.tvMatchReminderMinutes = tvMatchReminderMinutes
         self.showTodayUnfinishedFixturesBadge = showTodayUnfinishedFixturesBadge
         self.fixturesViewDensity = fixturesViewDensity
         self.showCompactFixtureTvLogo = showCompactFixtureTvLogo
@@ -354,6 +363,9 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         case notificationHomeNationsFilterEnabled
         case notificationMajorTournamentsFilterEnabled
         case fantasyDeadlineRemindersEnabled
+        case tvMatchRemindersEnabled
+        case tvMatchReminderMinimumScore
+        case tvMatchReminderMinutes
         case showTodayUnfinishedFixturesBadge
         case fixturesViewDensity
         case showCompactFixtureTvLogo
@@ -412,6 +424,9 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         notificationAllMajorMatchesEnabled = try container.decodeIfPresent(Bool.self, forKey: .notificationAllMajorMatchesEnabled)
             ?? PreferencesStore.defaultNotificationAllMajorMatchesEnabled
         fantasyDeadlineRemindersEnabled = try container.decodeIfPresent(Bool.self, forKey: .fantasyDeadlineRemindersEnabled) ?? PreferencesStore.defaultFantasyDeadlineRemindersEnabled
+        tvMatchRemindersEnabled = try container.decodeIfPresent(Bool.self, forKey: .tvMatchRemindersEnabled) ?? PreferencesStore.defaultTvMatchRemindersEnabled
+        tvMatchReminderMinimumScore = try container.decodeIfPresent(Int.self, forKey: .tvMatchReminderMinimumScore) ?? PreferencesStore.defaultTvMatchReminderMinimumScore
+        tvMatchReminderMinutes = try container.decodeIfPresent(Int.self, forKey: .tvMatchReminderMinutes) ?? PreferencesStore.defaultTvMatchReminderMinutes
         showTodayUnfinishedFixturesBadge = try container.decodeIfPresent(Bool.self, forKey: .showTodayUnfinishedFixturesBadge) ?? PreferencesStore.defaultShowTodayUnfinishedFixturesBadge
         fixturesViewDensity = try container.decodeIfPresent(FixturesViewDensity.self, forKey: .fixturesViewDensity) ?? PreferencesStore.defaultFixturesViewDensity
         showCompactFixtureTvLogo = try container.decodeIfPresent(Bool.self, forKey: .showCompactFixtureTvLogo) ?? PreferencesStore.defaultShowCompactFixtureTvLogo
@@ -458,6 +473,9 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         try container.encode(notificationHomeNationsFilterEnabled, forKey: .notificationHomeNationsFilterEnabled)
         try container.encode(notificationMajorTournamentsFilterEnabled, forKey: .notificationMajorTournamentsFilterEnabled)
         try container.encode(fantasyDeadlineRemindersEnabled, forKey: .fantasyDeadlineRemindersEnabled)
+        try container.encode(tvMatchRemindersEnabled, forKey: .tvMatchRemindersEnabled)
+        try container.encode(tvMatchReminderMinimumScore, forKey: .tvMatchReminderMinimumScore)
+        try container.encode(tvMatchReminderMinutes, forKey: .tvMatchReminderMinutes)
         try container.encode(showTodayUnfinishedFixturesBadge, forKey: .showTodayUnfinishedFixturesBadge)
         try container.encode(fixturesViewDensity, forKey: .fixturesViewDensity)
         try container.encode(showCompactFixtureTvLogo, forKey: .showCompactFixtureTvLogo)
@@ -499,6 +517,9 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         lhs.notificationHomeNationsFilterEnabled == rhs.notificationHomeNationsFilterEnabled &&
         lhs.notificationMajorTournamentsFilterEnabled == rhs.notificationMajorTournamentsFilterEnabled &&
         lhs.fantasyDeadlineRemindersEnabled == rhs.fantasyDeadlineRemindersEnabled &&
+        lhs.tvMatchRemindersEnabled == rhs.tvMatchRemindersEnabled &&
+        lhs.tvMatchReminderMinimumScore == rhs.tvMatchReminderMinimumScore &&
+        lhs.tvMatchReminderMinutes == rhs.tvMatchReminderMinutes &&
         lhs.showTodayUnfinishedFixturesBadge == rhs.showTodayUnfinishedFixturesBadge &&
         lhs.fixturesViewDensity == rhs.fixturesViewDensity &&
         lhs.showCompactFixtureTvLogo == rhs.showCompactFixtureTvLogo &&
@@ -606,6 +627,9 @@ final class PreferencesStore: ObservableObject {
     nonisolated static let defaultNotificationHomeNationsFilterEnabled = true
     nonisolated static let defaultNotificationMajorTournamentsFilterEnabled = true
     nonisolated static let defaultFantasyDeadlineRemindersEnabled = true
+    nonisolated static let defaultTvMatchRemindersEnabled = true
+    nonisolated static let defaultTvMatchReminderMinimumScore = 70
+    nonisolated static let defaultTvMatchReminderMinutes = 10
     nonisolated static let defaultShowTodayUnfinishedFixturesBadge = false
     nonisolated static let defaultFixturesViewDensity: FixturesViewDensity = .compact
     nonisolated static let defaultShowCompactFixtureTvLogo = true
@@ -728,6 +752,15 @@ final class PreferencesStore: ObservableObject {
     }
 
     @Published var fantasyDeadlineRemindersEnabled: Bool {
+        didSet { persist() }
+    }
+    @Published var tvMatchRemindersEnabled: Bool {
+        didSet { persist() }
+    }
+    @Published var tvMatchReminderMinimumScore: Int {
+        didSet { persist() }
+    }
+    @Published var tvMatchReminderMinutes: Int {
         didSet { persist() }
     }
 
@@ -867,6 +900,12 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultNotificationMajorTournamentsFilterEnabled
         let fantasyDeadlineRemindersEnabled = userDefaults.object(forKey: Keys.fantasyDeadlineRemindersEnabled) as? Bool
             ?? Self.defaultFantasyDeadlineRemindersEnabled
+        let tvMatchRemindersEnabled = userDefaults.object(forKey: Keys.tvMatchRemindersEnabled) as? Bool
+            ?? Self.defaultTvMatchRemindersEnabled
+        let tvMatchReminderMinimumScore = userDefaults.object(forKey: Keys.tvMatchReminderMinimumScore) as? Int
+            ?? Self.defaultTvMatchReminderMinimumScore
+        let tvMatchReminderMinutes = userDefaults.object(forKey: Keys.tvMatchReminderMinutes) as? Int
+            ?? Self.defaultTvMatchReminderMinutes
         let showTodayUnfinishedFixturesBadge = userDefaults.object(forKey: Keys.showTodayUnfinishedFixturesBadge) as? Bool
             ?? Self.defaultShowTodayUnfinishedFixturesBadge
         let fixturesViewDensity = userDefaults.string(forKey: Keys.fixturesViewDensity)
@@ -921,6 +960,9 @@ final class PreferencesStore: ObservableObject {
         self.notificationHomeNationsFilterEnabled = notificationHomeNationsFilterEnabled
         self.notificationMajorTournamentsFilterEnabled = notificationMajorTournamentsFilterEnabled
         self.fantasyDeadlineRemindersEnabled = fantasyDeadlineRemindersEnabled
+        self.tvMatchRemindersEnabled = tvMatchRemindersEnabled
+        self.tvMatchReminderMinimumScore = tvMatchReminderMinimumScore
+        self.tvMatchReminderMinutes = tvMatchReminderMinutes
         self.showTodayUnfinishedFixturesBadge = showTodayUnfinishedFixturesBadge
         self.fixturesViewDensity = fixturesViewDensity
         self.showCompactFixtureTvLogo = showCompactFixtureTvLogo
@@ -969,6 +1011,9 @@ final class PreferencesStore: ObservableObject {
             notificationHomeNationsFilterEnabled: notificationHomeNationsFilterEnabled,
             notificationMajorTournamentsFilterEnabled: notificationMajorTournamentsFilterEnabled,
             fantasyDeadlineRemindersEnabled: fantasyDeadlineRemindersEnabled,
+            tvMatchRemindersEnabled: tvMatchRemindersEnabled,
+            tvMatchReminderMinimumScore: tvMatchReminderMinimumScore,
+            tvMatchReminderMinutes: tvMatchReminderMinutes,
             showTodayUnfinishedFixturesBadge: showTodayUnfinishedFixturesBadge,
             fixturesViewDensity: fixturesViewDensity,
             showCompactFixtureTvLogo: showCompactFixtureTvLogo,
@@ -1034,6 +1079,9 @@ final class PreferencesStore: ObservableObject {
             notificationHomeNationsFilterEnabled: notificationHomeNationsFilterEnabled,
             notificationMajorTournamentsFilterEnabled: notificationMajorTournamentsFilterEnabled,
             fantasyDeadlineRemindersEnabled: fantasyDeadlineRemindersEnabled,
+            tvMatchRemindersEnabled: tvMatchRemindersEnabled,
+            tvMatchReminderMinimumScore: tvMatchReminderMinimumScore,
+            tvMatchReminderMinutes: tvMatchReminderMinutes,
             showTodayUnfinishedFixturesBadge: showTodayUnfinishedFixturesBadge,
             fixturesViewDensity: fixturesViewDensity,
             showCompactFixtureTvLogo: showCompactFixtureTvLogo,
@@ -1078,6 +1126,9 @@ final class PreferencesStore: ObservableObject {
         userDefaults.set(notificationHomeNationsFilterEnabled, forKey: Keys.notificationHomeNationsFilterEnabled)
         userDefaults.set(notificationMajorTournamentsFilterEnabled, forKey: Keys.notificationMajorTournamentsFilterEnabled)
         userDefaults.set(fantasyDeadlineRemindersEnabled, forKey: Keys.fantasyDeadlineRemindersEnabled)
+        userDefaults.set(tvMatchRemindersEnabled, forKey: Keys.tvMatchRemindersEnabled)
+        userDefaults.set(tvMatchReminderMinimumScore, forKey: Keys.tvMatchReminderMinimumScore)
+        userDefaults.set(tvMatchReminderMinutes, forKey: Keys.tvMatchReminderMinutes)
         userDefaults.set(showTodayUnfinishedFixturesBadge, forKey: Keys.showTodayUnfinishedFixturesBadge)
         userDefaults.set(fixturesViewDensity.rawValue, forKey: Keys.fixturesViewDensity)
         userDefaults.set(showCompactFixtureTvLogo, forKey: Keys.showCompactFixtureTvLogo)
@@ -1189,6 +1240,12 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultNotificationMajorTournamentsFilterEnabled
         let fantasyDeadlineRemindersEnabled = userDefaults.object(forKey: Keys.fantasyDeadlineRemindersEnabled) as? Bool
             ?? Self.defaultFantasyDeadlineRemindersEnabled
+        let tvMatchRemindersEnabled = userDefaults.object(forKey: Keys.tvMatchRemindersEnabled) as? Bool
+            ?? Self.defaultTvMatchRemindersEnabled
+        let tvMatchReminderMinimumScore = userDefaults.object(forKey: Keys.tvMatchReminderMinimumScore) as? Int
+            ?? Self.defaultTvMatchReminderMinimumScore
+        let tvMatchReminderMinutes = userDefaults.object(forKey: Keys.tvMatchReminderMinutes) as? Int
+            ?? Self.defaultTvMatchReminderMinutes
         let showTodayUnfinishedFixturesBadge = userDefaults.object(forKey: Keys.showTodayUnfinishedFixturesBadge) as? Bool
             ?? Self.defaultShowTodayUnfinishedFixturesBadge
         let fixturesViewDensity = userDefaults.string(forKey: Keys.fixturesViewDensity)
@@ -1243,6 +1300,9 @@ final class PreferencesStore: ObservableObject {
             notificationHomeNationsFilterEnabled: notificationHomeNationsFilterEnabled,
             notificationMajorTournamentsFilterEnabled: notificationMajorTournamentsFilterEnabled,
             fantasyDeadlineRemindersEnabled: fantasyDeadlineRemindersEnabled,
+            tvMatchRemindersEnabled: tvMatchRemindersEnabled,
+            tvMatchReminderMinimumScore: tvMatchReminderMinimumScore,
+            tvMatchReminderMinutes: tvMatchReminderMinutes,
             showTodayUnfinishedFixturesBadge: showTodayUnfinishedFixturesBadge,
             fixturesViewDensity: fixturesViewDensity,
             showCompactFixtureTvLogo: showCompactFixtureTvLogo,
@@ -1286,6 +1346,9 @@ final class PreferencesStore: ObservableObject {
         static let notificationHomeNationsFilterEnabled = "preferences.notificationHomeNationsFilterEnabled"
         static let notificationMajorTournamentsFilterEnabled = "preferences.notificationMajorTournamentsFilterEnabled"
         static let fantasyDeadlineRemindersEnabled = "preferences.fantasyDeadlineRemindersEnabled"
+        static let tvMatchRemindersEnabled = "preferences.tvMatchRemindersEnabled"
+        static let tvMatchReminderMinimumScore = "preferences.tvMatchReminderMinimumScore"
+        static let tvMatchReminderMinutes = "preferences.tvMatchReminderMinutes"
         static let showTodayUnfinishedFixturesBadge = "preferences.showTodayUnfinishedFixturesBadge"
         static let fixturesViewDensity = "preferences.fixturesViewDensity"
         static let showCompactFixtureTvLogo = "preferences.showCompactFixtureTvLogo"

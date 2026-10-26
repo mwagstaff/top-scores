@@ -601,7 +601,7 @@ struct FantasyView: View {
     }
 
     private var linkedFantasyView: some View {
-        ScrollView {
+        FantasyContributionScrollView {
             VStack(spacing: 12) {
                 if fantasyViewModel.isRefreshing {
                     HStack(spacing: 8) {
@@ -2766,7 +2766,7 @@ struct FantasyView: View {
         let isOwnTeam = rival.entryID == currentManagerEntryID
         let isSavedRival = rivalManagers.contains(where: { $0.entryID == rival.entryID })
 
-        return ScrollView {
+        return FantasyContributionScrollView {
             VStack(spacing: 12) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(rival.managerName)
@@ -2899,6 +2899,7 @@ struct FantasyView: View {
                         scorePhase: data.scorePhase,
                         substitutedOffElementIDs: substitutedOffElementIDs,
                         hasTripleCaptainActive: data.hasTripleCaptainActive,
+                        contributions: data.benchContributions,
                         showsPoints: showsPoints
                     )
                     positionRow(
@@ -2909,6 +2910,7 @@ struct FantasyView: View {
                         scorePhase: data.scorePhase,
                         substitutedOffElementIDs: substitutedOffElementIDs,
                         hasTripleCaptainActive: data.hasTripleCaptainActive,
+                        contributions: data.benchContributions,
                         showsPoints: showsPoints
                     )
                     positionRow(
@@ -2919,6 +2921,7 @@ struct FantasyView: View {
                         scorePhase: data.scorePhase,
                         substitutedOffElementIDs: substitutedOffElementIDs,
                         hasTripleCaptainActive: data.hasTripleCaptainActive,
+                        contributions: data.benchContributions,
                         showsPoints: showsPoints
                     )
                     positionRow(
@@ -2929,6 +2932,7 @@ struct FantasyView: View {
                         scorePhase: data.scorePhase,
                         substitutedOffElementIDs: substitutedOffElementIDs,
                         hasTripleCaptainActive: data.hasTripleCaptainActive,
+                        contributions: data.benchContributions,
                         showsPoints: showsPoints
                     )
                 }
@@ -3103,6 +3107,7 @@ struct FantasyView: View {
         scorePhase: FantasySquadDisplayData.ScorePhase,
         substitutedOffElementIDs: Set<Int>,
         hasTripleCaptainActive: Bool,
+        contributions: [FantasyBenchContribution],
         showsPoints: Bool = true
     ) -> some View {
         GeometryReader { proxy in
@@ -3128,7 +3133,8 @@ struct FantasyView: View {
                         scorePhase: scorePhase,
                         isSubstitutedOff: substitutedOffElementIDs.contains(player.elementID),
                         isTripleCaptain: hasTripleCaptainActive && player.isCaptain,
-                        showsPoints: showsPoints
+                        showsPoints: showsPoints,
+                        contributions: contributions
                     )
                 }
             }
@@ -3169,7 +3175,8 @@ struct FantasyView: View {
                             detailMode: detailMode,
                             scorePhase: data.scorePhase,
                             isTripleCaptain: data.hasTripleCaptainActive && player.isCaptain,
-                            showsPoints: showsPoints
+                            showsPoints: showsPoints,
+                            contributions: data.benchContributions
                         )
                     }
                 }
@@ -3191,6 +3198,25 @@ struct FantasyView: View {
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .stroke(Color.white.opacity(0.09), lineWidth: 1)
             }
+            if !data.benchContributions.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    let contributions = data.benchContributions
+                    let confirmed = contributions.allSatisfy(\.confirmed)
+                    Text("\(data.hasBenchBoostActive ? "Bench Boost" : "Auto-subs") · \(contributions.reduce(0) { $0 + $1.points }) pts included\(confirmed ? "" : " provisionally")")
+                        .font(.subheadline.weight(.semibold))
+                    ForEach(Array(contributions.enumerated()), id: \.element.id) { index, contribution in
+                        Text("\(fantasyContributionNumber(index)) \(contribution.explanation)")
+                            .font(.footnote)
+                            .id(fantasyContributionAnchor(gameweekID: data.gameweekID, elementID: contribution.id))
+                    }
+                    Text(confirmed ? "Confirmed by FPL." : "Awaiting FPL confirmation.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+            }
         }
     }
 
@@ -3204,12 +3230,26 @@ struct FantasyView: View {
         scorePhase: FantasySquadDisplayData.ScorePhase,
         isSubstitutedOff: Bool = false,
         isTripleCaptain: Bool = false,
-        showsPoints: Bool = true
+        showsPoints: Bool = true,
+        contributions: [FantasyBenchContribution] = []
     ) -> some View {
-        if playerSelectionEnabled {
-            Button {
-                openPlayerDetails(player: player, gameweekID: gameweekID)
-            } label: {
+        Group {
+            if playerSelectionEnabled {
+                Button {
+                    openPlayerDetails(player: player, gameweekID: gameweekID)
+                } label: {
+                    FantasyPlayerCard(
+                        player: player,
+                        width: width,
+                        detailMode: detailMode,
+                        scorePhase: scorePhase,
+                        isSubstitutedOff: isSubstitutedOff,
+                        isTripleCaptain: isTripleCaptain,
+                        showsPoints: showsPoints
+                    )
+                }
+                .buttonStyle(.plain)
+            } else {
                 FantasyPlayerCard(
                     player: player,
                     width: width,
@@ -3220,18 +3260,12 @@ struct FantasyView: View {
                     showsPoints: showsPoints
                 )
             }
-            .buttonStyle(.plain)
-        } else {
-            FantasyPlayerCard(
-                player: player,
-                width: width,
-                detailMode: detailMode,
-                scorePhase: scorePhase,
-                isSubstitutedOff: isSubstitutedOff,
-                isTripleCaptain: isTripleCaptain,
-                showsPoints: showsPoints
-            )
         }
+        .modifier(FantasyContributionMarker(
+            playerID: player.elementID,
+            gameweekID: gameweekID,
+            contributions: contributions
+        ))
     }
 
     private func substitutedOffElementIDs(in data: FantasySquadDisplayData) -> Set<Int> {
@@ -8397,4 +8431,82 @@ private struct FantasyShareAppIconView: View {
         .environmentObject(PreferencesStore())
         .environmentObject(FantasyViewModel())
         .environmentObject(MatchesStore())
+}
+
+private func fantasyContributionNumber(_ index: Int) -> String {
+    ["①", "②", "③", "④"][min(index, 3)]
+}
+
+private func fantasyContributionAnchor(gameweekID: Int, elementID: Int) -> String {
+    "fpl-sub-\(gameweekID)-\(elementID)"
+}
+
+private struct FantasyContributionScrollAction: EnvironmentKey {
+    static let defaultValue: (String) -> Void = { _ in }
+}
+
+private extension EnvironmentValues {
+    var scrollToFantasyContribution: (String) -> Void {
+        get { self[FantasyContributionScrollAction.self] }
+        set { self[FantasyContributionScrollAction.self] = newValue }
+    }
+}
+
+private struct FantasyContributionScrollView<Content: View>: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView { content() }
+                .environment(\.scrollToFantasyContribution, { anchor in
+                    withAnimation(reduceMotion ? nil : .easeInOut) {
+                        proxy.scrollTo(anchor, anchor: .center)
+                    }
+                })
+        }
+    }
+}
+
+private struct FantasyContributionMarker: ViewModifier {
+    @Environment(\.scrollToFantasyContribution) private var scrollToContribution
+    let playerID: Int
+    let gameweekID: Int
+    let contributions: [FantasyBenchContribution]
+
+    func body(content: Content) -> some View {
+        if let index = contributions.firstIndex(where: { $0.id == playerID || $0.outgoing?.elementID == playerID }) {
+            let contribution = contributions[index]
+            let incoming = contribution.id == playerID
+            content
+                .opacity(incoming ? 1 : 0.45)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(incoming ? Color.cyan : Color.red, lineWidth: incoming ? 3 : 1.5)
+                        .allowsHitTesting(false)
+                }
+                .overlay(alignment: .bottomTrailing) {
+                    Button {
+                        scrollToContribution(fantasyContributionAnchor(gameweekID: gameweekID, elementID: contribution.id))
+                    } label: {
+                        Image(systemName: incoming ? "arrow.up" : "arrow.down")
+                            .font(.system(size: 11, weight: .black))
+                            .foregroundStyle(incoming ? Color.green : Color.red)
+                            .frame(width: 18, height: 18)
+                            .background(Color.black.opacity(0.90), in: Circle())
+                            .overlay {
+                                Circle().strokeBorder(incoming ? Color.green : Color.red, lineWidth: 1.5)
+                            }
+                            .padding(5)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .offset(x: 9, y: 9)
+                    .accessibilityLabel("\(incoming ? "Included substitute" : "Replaced starter"), note \(index + 1). \(contribution.explanation) \(contribution.confirmed ? "Confirmed by FPL" : "Provisional")")
+                    .accessibilityHint("Scrolls to the explanation below the bench")
+                }
+        } else {
+            content
+        }
+    }
 }

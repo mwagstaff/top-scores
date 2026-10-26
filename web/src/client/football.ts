@@ -1,14 +1,23 @@
-import { isMatchFinished } from "./matchState";
+import { isMatchAbandoned, isMatchFinished } from "./matchState";
 import type { Match, TvChannel } from "./types";
+export { displayTime } from "./timeFormatting";
 
-export function ukDate(now = new Date()): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Europe/London",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(now);
+export function browserTimeZone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone || "Europe/London";
 }
+
+export function localDate(now = new Date()): string {
+  if (typeof window === "undefined") {
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone: "Europe/London", year: "numeric", month: "2-digit", day: "2-digit",
+    }).format(now);
+  }
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 export function validDate(value: string | null): value is string {
   return Boolean(
     value &&
@@ -23,12 +32,12 @@ export function moveDate(date: string, days: number): string {
   return next.toISOString().slice(0, 10);
 }
 export function dateLabel(date: string, short = false): string {
-  return new Intl.DateTimeFormat("en-GB", {
-    timeZone: "UTC",
+  const [year, month, day] = date.split("-").map(Number);
+  return new Intl.DateTimeFormat(undefined, {
     weekday: short ? "short" : "long",
     day: "numeric",
     month: short ? "short" : "long",
-  }).format(new Date(`${date}T12:00:00Z`));
+  }).format(new Date(year, month - 1, day));
 }
 export function ukChannels(channels: TvChannel[]): TvChannel[] {
   const unique = new Map<string, TvChannel>();
@@ -89,7 +98,7 @@ export function countCompetitions(matches: Match[]): Record<string, number> {
 export function rankedTVMatches(matches: Match[]): Match[] {
   return matches
     .filter(
-      (match) => ukChannels(match.tvChannels).length && !isMatchFinished(match),
+      (match) => ukChannels(match.tvChannels).length && !isMatchFinished(match) && !isMatchAbandoned(match),
     )
     .sort(
       (a, b) =>

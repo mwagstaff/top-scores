@@ -1,5 +1,6 @@
-import { memo, useId, useState } from "react";
+import { memo, useEffect, useId, useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import { clearMatchDetailsCache, fetchMatchDetails } from "../api";
 import { teamPath } from "../catalog";
 import { matchPath, ukChannels } from "../football";
 import {
@@ -7,8 +8,10 @@ import {
   displayStatus,
   isMatchLive,
   isMatchFinished,
+  isMatchAbandoned,
 } from "../matchState";
-import type { Match, TvChannel } from "../types";
+import type { Match, MatchDetails, TvChannel } from "../types";
+import { CompactMatchEvents } from "./CompactMatchEvents";
 
 export function TeamCrest({
   name,
@@ -49,19 +52,68 @@ export const FixtureRow = memo(function FixtureRow({
   match,
   showBroadcast = true,
   showRating = false,
+  showDetails = false,
 }: {
   match: Match;
   showBroadcast?: boolean;
   showRating?: boolean;
+  showDetails?: boolean;
 }) {
   const live = isMatchLive(match);
-  const broadcastVisible = showBroadcast && !isMatchFinished(match);
+  const abandoned = isMatchAbandoned(match);
+  const broadcastVisible = showBroadcast && !isMatchFinished(match) && !abandoned;
   const channels = broadcastVisible ? ukChannels(match.tvChannels) : [];
   const scored =
     typeof match.homeScore === "number" && typeof match.awayScore === "number";
   const aggregate = aggregateSummary(match);
+  const detailsAnchor = useRef<HTMLDivElement>(null);
+  const [details, setDetails] = useState<MatchDetails | null>(match.matchDetails ?? null);
+  const [detailsError, setDetailsError] = useState(false);
+  const shouldLoadDetails = showDetails && (live || isMatchFinished(match) || abandoned) && Boolean(match.matchDetailsId);
+  useEffect(() => {
+    if (!shouldLoadDetails || details || detailsError) return;
+    let active = true;
+    const load = () => {
+      void fetchMatchDetails(match.matchDetailsId!).then(value => {
+        if (active) setDetails(value);
+      }).catch(() => {
+        if (active) setDetailsError(true);
+      });
+    };
+    const anchor = detailsAnchor.current;
+    if (!anchor || !('IntersectionObserver' in window)) load();
+    else {
+      const observer = new IntersectionObserver(entries => {
+        if (entries.some(entry => entry.isIntersecting)) {
+          observer.disconnect();
+          load();
+        }
+      }, { rootMargin: '300px' });
+      observer.observe(anchor);
+      return () => { active = false; observer.disconnect(); };
+    }
+    return () => { active = false; };
+  }, [shouldLoadDetails, details, detailsError, match.matchDetailsId]);
+  useEffect(() => {
+    if (!showDetails || !live || !details || !match.matchDetailsId) return;
+    let active = true;
+    const timer = window.setInterval(() => {
+      const anchor = detailsAnchor.current;
+      if (document.visibilityState !== "visible" || !anchor) return;
+      const bounds = anchor.getBoundingClientRect();
+      if (bounds.bottom < -300 || bounds.top > window.innerHeight + 300) return;
+      clearMatchDetailsCache(match.matchDetailsId!);
+      void fetchMatchDetails(match.matchDetailsId!).then(value => {
+        if (active) setDetails(value);
+      }).catch(() => {});
+    }, 30_000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [showDetails, live, Boolean(details), match.matchDetailsId]);
+  useEffect(() => {
+    if (!showDetails) setDetailsError(false);
+  }, [showDetails]);
   return (
-    <div className={`fixture-row app-fixture${live ? " is-live" : ""}`}>
+    <div className={`fixture-row app-fixture${live ? " is-live" : ""}${abandoned ? " is-abandoned" : ""}`}>
       <Link to={matchPath(match)} state={{ match }} className="fixture-details-link" aria-label={`Match details: ${match.homeTeam} v ${match.awayTeam}`} />
       <div className="fixture-match-line">
         <TeamCrest name={match.homeTeam} shortName={match.homeShortName} />
@@ -76,7 +128,7 @@ export const FixtureRow = memo(function FixtureRow({
         </strong>
         <span className="fixture-state">
           {live && <span className="live-dot" />}
-          <span>{displayStatus(match)}</span>
+          <span>{abandoned ? "ABD" : displayStatus(match)}</span>
         </span>
         <strong className="fixture-score">
           {scored ? match.awayScore : ""}
@@ -90,7 +142,15 @@ export const FixtureRow = memo(function FixtureRow({
         <TeamCrest name={match.awayTeam} shortName={match.awayShortName} />
       </div>
       <BroadcastChannels channels={channels} matchLabel={`${match.homeTeam} v ${match.awayTeam}`} />
+      {showDetails && (live || isMatchFinished(match) || abandoned) && (
+        <div ref={detailsAnchor} className="fixture-compact-details">
+          <CompactMatchEvents details={details} homeTeam={match.homeTeam} awayTeam={match.awayTeam} />
+          {shouldLoadDetails && !details && !detailsError && <span className="fixture-details-loading">Loading details…</span>}
+          {detailsError && <span className="fixture-details-loading">Details unavailable</span>}
+        </div>
+      )}
       {showRating && <WatchabilityRating match={match} />}
+      {abandoned && <span className="fixture-note">Match abandoned</span>}
       {(aggregate || match.penaltyResult) && (
         <span className="fixture-note">{match.penaltyResult || aggregate}</span>
       )}
@@ -146,7 +206,7 @@ export function BroadcastChannels({ channels, matchLabel }: { channels: TvChanne
 export function ChannelLogo({ channel }: { channel: TvChannel }) {
   const [failed, setFailed] = useState(false);
   const bundled =
-    /amazon|apple|bbc|channel ?4|dazn|disney|hbo|itv|laliga|now ?tv|premier ?sports|sky|tnt/i.test(
+    /amazon|prime ?video|apple|bbc|channel ?4|dazn|disney|hbo|itv|laliga|now ?tv|premier ?sports|sky|tnt/i.test(
       channel.name,
     );
   const source = bundled

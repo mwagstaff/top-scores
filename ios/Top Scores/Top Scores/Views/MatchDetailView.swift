@@ -159,16 +159,18 @@ struct MatchDetailView: View {
     }
 
     private var tvChannelSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label(
-                Locale.current.localizedString(forRegionCode: Locale.current.region?.identifier ?? "") ?? "Your region",
-                systemImage: "location.fill"
-            )
-            .font(.caption.weight(.semibold))
-            .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("WHERE TO WATCH")
+                    .font(.caption2.weight(.bold))
+                    .tracking(1.5)
+                    .foregroundStyle(.secondary)
+                Text("Live in \(Locale.current.localizedString(forRegionCode: Locale.current.region?.identifier ?? "") ?? "your region")")
+                    .font(.title3.weight(.semibold))
+            }
 
             if localChannels.isEmpty {
-                Text("Not available in your region")
+                Text("No local broadcast confirmed.")
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             } else {
@@ -204,9 +206,10 @@ struct MatchDetailView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .fontWeight(.medium)
-                            ForEach(group.channels, id: \.name) { channel in
-                                TvChannelRow(channel: channel)
-                                    .padding(.leading, 8)
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 138), spacing: 8)], spacing: 8) {
+                                ForEach(group.channels, id: \.name) { channel in
+                                    TvChannelRow(channel: channel)
+                                }
                             }
                         }
                     }
@@ -215,13 +218,9 @@ struct MatchDetailView: View {
 
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .footballTintedSurface(
-            accentColor: FootballSectionAccent.action,
-            cornerRadius: 18,
-            showsPitchMarkings: true,
-            accentOpacity: 0.22
-        )
+        .padding(.vertical, 20)
+        .overlay(alignment: .top) { Color.primary.opacity(0.16).frame(height: 1) }
+        .overlay(alignment: .bottom) { Color.primary.opacity(0.16).frame(height: 1) }
     }
 
     var body: some View {
@@ -235,6 +234,11 @@ struct MatchDetailView: View {
                             kickoffText: kickoffText,
                             teamCompetitionEntries: teamCompetitionEntries
                         )
+
+                        if !activeMatch.isFinished {
+                            tvChannelSection
+                                .padding(.horizontal)
+                        }
 
                         MatchTeamLeaguePositionsLink(
                             entries: teamCompetitionEntries
@@ -262,32 +266,34 @@ struct MatchDetailView: View {
                             }
                         }
 
-                        if let matchID = activeMatch.matchDetailsID, activeMatch.isTestMatch != true {
-                            VStack(alignment: .leading, spacing: 12) {
-                                Picker("Match updates", selection: $showCommentary) {
-                                    Text("Key events").tag(false)
-                                    Text("Commentary").tag(true)
+                        if activeMatch.isInProgress || activeMatch.isFinished {
+                            if let matchID = activeMatch.matchDetailsID, activeMatch.isTestMatch != true {
+                                VStack(alignment: .leading, spacing: 12) {
+                                    Picker("Match updates", selection: $showCommentary) {
+                                        Text("Key events").tag(false)
+                                        Text("Commentary").tag(true)
+                                    }
+                                    .pickerStyle(.segmented)
+                                    if showCommentary {
+                                        MatchCommentaryView(
+                                            matchID: matchID,
+                                            apiBaseURL: preferences.apiBaseURL,
+                                            isLive: activeMatch.isInProgress,
+                                            onShowRecent: {
+                                                scrollProxy.scrollTo("match-updates", anchor: .top)
+                                            }
+                                        )
+                                        .id("\(matchID)|\(preferences.apiBaseURL)")
+                                    } else {
+                                        MatchEventsCard(match: activeMatch)
+                                    }
                                 }
-                                .pickerStyle(.segmented)
-                                if showCommentary {
-                                    MatchCommentaryView(
-                                        matchID: matchID,
-                                        apiBaseURL: preferences.apiBaseURL,
-                                        isLive: activeMatch.isInProgress,
-                                        onShowRecent: {
-                                            scrollProxy.scrollTo("match-updates", anchor: .top)
-                                        }
-                                    )
-                                    .id("\(matchID)|\(preferences.apiBaseURL)")
-                                } else {
-                                    MatchEventsCard(match: activeMatch)
-                                }
-                            }
-                            .padding(.horizontal)
-                            .id("match-updates")
-                        } else {
-                            MatchEventsCard(match: activeMatch)
                                 .padding(.horizontal)
+                                .id("match-updates")
+                            } else {
+                                MatchEventsCard(match: activeMatch)
+                                    .padding(.horizontal)
+                            }
                         }
 
                         if shouldShowLineupPitch {
@@ -304,16 +310,6 @@ struct MatchDetailView: View {
                                 .font(.footnote)
                                 .foregroundStyle(.secondary)
                                 .padding(.horizontal)
-                        }
-
-                        if !activeMatch.tvChannels.isEmpty {
-                            VStack(alignment: .leading, spacing: 10) {
-                                Label("Follow the action", systemImage: "dot.radiowaves.left.and.right")
-                                    .font(.headline)
-                                    .foregroundStyle(FootballSectionAccent.action)
-                                tvChannelSection
-                            }
-                            .padding(.horizontal)
                         }
 
                         if shouldShowMatchActions {
@@ -1344,8 +1340,7 @@ struct MatchDetailScoreboardHero: View {
             ForEach(summaries) { summary in
                 HStack(alignment: .firstTextBaseline, spacing: 5) {
                     if !isTrailing {
-                        Image(systemName: "soccerball")
-                            .font(.caption2)
+                        summaryMarker(isRedCard: summary.isRedCard)
                     }
 
                     VStack(alignment: alignment, spacing: 2) {
@@ -1370,8 +1365,7 @@ struct MatchDetailScoreboardHero: View {
                     }
 
                     if isTrailing {
-                        Image(systemName: "soccerball")
-                            .font(.caption2)
+                        summaryMarker(isRedCard: summary.isRedCard)
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: isTrailing ? .trailing : .leading)
@@ -1379,6 +1373,20 @@ struct MatchDetailScoreboardHero: View {
         }
         .foregroundStyle(.white)
         .frame(maxWidth: .infinity, alignment: isTrailing ? .trailing : .leading)
+    }
+
+    @ViewBuilder
+    private func summaryMarker(isRedCard: Bool) -> some View {
+        if isRedCard {
+            RoundedRectangle(cornerRadius: 1)
+                .fill(Color.red)
+                .frame(width: 9, height: 13)
+                .accessibilityHidden(true)
+        } else {
+            Image(systemName: "soccerball")
+                .font(.caption2)
+                .accessibilityHidden(true)
+        }
     }
 
     private func goalScorer(_ scorer: String, player: MatchLineupPlayer?) -> some View {
@@ -1438,7 +1446,7 @@ struct MatchDetailScoreboardHero: View {
             sections.append(competition.competitionName)
         }
         if !goalSummaries.isEmpty {
-            sections.append("Goals: \(goalSummaries.map(\.accessibilityText).joined(separator: ", "))")
+            sections.append("Match events: \(goalSummaries.map(\.accessibilityText).joined(separator: ", "))")
         }
         return sections.joined(separator: ". ")
     }
@@ -1482,6 +1490,7 @@ private struct MatchScoreboardGoalSummary: Identifiable {
     let assister: String?
     let assisterPlayer: MatchLineupPlayer?
     let sortOrder: Int
+    let isRedCard: Bool
 
     var text: String {
         "\(minute) \(scorer)" + (assister.map { " (\($0))" } ?? "")
@@ -1489,7 +1498,7 @@ private struct MatchScoreboardGoalSummary: Identifiable {
 
     var accessibilityText: String {
         let base = "\(minute.replacingOccurrences(of: "'", with: " minutes")) \(scorer)"
-        return base + (assister.map { ", assisted by \($0)" } ?? "")
+        return base + (isRedCard ? ", red card" : "") + (assister.map { ", assisted by \($0)" } ?? "")
     }
 
     static func make(
@@ -1497,13 +1506,34 @@ private struct MatchScoreboardGoalSummary: Identifiable {
         match: Match
     ) -> [MatchScoreboardGoalSummary] {
         let credits = match.goalCredits(for: side)
-        return make(
+        var summaries = make(
             scorers: credits.scorers,
             ownGoalScorers: credits.ownGoalScorers,
             assists: credits.assists,
             creditedSide: side,
             match: match
         )
+        let cards = side == .home ? match.homeRedCards : match.awayRedCards
+        for (cardIndex, card) in cards.enumerated() {
+            for (minuteIndex, minute) in card.redCardTimes.enumerated() {
+                summaries.append(
+                    MatchScoreboardGoalSummary(
+                        id: "red-card-\(cardIndex)-\(minuteIndex)-\(minute)",
+                        minute: displayMinute(minute),
+                        scorer: lastName(card.player),
+                        scorerPlayer: player(id: card.idPlayer, name: card.player, side: side, match: match),
+                        assister: nil,
+                        assisterPlayer: nil,
+                        sortOrder: minuteSortOrder(minute),
+                        isRedCard: true
+                    )
+                )
+            }
+        }
+        return summaries.sorted { lhs, rhs in
+            if lhs.sortOrder != rhs.sortOrder { return lhs.sortOrder < rhs.sortOrder }
+            return lhs.id < rhs.id
+        }
     }
 
     private static func make(
@@ -1539,7 +1569,8 @@ private struct MatchScoreboardGoalSummary: Identifiable {
                         assisterPlayer: assist.flatMap {
                             reliablyMatchedPlayer(named: $0.player, side: creditedSide, match: match)
                         },
-                        sortOrder: minuteSortOrder(minute)
+                        sortOrder: minuteSortOrder(minute),
+                        isRedCard: false
                     )
                 )
             }
@@ -1561,7 +1592,8 @@ private struct MatchScoreboardGoalSummary: Identifiable {
                         ),
                         assister: nil,
                         assisterPlayer: nil,
-                        sortOrder: minuteSortOrder(minute)
+                        sortOrder: minuteSortOrder(minute),
+                        isRedCard: false
                     )
                 )
             }
@@ -2986,13 +3018,11 @@ private struct TvChannelRow: View {
 
             Spacer(minLength: 0)
         }
-        .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
         .padding(.horizontal, 10)
-        .footballTintedSurface(
-            accentColor: FootballSectionAccent.action,
-            cornerRadius: 12,
-            accentOpacity: 0.14
-        )
+        .background(Color(.secondarySystemBackground).opacity(0.6))
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: 6, style: .continuous).stroke(Color.primary.opacity(0.16), lineWidth: 1) }
         .accessibilityElement(children: .combine)
     }
 }
@@ -3192,6 +3222,10 @@ private struct MatchLineupTeamPanelsView: View {
                     side: .away
                 )
 
+                MatchLineupMarkerLegend()
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
+
                 if !matchLineupBenchPlayers(in: displayHomeLineup).isEmpty {
                     substitutes(
                         lineup: displayHomeLineup,
@@ -3217,8 +3251,6 @@ private struct MatchLineupTeamPanelsView: View {
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
                     .stroke(Color.primary.opacity(0.10), lineWidth: 1)
             }
-
-            MatchLineupMarkerLegend()
         }
         .task(id: "\(matchID ?? "")|\(isLive)") {
             repeat {

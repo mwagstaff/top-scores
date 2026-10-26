@@ -1,12 +1,13 @@
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { useEffect, useState, type PropsWithChildren } from "react";
-import { competitionPath, dateLabel, ukDate, validDate } from "../football";
+import { competitionPath, dateLabel, localDate, validDate } from "../football";
 import { useInitialSeed } from "../bootstrap";
 import { normalizeMatch } from "../api";
 import { loadDay } from "../dayStore";
 import { countCompetitions } from "../football";
 import { loadCompetitions, type Competition } from "../catalog";
 import { competitionLogo } from "../competitionLogos";
+import { isMatchAbandoned, isMatchFinished, isMatchLive } from "../matchState";
 import { ScrollPosition } from "./ScrollPosition";
 
 export function AppShell({ children }: PropsWithChildren) {
@@ -17,28 +18,37 @@ export function AppShell({ children }: PropsWithChildren) {
   const seed = useInitialSeed();
   const requestedDate = new URLSearchParams(location.search).get("date");
   const selectedDate = validDate(requestedDate) ? requestedDate : null;
-  const activityDate = selectedDate || ukDate();
-  const activityDateLabel = activityDate === ukDate() ? "today" : `on ${dateLabel(activityDate)}`;
-  const [activity, setActivity] = useState(() => ({
-    date: activityDate,
-    counts:
-      seed?.date === activityDate && seed.matches
-        ? countCompetitions(seed.matches.map(normalizeMatch))
-        : ({} as Record<string, number>),
-  }));
+  const activityDate = selectedDate || localDate();
+  const activityDateLabel = activityDate === localDate() ? "today" : `on ${dateLabel(activityDate)}`;
+  const [activity, setActivity] = useState(() => {
+    const matches = seed?.date === activityDate && seed.matches
+      ? seed.matches.map(normalizeMatch)
+      : [];
+    return {
+      date: activityDate,
+      counts: countCompetitions(matches),
+      liveCounts: countCompetitions(matches.filter(isMatchLive)),
+      finishedCounts: countCompetitions(matches.filter((match) => isMatchFinished(match) || isMatchAbandoned(match))),
+    };
+  });
   useEffect(() => {
     let cancelled = false,
       running = false;
     const update = async () => {
       if (document.visibilityState !== "visible" || running || cancelled) return;
       running = true;
-      const date = selectedDate || ukDate();
+      const date = selectedDate || localDate();
       try {
         let day = await loadDay(date);
         while (day.hasMore && !cancelled)
           day = await loadDay(date, false, true, day.page + 1);
         if (!cancelled)
-          setActivity({ date, counts: countCompetitions(day.matches) });
+          setActivity({
+            date,
+            counts: countCompetitions(day.matches),
+            liveCounts: countCompetitions(day.matches.filter(isMatchLive)),
+            finishedCounts: countCompetitions(day.matches.filter((match) => isMatchFinished(match) || isMatchAbandoned(match))),
+          });
       } catch {
         /* Keep the last known activity if a refresh fails. */
       } finally {
@@ -77,7 +87,7 @@ export function AppShell({ children }: PropsWithChildren) {
             aria-label="Top Scores home"
           >
             <img
-              src="/generated-assets/app-icon.png"
+              src="/generated-assets/app-icon.png?v=2"
               width="44"
               height="44"
               alt=""
@@ -92,43 +102,43 @@ export function AppShell({ children }: PropsWithChildren) {
               </NavLink>
             ))}
           </nav>
-          <Link
-            className="settings-link"
-            to="/preferences"
-            aria-label="Preferences"
-          >
-            ⚙
-          </Link>
-
         </div>
       </header>
       <div className="site-layout">
         <aside className="league-rail" aria-label="Competitions">
           <span className="eyebrow">Competitions</span>
           {catalogError && <p>Competitions unavailable. Reload to retry.</p>}
-          {competitions.map(({ id, name, aliases }, index) => (
-            <Link
-              key={name}
-              className={
-                location.pathname === competitionPath(name) ? "selected" : ""
-              }
-              to={competitionPath(name)}
-            >
-              <span className="league-number">
-                {competitionLogo(id, name) ? <img src={competitionLogo(id, name)} width="26" height="26" alt="" loading="lazy" /> : String(index + 1).padStart(2, "0")}
-              </span>
-              <span className="league-name">{name.replace("UEFA ", "")}</span>
-              {activity.date === activityDate && [name, ...aliases].reduce((total, alias) => total + (activity.counts[alias] || 0), 0) > 0 && (
-                <span
-                  className="competition-count"
-                  aria-label={`${[name, ...aliases].reduce((total, alias) => total + (activity.counts[alias] || 0), 0)} ${[name, ...aliases].reduce((total, alias) => total + (activity.counts[alias] || 0), 0) === 1 ? "match" : "matches"} ${activityDateLabel}`}
-                  title={`${[name, ...aliases].reduce((total, alias) => total + (activity.counts[alias] || 0), 0)} matches ${activityDateLabel}`}
-                >
-                  {[name, ...aliases].reduce((total, alias) => total + (activity.counts[alias] || 0), 0)}
+          {competitions.map(({ id, name, aliases }, index) => {
+            const names = [name, ...aliases];
+            const count = activity.date === activityDate
+              ? names.reduce((total, alias) => total + (activity.counts[alias] || 0), 0)
+              : 0;
+            const live = names.some((alias) => (activity.liveCounts[alias] || 0) > 0);
+            const finished = count > 0 && names.reduce((total, alias) => total + (activity.finishedCounts[alias] || 0), 0) === count;
+            return (
+              <Link
+                key={name}
+                className={
+                  location.pathname === competitionPath(name) ? "selected" : ""
+                }
+                to={`${competitionPath(name)}${selectedDate ? `?date=${selectedDate}` : ""}`}
+              >
+                <span className="league-number">
+                  {competitionLogo(id, name) ? <img src={competitionLogo(id, name)} width="26" height="26" alt="" loading="lazy" /> : String(index + 1).padStart(2, "0")}
                 </span>
-              )}
-            </Link>
-          ))}
+                <span className="league-name">{name.replace("UEFA ", "")}</span>
+                {count > 0 && (
+                  <span
+                    className={`competition-count${live ? " is-live" : finished ? " is-finished" : ""}`}
+                    aria-label={`${count} ${count === 1 ? "match" : "matches"} ${activityDateLabel}${live ? ", live match in progress" : finished ? ", all matches finished" : ""}`}
+                    title={`${count} ${count === 1 ? "match" : "matches"} ${activityDateLabel}${live ? " · live match in progress" : finished ? " · all matches finished" : ""}`}
+                  >
+                    {count}
+                  </span>
+                )}
+              </Link>
+            );
+          })}
         </aside>
         <main id="main-content" className="site-main" tabIndex={-1}>
           {children}
@@ -136,8 +146,7 @@ export function AppShell({ children }: PropsWithChildren) {
       </div>
       <footer className="site-footer">
         <span>Top Scores</span>
-        <span>Football first. All times UK.</span>
-        <Link to="/preferences">Preferences</Link>
+        <a href="https://skynolimit.dev/">Developed by Sky No Limit</a>
       </footer>
     </div>
   );

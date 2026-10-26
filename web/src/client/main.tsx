@@ -2,7 +2,6 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import App from "./App";
-import { PreferencesProvider } from "./preferences";
 import { warmTeamBadges } from "./api";
 import "./football.css";
 import { initialSeed } from "./bootstrap";
@@ -12,9 +11,7 @@ void warmTeamBadges();
 const application = (
   <React.StrictMode>
     <BrowserRouter>
-      <PreferencesProvider>
-        <App />
-      </PreferencesProvider>
+      <App />
     </BrowserRouter>
   </React.StrictMode>
 );

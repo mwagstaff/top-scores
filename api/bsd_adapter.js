@@ -263,7 +263,7 @@ function isDisallowedGoalVarDecision(decision, confirmed) {
 }
 
 // Maps BSD status/period/current_minute to the internal score_status vocabulary:
-// null | "HT" | "FT" | "AET" | "Pens" | "POSTPONED" | "ET" | "ET <minute>" | minute | "LIVE").
+// null | "HT" | "FT" | "AET" | "Pens" | "POSTPONED" | "ABANDONED" | "ET" | "ET <minute>" | minute | "LIVE").
 function mapBsdStatus(event, options = {}) {
   const status = String(event.status || "").trim().toLowerCase();
   const period = String(event.period || "").trim().toLowerCase();
@@ -286,7 +286,13 @@ function mapBsdStatus(event, options = {}) {
   if (!status || status === "notstarted" || status === "not_started" || status === "ns") {
     return null;
   }
-  if (["postponed", "cancelled", "canceled", "abandoned", "suspended", "interrupted", "void"].includes(status)) {
+  if (["postponed", "abandoned", "suspended", "interrupted"].includes(status)) {
+    const played = Number(minute) > 0 ||
+      /^(?:1t|2t|1h|2h|1st_half|2nd_half|first_half|second_half|ht|halftime|et|extra_time)$/i.test(period) ||
+      (toNumber(event.home_score) || 0) + (toNumber(event.away_score) || 0) > 0;
+    return played ? "ABANDONED" : "POSTPONED";
+  }
+  if (["cancelled", "canceled", "void"].includes(status)) {
     return "POSTPONED";
   }
   if (isFutureScorelessKickoff && !minuteStr && !period) {

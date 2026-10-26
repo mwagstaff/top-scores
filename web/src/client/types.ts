@@ -341,17 +341,6 @@ export function normalizeSelectedChannels(selections: string[]): string[] {
   );
 }
 
-export function selectableChannels(channels: string[]): string[] {
-  const all = new Set<string>(channelGroupOptions);
-  for (const channel of normalizeSelectedChannels(channels)) {
-    all.add(channel);
-  }
-
-  return Array.from(all).sort((left, right) =>
-    left.localeCompare(right, undefined, { sensitivity: "base" })
-  );
-}
-
 export function channelApiQueryValues(selections: string[]): string[] {
   return normalizeSelectedChannels(selections).map((selection) => {
     const canonical = canonicalChannelOption(selection);
@@ -363,51 +352,6 @@ export function channelApiQueryValues(selections: string[]): string[] {
   });
 }
 
-export function normalizePreferences(preferences: Partial<Preferences>): Preferences {
-  return {
-    ...defaultPreferences,
-    ...preferences,
-    selectedLeagues: [...(preferences.selectedLeagues ?? defaultPreferences.selectedLeagues)].sort(
-      (left, right) => left.localeCompare(right, undefined, { sensitivity: "base" })
-    ),
-    selectedChannels: normalizeSelectedChannels(
-      preferences.selectedChannels ?? defaultPreferences.selectedChannels
-    ),
-    refreshIntervalMinutes: Math.max(
-      1,
-      Math.min(60, preferences.refreshIntervalMinutes ?? defaultPreferences.refreshIntervalMinutes)
-    ),
-    matchGroupSortOrder:
-      preferences.matchGroupSortOrder ?? defaultPreferences.matchGroupSortOrder,
-  };
-}
-
-export const matchOrderOptions: Array<{
-  value: MatchGroupSortOrder;
-  label: string;
-  description: string;
-}> = [
-  {
-    value: "alphabetical",
-    label: "Alphabetical",
-    description: "Competition groups stay stable and teams sort A-Z.",
-  },
-  {
-    value: "teamScore",
-    label: "Team score",
-    description: "Higher combined Elo-style team strength rises to the top.",
-  },
-  {
-    value: "kickoffThenAlphabetical",
-    label: "Kick-off then alphabetical",
-    description: "Show earliest matches first, then A-Z within ties.",
-  },
-  {
-    value: "kickoffThenTeamScore",
-    label: "Kick-off then team score",
-    description: "Show earliest matches first, then stronger fixtures first.",
-  },
-];
 export interface CommentaryLine {
   id: string;
   period: number;

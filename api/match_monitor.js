@@ -2229,6 +2229,42 @@ async function persistNotificationHistory({
   }
 }
 
+function tvReminderChannels(match, prefs) {
+  return [...new Set((match.tv_channels || []).map(extractTvChannelName).filter(Boolean)
+    .filter((name) => !prefs.channelFilterEnabled || !prefs.selectedChannels?.length ||
+      prefs.selectedChannels.some((selection) => channelMatchesSelection(name, selection))))];
+}
+
+let tvReminderProvider = null;
+const tvReminderScheduler = require("./tv_match_reminders").createTVReminderScheduler({
+  now: () => Date.now(),
+  users: async () => dedupePushNotificationUsers(await getAllUserPreferences()),
+  user: getUserPreferences,
+  matches: async () => tvReminderProvider ? tvReminderProvider.matches() : [],
+  visible: (matches, prefs) => tvReminderProvider
+    ? tvReminderProvider.visible(matches, prefs).filter((match) => prefs.showFACupEarlyRounds === true || !isFACupEarlyRoundMatch(match))
+    : [],
+  channels: tvReminderChannels,
+  claim: (id) => claimBbcNotificationIdempotency(id, { ttl_seconds: 7 * 86400 }),
+  send: (user, message, kickoff, id) => sendNotification(
+    user.apnsToken, message.title, message.body, message.payload, Boolean(user.isDevelopmentBuild),
+    { expiry: Math.floor(kickoff / 1000), collapseId: crypto.createHash("sha256").update(id).digest("hex") }
+  ),
+  record: async (user, group, message, result, id) => {
+    for (const match of group.matches) {
+      await persistNotificationHistory({
+        user, matchId: match.reminderID, match,
+        event: { type: "tv_match_reminder", eventKey: id, title: message.title, body: message.body },
+        notificationId: id, status: result.success ? "sent" : "failed", result,
+        delayMinutes: 0, dispatchMode: "tv_reminder", idempotencySource: "redis",
+      });
+    }
+  },
+  error: (error) => console.error("[TVReminders] Evaluation failed:", error.message || error),
+});
+
+function setTVReminderProvider(provider) { tvReminderProvider = provider; }
+
 let isMonitoring = false;
 let dailyMatchesCheckTimer = null;
 let cleanupTimer = null;
@@ -2358,6 +2394,8 @@ function startMonitoring() {
     LIVE_ACTIVITY_EVAL_INTERVAL_MS
   );
 
+  tvReminderScheduler.start();
+
   // Start fantasy deadline reminder evaluation loop.
   void evaluateFantasyDeadlineReminders({ reason: "startup" });
   fantasyDeadlineReminderEvalTimer = setInterval(() => {
@@ -2369,6 +2407,7 @@ function startMonitoring() {
  * Stop monitoring
  */
 function stopMonitoring() {
+  tvReminderScheduler.stop();
   isMonitoring = false;
   console.log("[MatchMonitor] Stopping match monitoring");
   clearStartupLiveActivityKickTimers();
@@ -8469,6 +8508,7 @@ function getStatus(options = {}) {
 
 module.exports = {
   initialize,
+  setTVReminderProvider,
   setLiveActivityMatchDetailsProvider,
   setLiveActivityOperationalMatchesProvider,
   setLiveActivityFixtureCategoryFilter,
@@ -8481,6 +8521,7 @@ module.exports = {
   runFantasyDeadlineReminderEvaluationNow,
   sendFantasyDeadlineReminderNow,
   __testHooks: {
+    tvReminderChannels,
     fantasyUnavailablePlayerIDs,
     buildFantasyAvailabilityWarningBody,
     buildFantasyAvailabilityWarningRecord,

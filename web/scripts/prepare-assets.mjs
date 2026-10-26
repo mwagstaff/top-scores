@@ -46,6 +46,8 @@ const appIconSourcePath = path.join(
   "TopScoresAppIcon.appiconset",
   "icon-ios-1024x1024.png"
 );
+// The 40pt@3x icon uses the simplified ball artwork, which stays legible at favicon size.
+const faviconSourcePath = path.join(path.dirname(appIconSourcePath), "icon-ios-40x40@3x.png");
 const sourceInputs = [teamLogoManifestPath, teamIdentityCatalogPath, mediaAssetsRoot, tvLogosRoot, appIconSourcePath];
 
 if (hasSourceAssets()) {
@@ -138,7 +140,7 @@ async function copyAppIcons(appIconDestinationPath, faviconDestinationPath, appl
     .png({ compressionLevel: 9 })
     .toFile(appIconDestinationPath);
 
-  await sharp(sourceBuffer)
+  await sharp(fs.readFileSync(faviconSourcePath))
     .resize(32, 32, { fit: "cover" })
     .sharpen({ sigma: 0.6 })
     .png({ compressionLevel: 9 })

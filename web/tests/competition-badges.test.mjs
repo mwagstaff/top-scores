@@ -40,7 +40,7 @@ globalThis.document = {
 globalThis.window = { setInterval, clearInterval, scrollTo() {}, scrollY: 0 };
 globalThis.sessionStorage = { getItem: () => null, setItem() {} };
 const { AppShell } = await import("../src/client/components/AppShell.tsx");
-const { ukDate } = await import("../src/client/football.ts");
+const { dateLabel, localDate } = await import("../src/client/football.ts");
 
 test("competition badges follow date navigation, include every page, and ignore stale responses", async t => {
   t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-23T12:00:00Z") });
@@ -49,15 +49,16 @@ test("competition badges follow date navigation, include every page, and ignore 
   let resolveSelected, resolveStale;
   const selectedResponse = new Promise(resolve => { resolveSelected = resolve; });
   const staleResponse = new Promise(resolve => { resolveStale = resolve; });
-  const matches = (date, count, offset = 0, league = "Premier League", hasMore = false) =>
+  const matches = (date, count, offset = 0, league = "Premier League", hasMore = false, liveIndex = -1, status = "NS") =>
     new Response(JSON.stringify(Array.from({ length: count }, (_, i) => ({
       match_details_id: `${date}-${offset + i}`,
-      date, time: "14:00", league, home_team: `Home ${i}`, away_team: `Away ${i}`, tv_channels: [],
+      date, time: "14:00", league, score_status: i === liveIndex ? "95" : status, home_team: `Home ${i}`, away_team: `Away ${i}`, tv_channels: [],
     }))), { headers: { "X-Has-More": String(hasMore) } });
   globalThis.fetch = async url => {
     if (String(url).includes("/competitions/catalog"))
       return new Response(JSON.stringify({ competitions: [
         { id: "1", name: "Premier League", aliases: ["EPL"], weight: 1 },
+        { id: "2", name: "Scottish Premiership", aliases: [], weight: 2 },
       ] }));
     const params = new URL(String(url), "https://example.test").searchParams;
     const date = params.get("start");
@@ -65,34 +66,50 @@ test("competition badges follow date navigation, include every page, and ignore 
     if (date === "2026-10-25")
       return params.get("page") === "1" ? selectedResponse : matches(date, 2, 3, "EPL");
     if (date === "2026-10-26") return staleResponse;
-    return matches(date, date === ukDate() ? 1 : date === "2026-10-27" ? 2 : 0);
+    if (date === "2026-10-27") return matches(date, 2, 0, "Premier League", false, -1, "FT");
+    return matches(date, date === localDate() ? 1 : date === "2026-10-27" ? 2 : 0);
   };
   let navigate, renderer;
   function Harness() {
     navigate = useNavigate();
     return React.createElement(AppShell);
   }
-  const badges = () => renderer.root.findAllByProps({ className: "competition-count" });
+  const badges = () => renderer.root.findAll(node => node.props.className?.startsWith("competition-count"));
   const count = () => badges()[0]?.children.join("");
+  const competitionLinks = () => renderer.root.findAllByType("a").filter(node => node.props.href?.startsWith("/competitions/"));
   try {
     await act(async () => {
       renderer = create(React.createElement(MemoryRouter, null, React.createElement(Harness)));
     });
     assert.equal(count(), "1");
+    assert.equal(badges()[0].props.className, "competition-count");
     assert.equal(badges()[0].props["aria-label"], "1 match today");
+    assert.equal(competitionLinks()[0].props.href, "/competitions/Premier%20League");
 
     await act(async () => { navigate("/?date=2026-10-25"); });
     assert.equal(badges().length, 0, "the previous date's count must not remain visible");
-    await act(async () => { resolveSelected(matches("2026-10-25", 3, 0, "Premier League", true)); });
+    await act(async () => { resolveSelected(matches("2026-10-25", 3, 0, "Premier League", true, 0)); });
     assert.equal(count(), "5");
-    assert.equal(badges()[0].props["aria-label"], "5 matches on Sunday 25 October");
-    assert.equal(badges()[0].props.title, "5 matches on Sunday 25 October");
+    assert.equal(badges()[0].props.className, "competition-count is-live");
+    assert.equal(badges()[0].props["aria-label"], `5 matches on ${dateLabel("2026-10-25")}, live match in progress`);
+    assert.equal(badges()[0].props.title, `5 matches on ${dateLabel("2026-10-25")} · live match in progress`);
     assert.deepEqual(requests.filter(item => item.date === "2026-10-25").map(item => item.page), ["1", "2"]);
+
+    assert.deepEqual(competitionLinks().map(link => link.props.href), [
+      "/competitions/Premier%20League?date=2026-10-25",
+      "/competitions/Scottish%20Premiership?date=2026-10-25",
+    ]);
+    await act(async () => { navigate(competitionLinks()[0].props.href); });
+    await act(async () => { navigate(competitionLinks()[1].props.href); });
+    assert.equal(count(), "5", "switching competitions preserves the selected date's activity");
+    assert.equal(competitionLinks()[1].props.href, "/competitions/Scottish%20Premiership?date=2026-10-25");
 
     await act(async () => { navigate("/?date=2026-10-26"); });
     assert.equal(badges().length, 0);
     await act(async () => { navigate("/?date=2026-10-27"); });
     assert.equal(count(), "2");
+    assert.equal(badges()[0].props.className, "competition-count is-finished");
+    assert.equal(badges()[0].props["aria-label"], `2 matches on ${dateLabel("2026-10-27")}, all matches finished`);
     await act(async () => { resolveStale(matches("2026-10-26", 9)); });
     assert.equal(count(), "2", "a late response must not overwrite the selected date");
 
@@ -100,6 +117,7 @@ test("competition badges follow date navigation, include every page, and ignore 
     assert.equal(badges().length, 0, "competitions with no matches have no badge");
     await act(async () => { navigate("/?date=invalid"); });
     assert.equal(count(), "1", "invalid dates fall back to today");
+    assert.equal(competitionLinks()[0].props.href, "/competitions/Premier%20League");
     await act(async () => { navigate("/"); });
     assert.equal(count(), "1");
   } finally {

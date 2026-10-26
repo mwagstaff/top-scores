@@ -1865,6 +1865,29 @@ struct Top_ScoresTests {
         #expect(included.map(\.id) == [postponed.id])
     }
 
+    @Test func fixtureBrowserSelection_includesAbandonedMatchesWhenPostponedAreHidden() {
+        let abandoned = makeMatch(
+            date: "2026-10-24",
+            homeScore: 1,
+            awayScore: 0,
+            aggregateHomeScore: nil,
+            aggregateAwayScore: nil,
+            scoreStatus: "ABANDONED"
+        )
+        let visible = FixtureBrowseSelectionResolver.filterMatches(
+            [abandoned],
+            topMatchesOnly: true,
+            selectedCompetitionIDs: [],
+            competitions: [],
+            includePostponed: false
+        )
+        #expect(visible.map(\.id) == [abandoned.id])
+        #expect(abandoned.isAbandoned)
+        #expect(!abandoned.isFinished)
+        #expect(abandoned.extendedMatchStatusText == "Match abandoned")
+        #expect(MatchStatusFormatter.preferredStatus(current: "POSTPONED", incoming: "ABANDONED") == "ABANDONED")
+    }
+
     @Test func fixtureBrowserSelection_showAllDoesNotReusePreviousCompetitionFilter() {
         let competitions = [
             CompetitionCatalogEntry(

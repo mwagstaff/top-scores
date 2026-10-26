@@ -211,7 +211,7 @@ async function sendWithSingleRetry({ isDevelopmentBuild, sendOperation, contextL
  * @param {boolean} isDevelopmentBuild - Whether to use sandbox or production APNS
  * @returns {Promise<object>} - Result of the send operation
  */
-async function sendNotification(deviceToken, title, body, data = {}, isDevelopmentBuild = false) {
+async function sendNotification(deviceToken, title, body, data = {}, isDevelopmentBuild = false, options = {}) {
   if (!deviceToken) {
     throw new Error("Device token is required");
   }
@@ -227,6 +227,8 @@ async function sendNotification(deviceToken, title, body, data = {}, isDevelopme
   notification.sound = "default";
   notification.badge = 1;
   notification.payload = data;
+  if (Number.isFinite(options.expiry)) notification.expiry = options.expiry;
+  if (options.collapseId) notification.collapseId = options.collapseId;
 
   const sendResult = await sendWithSingleRetry({
     isDevelopmentBuild,

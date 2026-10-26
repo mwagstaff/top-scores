@@ -206,7 +206,7 @@ export function displayLeague(match: Match): string {
   return match.leagueSubcategory ? `${match.league}: ${match.leagueSubcategory}` : match.league;
 }
 
-export { displayStatus, isMatchLive, isMatchFinished, aggregateSummary } from "./matchState";
+export { displayStatus, isMatchLive, isMatchFinished, isMatchAbandoned, aggregateSummary } from "./matchState";
 
 export function parseKickoff(match: Match): Date | null {
   if (!/^\d{2}:\d{2}$/.test(match.time)) {

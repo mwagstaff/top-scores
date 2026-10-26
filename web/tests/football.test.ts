@@ -8,12 +8,8 @@ registerHooks({ resolve(specifier, context, next) {
     throw error;
   }
 } });
-const { rankedTVMatches, ukChannels, ukDate, moveDate, validDate, isUKRelevant, matchPath } = await import("../src/client/football.ts");
-import {
-  isMatchLive,
-  isMatchFinished,
-  displayStatus,
-} from "../src/client/matchState.ts";
+const { rankedTVMatches, ukChannels, localDate, displayTime, moveDate, validDate, isUKRelevant, matchPath } = await import("../src/client/football.ts");
+const { isMatchLive, isMatchFinished, isMatchAbandoned, displayStatus } = await import("../src/client/matchState.ts");
 import { selectStadium, homeStadiums, randomStadium, requiresPhotoCredit } from "../src/client/stadium.ts";
 import type { Match } from "../src/client/types.ts";
 
@@ -27,9 +23,20 @@ const match = (extra: Partial<Match> = {}): Match => ({
   tvChannels: [],
   ...extra,
 });
-test("UK dates handle midnight, BST and the autumn clock change", () => {
-  assert.equal(ukDate(new Date("2026-07-01T23:30:00Z")), "2026-07-02");
-  assert.equal(ukDate(new Date("2026-10-25T23:30:00Z")), "2026-10-25");
+test("dates use the browser's local day across midnight", () => {
+  const previousZone = process.env.TZ;
+  const previousWindow = globalThis.window;
+  globalThis.window = {} as Window & typeof globalThis;
+  try {
+    process.env.TZ = "Asia/Tokyo";
+    assert.equal(localDate(new Date("2026-10-24T23:30:00Z")), "2026-10-25");
+    process.env.TZ = "America/Los_Angeles";
+    assert.equal(localDate(new Date("2026-10-25T01:30:00Z")), "2026-10-24");
+  } finally {
+    if (previousZone === undefined) delete process.env.TZ;
+    else process.env.TZ = previousZone;
+    globalThis.window = previousWindow;
+  }
   assert.equal(moveDate("2026-10-25", 1), "2026-10-26");
   assert.equal(moveDate("2027-01-01", -1), "2026-12-31");
   assert.equal(validDate("2026-02-30"), false);
@@ -79,8 +86,10 @@ test("live, extra time and settled states remain distinct", () => {
   ])
     assert.equal(isMatchLive(match({ scoreStatus: status })), false);
   assert.equal(isMatchFinished(match({ scoreStatus: "PENS" })), true);
+  assert.equal(isMatchAbandoned(match({ scoreStatus: "ABANDONED", homeScore: 1, awayScore: 0 })), true);
+  assert.equal(isMatchFinished(match({ scoreStatus: "ABANDONED", homeScore: 1, awayScore: 0 })), false);
   assert.equal(displayStatus(match({ scoreStatus: "45+3" })), "45+3'");
-  assert.equal(displayStatus(match()), "20:00");
+  assert.equal(displayStatus(match()), displayTime("20:00"));
   assert.equal(
     matchPath(match({ matchDetailsId: "601100" })),
     "/matches/601100?date=2026-10-21",

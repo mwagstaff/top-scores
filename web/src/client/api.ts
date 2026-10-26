@@ -1,6 +1,5 @@
 import {
   channelApiQueryValues,
-  selectableChannels,
   type CompetitionWeightEntry,
   type LeagueTable,
   type LeagueTableGroup,
@@ -27,12 +26,8 @@ import {
   type MatchVarEvent,
 } from "./types";
 
-let competitionsPromise: Promise<string[]> | null = null;
-let channelsPromise: Promise<string[]> | null = null;
 let teamRankingsPromise: Promise<TeamRankingEntry[]> | null = null;
 let competitionWeightsPromise: Promise<CompetitionWeightEntry[]> | null = null;
-let competitionsCache: string[] | null = null;
-let channelsCache: string[] | null = null;
 let teamRankingsCache: TeamRankingEntry[] | null = null;
 let competitionWeightsCache: CompetitionWeightEntry[] | null = null;
 
@@ -114,44 +109,6 @@ export async function fetchMatchesPage(
   };
 }
 
-export function fetchCompetitions(): Promise<string[]> {
-  if (competitionsCache) {
-    return Promise.resolve(competitionsCache);
-  }
-
-  competitionsPromise ||= requestJson<string[]>("/api/v1/competitions")
-    .then((items) =>
-      [...items].sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }))
-    )
-    .then((items) => {
-      competitionsCache = items;
-      return items;
-    })
-    .catch((error) => {
-      competitionsPromise = null;
-      throw error;
-    });
-  return competitionsPromise;
-}
-
-export function fetchChannels(): Promise<string[]> {
-  if (channelsCache) {
-    return Promise.resolve(channelsCache);
-  }
-
-  channelsPromise ||= requestJson<string[]>("/api/v1/channels")
-    .then((items) => selectableChannels(items))
-    .then((items) => {
-      channelsCache = items;
-      return items;
-    })
-    .catch((error) => {
-      channelsPromise = null;
-      throw error;
-    });
-  return channelsPromise;
-}
-
 export function fetchTeamRankings(): Promise<TeamRankingEntry[]> {
   if (teamRankingsCache) {
     return Promise.resolve(teamRankingsCache);
@@ -204,6 +161,18 @@ export function fetchMatchCommentary(matchId: string, signal?: AbortSignal): Pro
   return requestJson<MatchCommentary>(
     `/api/v1/matches/${encodeURIComponent(matchId)}/commentary`, signal, { cache: "no-store" }
   );
+}
+
+export async function fetchMatchRatings(matchId: string, signal?: AbortSignal): Promise<Record<string, number>> {
+  const response = await requestJson<{ players: Array<{ player_id: string; stats: { rating: number | null } }> }>(
+    `/api/v1/matches/${encodeURIComponent(matchId)}/player-stats`, signal, { cache: "no-store" }
+  );
+  return Object.fromEntries(response.players.flatMap(({ player_id, stats }) => {
+    const rating = stats?.rating;
+    return typeof rating === "number" && Number.isFinite(rating) && rating >= 1 && rating <= 10
+      ? [[player_id, rating]]
+      : [];
+  }));
 }
 
 export function fetchMatchSocial(matchDetailsId: string): Promise<MatchSocialItem[]> {

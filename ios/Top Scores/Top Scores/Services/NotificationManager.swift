@@ -36,6 +36,8 @@ struct NotificationTestSendResult {
 final class NotificationManager: NSObject, ObservableObject {
     static let shared = NotificationManager()
 
+    @Published var pendingTVReminder: TVReminderTarget?
+
     @Published private(set) var authorizationStatus: UNAuthorizationStatus = .notDetermined
     @Published private(set) var apnsDeviceToken: String?
 
@@ -184,5 +186,23 @@ final class NotificationManager: NSObject, ObservableObject {
             sentCount: nil,
             usedStoredAPNSToken: false
         )
+    }
+}
+
+
+struct TVReminderTarget: Identifiable, Equatable {
+    let id = UUID()
+    let matchIDs: [String]
+    let kickoff: Date
+
+    init?(userInfo: [AnyHashable: Any]) {
+        guard userInfo["type"] as? String == "tv_match_reminder",
+              let ids = userInfo["matchIDs"] as? [String], !ids.isEmpty,
+              let raw = userInfo["kickoffAt"] as? String else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        guard let date = formatter.date(from: raw) else { return nil }
+        matchIDs = ids
+        kickoff = date
     }
 }

@@ -76,10 +76,33 @@ test('competition date counts deduplicate paginated matches and exclude unfinish
   let calls = 0;
   globalThis.fetch = async () => {
     calls++;
-    return Response.json([{match_details_id:'1',league:'Premier League',date:'2026-10-23',score_status:'FT'}, {match_details_id:String(calls+1),league:'Premier League',date:'2026-10-24',score_status:'NS'}], {headers:{'X-Has-More':String(calls===1)}});
+    return Response.json([{match_details_id:'1',league:'Premier League',date:'2026-10-23',score_status:'FT'}, {match_details_id:'live',league:'Premier League',date:'2026-10-23',score_status:'45'}, {match_details_id:String(calls+1),league:'Premier League',date:'2026-10-24',score_status:'NS'}], {headers:{'X-Has-More':String(calls===1)}});
   };
   try {
-    assert.deepEqual(await competitionDateCounts(['Premier League'],'2026-10-21','2026-10-27',true), {'2026-10-23':1});
+    assert.deepEqual(await competitionDateCounts(['Premier League'],'2026-10-21','2026-10-27',true), {
+      counts: {'2026-10-23':1}, liveDates: {'2026-10-23':true}, finishedDates: {'2026-10-23':false, '2026-10-24':false},
+    });
+    assert.equal(calls,2);
+  } finally { globalThis.fetch = original; }
+});
+
+test('competition date activity keeps total counts and marks dates with live matches', async () => {
+  const { competitionDateCounts } = await import('../src/client/competitionDates.ts');
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return Response.json(calls === 1
+      ? [{match_details_id:'live',league:'Premier League',date:'2026-11-01',score_status:'45'}, {match_details_id:'future',league:'Premier League',date:'2026-11-01',score_status:'NS'}]
+      : [{match_details_id:'live',league:'Premier League',date:'2026-11-01',score_status:'45'}, {match_details_id:'done',league:'Premier League',date:'2026-11-02',score_status:'FT'}, {match_details_id:'mixed-done',league:'Premier League',date:'2026-11-03',score_status:'FT'}, {match_details_id:'mixed-upcoming',league:'Premier League',date:'2026-11-03',score_status:'NS'}],
+      {headers:{'X-Has-More':String(calls===1)}});
+  };
+  try {
+    assert.deepEqual(await competitionDateCounts(['Premier League'],'2026-11-01','2026-11-03',false), {
+      counts: {'2026-11-01':2, '2026-11-02':1, '2026-11-03':2},
+      liveDates: {'2026-11-01':true},
+      finishedDates: {'2026-11-01':false, '2026-11-02':true, '2026-11-03':false},
+    });
     assert.equal(calls,2);
   } finally { globalThis.fetch = original; }
 });

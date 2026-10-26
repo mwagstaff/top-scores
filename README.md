@@ -104,3 +104,11 @@ The backend logic lives in [`api/major_games_of_interest.js`](api/major_games_of
   - [BACKFILL_README.md](api/BACKFILL_README.md)
 - API test harness notes:
   - [TEST_HARNESS_README.md](api/TEST_HARNESS_README.md)
+
+### Elo import monitoring host identity
+
+`api/elo_import_job.js` uses `MONITORING_HOST` when set and maps Sky's legacy
+OS hostname `ubuntu-4gb-hel1-2` to the registered `sky` label. This prevents
+service/host mismatches at AIOps intake. The override changes alert labels only.
+Club Elo HTTP failures retain the last good rankings dataset; a 403 browser
+challenge is an upstream availability issue, not a reason to restart the API.

@@ -1,0 +1,36 @@
+.site-main .league-table.has-scores .league-table-heading,
+.site-main .league-table.has-scores .league-table-row {
+  grid-template-columns: 2.75rem 2rem minmax(0, 1fr) 3.5rem 2.25rem 2.5rem 2.75rem 1.5rem;
+}
+.site-main .league-table.has-stats.has-scores { min-width: 800px; }
+.site-main .league-table.has-stats.has-scores .league-table-heading,
+.site-main .league-table.has-stats.has-scores .league-table-row {
+  grid-template-columns: 2.75rem 2rem minmax(10rem, 1fr) 3.5rem repeat(6, 2.25rem) 2.5rem 2.75rem 1.5rem;
+}
+.table-cell-score { text-align: center; }
+.table-score-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2.5rem;
+  min-height: 1.75rem;
+  padding: 0.15rem 0.4rem;
+  border-radius: 999px;
+  color: #fff;
+  background: #526172;
+  font-size: 0.85rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.table-score-pill.is-win { background: #066e40; }
+.table-score-pill.is-loss { background: #bf1f29; }
+.table-score-pill:hover { color: #fff; text-decoration: underline; }
+.table-score-pill:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+@media (max-width: 600px) {
+  .site-main .league-table.has-scores:not(.has-stats) .league-table-heading,
+  .site-main .league-table.has-scores:not(.has-stats) .league-table-row {
+    grid-template-columns: 27px 22px minmax(0, 1fr) 44px 23px 29px 26px 14px;
+  }
+}
