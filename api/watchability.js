@@ -1,6 +1,6 @@
 "use strict";
 
-const MODEL_VERSION = "v3";
+const MODEL_VERSION = "v5";
 
 const FACTORS = Object.freeze({
   competition: { label: "Competition", weight: 0.5 },
@@ -26,20 +26,31 @@ function tierForScore(score) {
   if (value >= 85) return "must_watch";
   if (value >= 70) return "highly_watchable";
   if (value >= 55) return "good_watch";
-  return "moderate";
+  if (value >= 30) return "moderate";
+  return "for_the_diehards";
+}
+
+function starsForScore(score) {
+  return { for_the_diehards: 1, moderate: 2, good_watch: 3, highly_watchable: 4, must_watch: 5 }[tierForScore(score)];
+}
+
+function ratingValue(value) {
+  if (value == null || String(value).trim() === "") return null;
+  const rating = Number(value);
+  return Number.isFinite(rating) && rating > 0 ? rating : null;
 }
 
 function qualityScore(homeElo, awayElo) {
-  const ratings = [homeElo, awayElo].map(Number).filter(Number.isFinite);
+  const ratings = [homeElo, awayElo].map(ratingValue).filter((rating) => rating != null);
   if (ratings.length === 0) return 45;
   const average = ratings.reduce((total, rating) => total + rating, 0) / ratings.length;
   return clamp((average - 1400) / 6);
 }
 
 function balanceScore(homeElo, awayElo) {
-  const home = Number(homeElo);
-  const away = Number(awayElo);
-  if (!Number.isFinite(home) || !Number.isFinite(away)) return 55;
+  const home = ratingValue(homeElo);
+  const away = ratingValue(awayElo);
+  if (home == null || away == null) return 55;
   return clamp(100 - Math.abs(home - away) / 4);
 }
 
@@ -115,7 +126,7 @@ function eplClubDrawAdjustment(input) {
     return null;
   }
 
-  const ratings = [input.homeElo, input.awayElo].map(Number).filter(Number.isFinite);
+  const ratings = [input.homeElo, input.awayElo].map(ratingValue).filter((rating) => rating != null);
   const drawScore = ratings.length > 0
     ? clamp((Math.max(...ratings) - 1822) * 2)
     : 50;
@@ -131,9 +142,9 @@ function championshipClubStatureAdjustment(input) {
     return null;
   }
 
-  const homeElo = Number(input.homeElo);
-  const awayElo = Number(input.awayElo);
-  if (!Number.isFinite(homeElo) || !Number.isFinite(awayElo)) return null;
+  const homeElo = ratingValue(input.homeElo);
+  const awayElo = ratingValue(input.awayElo);
+  if (homeElo == null || awayElo == null) return null;
 
   const statureScore = clamp((Math.min(homeElo, awayElo) - 1550) / 1.5);
   return {
@@ -148,11 +159,11 @@ function factorDetail(key, score, input) {
       return `${input.competitionName || "Competition"} carries a ${rounded(score)}/100 competition weighting.`;
     case "team_quality":
       return input.homeElo != null && input.awayElo != null
-        ? "Based on both clubs’ pre-match Elo ratings."
-        : "Uses a neutral baseline where a team rating is unavailable.";
+        ? "Based on both clubs’ pre-match team-strength ratings."
+        : "Uses the available club rating, or a neutral baseline when neither rating is available.";
     case "competitive_balance":
       return input.homeElo != null && input.awayElo != null
-        ? "Closer Elo ratings indicate a more evenly matched contest."
+        ? "Closer team-strength ratings indicate a more evenly matched contest."
         : "Uses a neutral baseline where both ratings are not available.";
     case "table_stakes":
       return input.homeStanding && input.awayStanding
@@ -170,6 +181,7 @@ function factorDetail(key, score, input) {
 }
 
 function calculateWatchability(input = {}) {
+  input = { ...input, homeElo: ratingValue(input.homeElo), awayElo: ratingValue(input.awayElo) };
   const factorScores = {
     competition: clamp(input.competitionWeight),
     team_quality: qualityScore(input.homeElo, input.awayElo),
@@ -200,7 +212,7 @@ function calculateWatchability(input = {}) {
       score: clubDrawAdjustment.score,
       weight: 0,
       contribution: clubDrawAdjustment.contribution,
-      detail: "Adjusts the Premier League baseline using the highest pre-match club Elo in the fixture.",
+      detail: "Adjusts the Premier League baseline using the highest pre-match club strength in the fixture.",
     });
   }
 
@@ -212,8 +224,41 @@ function calculateWatchability(input = {}) {
       score: clubStatureAdjustment.score,
       weight: 0,
       contribution: clubStatureAdjustment.contribution,
-      detail: "Recognises high-profile Championship fixtures where both clubs have strong pre-match Elo ratings.",
+      detail: "Recognises high-profile Championship fixtures where both clubs have strong pre-match team-strength ratings.",
     });
+  }
+
+  // UK cup appeal includes the draw of a Premier League participant, even
+  // when the opponent makes the contest look one-sided on team strength.
+  const competition = String(input.competitionName || "").trim().toLowerCase();
+  const isEnglishCup = ["fa cup", "english fa cup", "efl cup", "english league cup", "carabao cup"].includes(competition);
+  if (isEnglishCup && (input.homeIsPremierLeague === true || input.awayIsPremierLeague === true)) {
+    components.push({
+      key: "premier_league_cup_draw",
+      label: "Premier League cup appeal",
+      score: 100,
+      weight: 0,
+      contribution: 15,
+      detail: "A Premier League club in an English domestic cup adds appeal for a UK audience, including against lower-league opposition.",
+    });
+  }
+
+  // Reward two elite clubs, not a single big name against weaker opposition.
+  // Ramp in gradually and keep the existing competition calibration intact.
+  const isPremierLeague = ["premier league", "english premier league"].includes(competition);
+  const isChampionsLeague = ["champions league", "uefa champions league"].includes(competition);
+  if ((isPremierLeague || isChampionsLeague) && input.homeElo != null && input.awayElo != null) {
+    const eliteStrength = clamp((Math.min(input.homeElo, input.awayElo) - 1850) / 100, 0, 1);
+    if (eliteStrength > 0) {
+      components.push({
+        key: "elite_matchup",
+        label: "Elite matchup",
+        score: rounded(eliteStrength * 100),
+        weight: 0,
+        contribution: Math.round(eliteStrength * (isPremierLeague ? 7 : 6) * 10) / 10,
+        detail: "Two elite clubs add marquee appeal, with a slightly larger Premier League boost for a UK audience.",
+      });
+    }
   }
 
   const weightedScore = components.reduce((total, component) => total + component.contribution, 0);
@@ -244,7 +289,7 @@ function calculateWatchability(input = {}) {
   return {
     score,
     tier: tierForScore(score),
-    stars: Math.max(0, Math.min(5, Math.round(score / 20))),
+    stars: starsForScore(score),
     confidence: Math.min(0.94, confidence),
     model_version: MODEL_VERSION,
     components,
@@ -255,6 +300,7 @@ module.exports = {
   MODEL_VERSION,
   calculateWatchability,
   tierForScore,
+  starsForScore,
   qualityScore,
   balanceScore,
   tableStakesScore,

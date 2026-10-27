@@ -16,7 +16,7 @@ function createEloImportRunner({
   const running = new Set();
   const failures = new Map();
 
-  async function notify(source, label, result, attempts, resolved) {
+  async function notify(source, label, result, attempts, resolved, failureAlertTtlMs = 24 * 60 * 60 * 1000) {
     const timestamp = now();
     const startsAt = failures.get(source) || new Date(timestamp - (resolved ? 1000 : 0)).toISOString();
     if (!resolved) failures.set(source, startsAt);
@@ -32,8 +32,8 @@ function createEloImportRunner({
           : `${label} failed after ${attempts} attempts. Last error: ${String(result.error || "Unknown import failure").slice(0, 1000)}. Last dataset update: ${result.updated_at || "unknown"}.`,
       },
       startsAt,
-      // Normal imports run every 12 hours and renew an ongoing failure.
-      endsAt: new Date(timestamp + (resolved ? 0 : 24 * 60 * 60 * 1000)).toISOString(),
+      // Keep failures active until the next scheduled opportunity to recover.
+      endsAt: new Date(timestamp + (resolved ? 0 : failureAlertTtlMs)).toISOString(),
     };
     await Promise.all(alertmanagerUrls.map(async (baseUrl) => {
       for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -56,7 +56,7 @@ function createEloImportRunner({
     if (resolved) failures.delete(source);
   }
 
-  return async function runEloImport(source, label, operation) {
+  return async function runEloImport(source, label, operation, options = {}) {
     if (running.has(source)) return { success: false, skipped: true, reason: "update_in_progress" };
     running.add(source);
     const attempts = 4;
@@ -80,7 +80,7 @@ function createEloImportRunner({
           await wait(delayMs);
         }
       }
-      await notify(source, label, result, attempts, false);
+      await notify(source, label, result, attempts, false, options.failureAlertTtlMs);
       return { ...result, job_attempts: attempts, retries_exhausted: true };
     } finally {
       running.delete(source);

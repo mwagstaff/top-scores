@@ -15,23 +15,55 @@ enum PersonalCalendarSubscriptionError: LocalizedError {
     }
 }
 
+enum PersonalCalendarFeed: CaseIterable {
+    case matches, tvMustWatch, tvHighlyWatchable, tvWatchable, tvAll
+
+    var title: String {
+        switch self {
+        case .matches: "Match calendar"
+        case .tvMustWatch: "Must-watch only"
+        case .tvHighlyWatchable: "Must-watch + highly watchable"
+        case .tvWatchable: "Watchable and above"
+        case .tvAll: "All televised matches"
+        }
+    }
+
+    nonisolated var minimumScore: Int? {
+        switch self {
+        case .matches: nil
+        case .tvMustWatch: 85
+        case .tvHighlyWatchable: 70
+        case .tvWatchable: 55
+        case .tvAll: 0
+        }
+    }
+}
+
 enum PersonalCalendarSubscriptionService {
-    static func provision(preferences: PreferencesSnapshot) async throws -> URL {
+    static func provision(preferences: PreferencesSnapshot, feed: PersonalCalendarFeed = .matches) async throws -> URL {
         let calendarToken = try CalendarSubscriptionTokenStore.currentToken()
         let feedURL = try await PreferencesSyncService.shared.registerCalendarSubscription(
             preferences,
             calendarToken: calendarToken
         )
-        guard let subscriptionURL = webcalURL(from: feedURL) else {
+        guard let subscriptionURL = webcalURL(from: feedURL, feed: feed) else {
             throw PersonalCalendarSubscriptionError.invalidSubscriptionURL
         }
         return subscriptionURL
     }
 
-    nonisolated static func webcalURL(from feedURL: URL) -> URL? {
+    nonisolated static func webcalURL(from feedURL: URL, feed: PersonalCalendarFeed = .matches) -> URL? {
         guard var components = URLComponents(url: feedURL, resolvingAgainstBaseURL: false),
               components.scheme == "https" || components.scheme == "http" else {
             return nil
+        }
+        if let minimumScore = feed.minimumScore {
+            components.queryItems = (components.queryItems ?? []).filter {
+                $0.name != "type" && $0.name != "minimumScore"
+            } + [
+                URLQueryItem(name: "type", value: "tv"),
+                URLQueryItem(name: "minimumScore", value: String(minimumScore))
+            ]
         }
         components.scheme = "webcal"
         return components.url

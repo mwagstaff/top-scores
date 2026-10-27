@@ -151,6 +151,16 @@ nonisolated enum FixtureBrowsePrefetchPlanner {
 nonisolated enum FixtureBrowseAvailabilityPlanner {
     static let immediateFutureDayLimit = 14
 
+    static func canUseCachedAvailability(
+        dateKey: String,
+        todayKey: String,
+        isFresh: Bool
+    ) -> Bool {
+        // The short today TTL triggers a refetch; it must not restore a date
+        // already known to have no matches under the current filters.
+        isFresh || dateKey == todayKey
+    }
+
     static func immediateDateKeys(
         calendarDays: [FixtureCalendarDay],
         selectedDateKey: String?,
@@ -307,11 +317,27 @@ nonisolated enum FixtureBrowseSelectionResolver {
         todayKey: String,
         availableDays: [FixtureCalendarDay]
     ) -> String? {
-        guard selectedDateKey != todayKey,
-              availableDays.contains(where: { $0.date == todayKey }) else {
-            return nil
+        let calendar = Calendar(identifier: .gregorian)
+        func date(for key: String) -> Date? {
+            let parts = key.split(separator: "-").compactMap { Int($0) }
+            guard parts.count == 3 else { return nil }
+            return calendar.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2]))
         }
-        return todayKey
+
+        guard let today = date(for: todayKey) else { return nil }
+        let target = availableDays.compactMap { day -> (key: String, distance: Int)? in
+            guard let dayDate = date(for: day.date),
+                  let distance = calendar.dateComponents([.day], from: today, to: dayDate).day else {
+                return nil
+            }
+            return (day.date, distance)
+        }.min { lhs, rhs in
+            if abs(lhs.distance) != abs(rhs.distance) {
+                return abs(lhs.distance) < abs(rhs.distance)
+            }
+            return lhs.distance > rhs.distance
+        }?.key
+        return target == selectedDateKey ? nil : target
     }
 
     static func containsNextScheduledMatch(
@@ -1274,7 +1300,11 @@ final class FixtureBrowserStore: ObservableObject {
             let matchesByDate: [String: [Match]] = Dictionary(
                 uniqueKeysWithValues: immediateDateKeys.compactMap { dateKey in
                     guard let bucket = cachePayload?.buckets[Self.bucketKey(dateKey: dateKey)],
-                          Self.isFresh(bucket: bucket, dateKey: dateKey) else {
+                          FixtureBrowseAvailabilityPlanner.canUseCachedAvailability(
+                            dateKey: dateKey,
+                            todayKey: todayDateKey,
+                            isFresh: Self.isFresh(bucket: bucket, dateKey: dateKey)
+                          ) else {
                         return nil
                     }
                     return (dateKey, bucket.matches)
@@ -1482,7 +1512,11 @@ final class FixtureBrowserStore: ObservableObject {
         let immediateMatchesByDate: [String: [Match]] = Dictionary(
             uniqueKeysWithValues: immediateDateKeys.compactMap { dateKey in
                 guard let bucket = cachePayload?.buckets[Self.bucketKey(dateKey: dateKey)],
-                      Self.isFresh(bucket: bucket, dateKey: dateKey) else {
+                      FixtureBrowseAvailabilityPlanner.canUseCachedAvailability(
+                        dateKey: dateKey,
+                        todayKey: todayDateKey,
+                        isFresh: Self.isFresh(bucket: bucket, dateKey: dateKey)
+                      ) else {
                     return nil
                 }
                 return (dateKey, bucket.matches)
@@ -1886,9 +1920,12 @@ final class FixtureBrowserStore: ObservableObject {
 
             let todayKey = Self.dateFormatter.string(from: Date())
             let missingDays = payload.calendarDays.filter { day in
-                day.date >= todayKey &&
-                    day.matchCount > 0 &&
-                    payload.buckets[Self.bucketKey(dateKey: day.date)] == nil
+                guard day.date >= todayKey, day.matchCount > 0 else { return false }
+                guard let bucket = payload.buckets[Self.bucketKey(dateKey: day.date)] else {
+                    return true
+                }
+                // Recheck today's cached matches so newly added fixtures can appear.
+                return day.date == todayKey && !Self.isFresh(bucket: bucket, dateKey: day.date)
             }
             let batches = FixtureBrowseWarmPlanner.batches(
                 in: missingDays,

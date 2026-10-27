@@ -5,6 +5,8 @@ const {
   __private: {
     calendarSubscriptionTokenHash,
     matchesVisibleForScoresPreferences,
+    matchesVisibleForTVCalendarPreferences,
+    calendarFeedOptions,
     normalizeCalendarSubscriptionToken,
     redactedRequestUrl,
   },
@@ -145,4 +147,46 @@ test("calendar bearer tokens are redacted from request logs", () => {
     }),
     "/api/v1/calendar-subscriptions/[redacted].ics?source=calendar"
   );
+});
+
+const tvOptions = { fixtureViewContext, premierLeagueTeams: [], ratingForMatch: (match) => match.watchability_index };
+const ratedMatches = [85, 84, 70, 69, 55, 54, null].map((score, index) => ({
+  ...premierLeague, match_details_id: String(index), watchability_index: score === null ? null : { score },
+}));
+
+test("TV calendar thresholds include boundaries and all includes unrated broadcasts", () => {
+  for (const [minimum, ids] of [[85, ["0"]], [70, ["0", "1", "2"]], [55, ["0", "1", "2", "3", "4"]], [0, ["0", "1", "2", "3", "4", "5", "6"]]]) {
+    const result = matchesVisibleForTVCalendarPreferences(ratedMatches, activePreferences(), minimum, tvOptions);
+    assert.deepEqual(result.map((match) => match.match_details_id), ids);
+  }
+});
+
+test("TV calendars require a named broadcast and honor competition and channel settings", () => {
+  const matches = [
+    { ...premierLeague, tv_channels: [{ name: "Sky Sports Main Event" }, { name: "TNT Sports 1" }] },
+    laLiga,
+    { ...premierLeague, match_details_id: "no-tv", tv_channels: [] },
+    { ...premierLeague, match_details_id: "invalid-tv", tv_channels: [{ name: "" }] },
+    postponed,
+  ];
+  const result = matchesVisibleForTVCalendarPreferences(matches, activePreferences({
+    channelFilterEnabled: true, selectedChannels: ["Sky (all)"],
+  }), 0, tvOptions);
+  assert.deepEqual(result.map((match) => match.match_details_id), ["1"]);
+  assert.deepEqual(result[0].tv_channels, ["Sky Sports Main Event"]);
+  assert.equal(matches[0].tv_channels.length, 2);
+  assert.deepEqual(matchesVisibleForTVCalendarPreferences([laLiga], activePreferences(), 0, tvOptions), []);
+});
+
+test("calendar options preserve legacy feeds and reject invalid or ambiguous filters", () => {
+  assert.deepEqual(calendarFeedOptions({}), { type: "matches" });
+  for (const minimumScore of ["0", "55", "70", "85"]) {
+    const options = calendarFeedOptions({ type: "tv", minimumScore });
+    assert.equal(options.minimumScore, Number(minimumScore));
+    assert.match(options.calendarName, /Top Scores — TV:/);
+  }
+  assert.equal(calendarFeedOptions({ type: "tv" }).minimumScore, 0);
+  for (const query of [{ type: "other" }, { minimumScore: "85" }, { type: "tv", minimumScore: "NaN" }, { type: "tv", minimumScore: "" }, { type: "tv", minimumScore: ["85", "0"] }, { type: "tv", minimumScore: "86" }]) {
+    assert.equal(calendarFeedOptions(query), null);
+  }
 });

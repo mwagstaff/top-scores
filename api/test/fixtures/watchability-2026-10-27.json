@@ -1,0 +1,114 @@
+[
+  {
+    "match": "Sassuolo vs Lazio",
+    "previousScore": 49,
+    "input": {
+      "competitionName": "Serie A",
+      "competitionWeight": 45,
+      "homeElo": 1678.66,
+      "awayElo": 1774.07,
+      "homeStanding": {
+        "position": 14,
+        "points": 8,
+        "team_count": 20,
+        "played": 8,
+        "goals_for": 12,
+        "form": [
+          "W",
+          "L",
+          "D",
+          "L",
+          "L"
+        ]
+      },
+      "awayStanding": {
+        "position": 2,
+        "points": 22,
+        "team_count": 20,
+        "played": 8,
+        "goals_for": 16,
+        "form": [
+          "D",
+          "W",
+          "W",
+          "W",
+          "W"
+        ]
+      },
+      "stage": "League",
+      "homeIsPremierLeague": false,
+      "awayIsPremierLeague": false
+    }
+  },
+  {
+    "match": "Bradford City vs Peterborough United",
+    "previousScore": 50,
+    "input": {
+      "competitionName": "EFL Cup",
+      "competitionWeight": 60,
+      "homeElo": 1534.44,
+      "awayElo": 1435.93,
+      "homeStanding": null,
+      "awayStanding": null,
+      "stage": "Round 4",
+      "homeIsPremierLeague": false,
+      "awayIsPremierLeague": false
+    }
+  },
+  {
+    "match": "Torino vs Como",
+    "previousScore": 50,
+    "input": {
+      "competitionName": "Serie A",
+      "competitionWeight": 45,
+      "homeElo": 1689.93,
+      "awayElo": 1827.76,
+      "homeStanding": {
+        "position": 8,
+        "points": 13,
+        "team_count": 20,
+        "played": 8,
+        "goals_for": 13,
+        "form": [
+          "L",
+          "D",
+          "W",
+          "W",
+          "W"
+        ]
+      },
+      "awayStanding": {
+        "position": 5,
+        "points": 17,
+        "team_count": 20,
+        "played": 8,
+        "goals_for": 14,
+        "form": [
+          "W",
+          "L",
+          "D",
+          "W",
+          "W"
+        ]
+      },
+      "stage": "League",
+      "homeIsPremierLeague": false,
+      "awayIsPremierLeague": false
+    }
+  },
+  {
+    "match": "Fleetwood Town vs Arsenal",
+    "previousScore": 47,
+    "input": {
+      "competitionName": "EFL Cup",
+      "competitionWeight": 60,
+      "homeElo": 1352.77,
+      "awayElo": 2015,
+      "homeStanding": null,
+      "awayStanding": null,
+      "stage": "Round 4",
+      "homeIsPremierLeague": false,
+      "awayIsPremierLeague": true
+    }
+  }
+]

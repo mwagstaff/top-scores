@@ -96,7 +96,7 @@ function normalizeTeamRankingSource(value) {
   if (["merged", "both", "combined", "all"].includes(normalized)) {
     return TEAM_RANKING_SOURCE_MERGED;
   }
-  if (["clubelo", "club_elo", "club-elo"].includes(normalized)) {
+  if (["clubelo", "club_elo", "club-elo", "opta"].includes(normalized)) {
     return TEAM_RANKING_SOURCE_CLUBELO;
   }
   if (

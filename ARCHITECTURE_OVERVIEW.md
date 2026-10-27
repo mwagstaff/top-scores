@@ -12,7 +12,7 @@ flowchart LR
     BBCR[BBC Scores/Fixtures Range]
     BBCD[BBC Match Details]
     BBCT[BBC Tables]
-    CE[Club Elo Rankings]
+    CE[Opta Power Rankings]
     CEF[Club Elo Fixtures]
     FD[FootballDatabase Rankings]
     NE[National Elo Rankings]
@@ -68,7 +68,7 @@ flowchart LR
 | BBC Scores/Fixtures Range | Broad past/future fixture coverage | Every 1 hour | No explicit retry in scheduler; multi-page fetch with configured concurrency | `bbc_range_matches`, `merged_matches` |
 | BBC Match Details | Detailed scorers/cards/lineups/aggregate state for in-progress matches | Every 10 seconds | Per-target failures are logged and skipped; remaining targets continue | `match_details` |
 | BBC Tables | League tables plus EPL team list | Tables every 2 minutes, EPL team list every 24 hours | No explicit retry in scheduler | `league_tables`, `premier_league_teams` |
-| Club Elo Rankings | Club ranking metadata | Every 12 hours | No explicit retry in scheduler | `club_elo_teams` |
+| Opta Power Rankings | Club ranking metadata | Sunday 09:00 Europe/London | Existing Elo import retry/backoff | `club_elo_teams` |
 | Club Elo Fixtures | Fixture-level probability metadata | Every 12 hours | No explicit retry in scheduler | enriches `match_details` |
 | FootballDatabase Rankings | Club ranking metadata | Every 12 hours | Explicit retry with exponential backoff and adaptive concurrency | `football_database_teams` |
 | National Elo Rankings | International ranking metadata | Every 12 hours | Explicit retry with exponential backoff | `national_elo_teams` |
@@ -106,7 +106,7 @@ flowchart LR
 | BBC Range | Broad fixture/result coverage degrades; new fixtures may not appear |
 | BBC Match Details | Rich match detail pages degrade; monitor/event decisions lose detail |
 | BBC Tables | `/api/v1/tables` and EPL-team filters go stale |
-| Club Elo Rankings | Club Elo overlays in team/ranking responses go stale |
+| Opta Power Rankings | Club ranking overlays go stale; last good snapshot remains available |
 | Club Elo Fixtures | Match-detail probability enrichment stops updating, but core fixture/result APIs still work |
 | FootballDatabase | FootballDatabase-based ranking overlays go stale |
 | National Elo | International ranking overlays go stale |
@@ -322,15 +322,69 @@ The web and iOS portrait loaders treat decoded 1×1 responses as missing images 
 
 ### Ranking sources (October 2026)
 
-Club rankings now come from the published country tables on `https://clubelo.com/Ranking`,
-with precise top-100 scores from its embedded JSON chart. Imports require at least 600 teams,
-10 KiB of HTML, and a publication date no more than seven days old. Failed validation preserves
-the last good dataset. The existing 1,750 Club Elo threshold remains in use. National Elo is unchanged.
+Club rankings default to **Opta Power Rankings**, using the embedded men's dataset in
+`https://dataviz.theanalyst.com/opta-power-rankings/index.js`. The project owner confirmed
+permission for internal, personal, non-commercial use. This is a dashboard integration,
+not a supported data API: a bundle format change can require a parser update.
 
-The default team ranking source is `clubelo` (which also includes National Elo for national teams).
-FootballDatabase polling is disabled by default (`FOOTBALL_DATABASE_ENABLED=false`); while disabled,
-a configured `merged`/`footballdatabase` default resolves to `clubelo` to avoid stale blends.
-Explicit historical-source queries remain available. Club Elo fixture polling is disabled by default
-(`CLUB_ELO_FIXTURES_ENABLED=false`) because its upstream CSV endpoint was deactivated.
-These switches are exposed in server diagnostics. Legacy `CLUB_ELO_BASE_URL` overrides
-pointing at `api.clubelo.com` automatically migrate to the website ranking route.
+`CLUB_RANKING_PROVIDER=opta` is the default; `clubelo` restores the previous importer.
+`OPTA_RANKINGS_URL` overrides the bundle URL. Opta runs each Sunday at 09:00 Europe/London, following UK daylight-saving time.
+The scraper runtime owns the timer; the API reports the calendar-derived
+`club_ranking_next_refresh_at`. Startup only fetches if no cached data
+exists or the last successful import predates the latest Sunday slot; restarts otherwise
+reuse the cache. The legacy Club Elo provider retains its interval settings. Output path,
+storage keys, retry/backoff and last-good-data fallback remain; Redis retention defaults
+to 28 days so a failed week does not expire the cached dataset. Successful checks persist
+their completion timestamp even when ratings are unchanged.
+Opta publishes on weekdays; imports reject dates older than seven days, malformed or
+ambiguous men's data, duplicate contestant IDs, invalid ratings, and fewer than 10,000
+named teams. Fetches have a 45-second timeout and a 40 MiB cap. Downloaded code is never
+executed. The men's Premier League competition ID distinguishes the women's dataset.
+
+The public `source=clubelo` selector remains a compatibility alias for the active club
+provider; `source=opta` also resolves to that selector. National teams still use National
+Elo. Each matched Opta row exposes `Datasource: ["Opta Power Rankings"]`, `OptaRating`
+(the original 0–100 score), `OptaId` (contestant ID), `RatingUpdatedAt` (publication date),
+and `RatingModel: "opta-compat-v1"`.
+
+Existing `Points`/internal `Elo` consumers receive `max(0, 21 * OptaRating - 85)`, rounded
+to two decimals. This is a fixed **compatibility score, not an Elo rating**. It approximates
+the existing scale for watchability, club/national ordering and the 1,750 top-club threshold
+(equivalent to Opta 87.38). Calibration used 256 unambiguous, country-matched clubs with
+Opta ratings >=65 from the October 23 Opta / October 24 Club Elo snapshots; least-squares
+fit was 20.94 * rating - 81.74. Lower scores are extrapolated; rankings and match scores
+will change with the new model. The raw Opta score remains available for future tuning.
+
+Worldwide names use exact matching and reviewed contestant-ID overrides in
+`api/opta_team_mappings.json`. Ambiguous names remain unmatched. Fuzzy Club Elo aliases
+are not applied to Opta; reserve-team suffixes are preserved and deduplication uses
+Opta IDs. Review new unmatched names against country and competition before adding IDs.
+
+The October 26 dry run on Sky fetched 14,445 named men's teams, dated October 23.
+The previous 755-name club-list snapshot matched 744 names; the unmatched remainder
+includes national teams and obscure clubs. These counts are a snapshot, not a permanent
+coverage guarantee. National Elo handling is unchanged.
+
+Monitoring keeps the registered `club_elo_rankings` source/alert identity, so the existing
+retry, alert resolution and last-good-data behavior continue without new alert rules.
+After four failed attempts (5/10/20-second backoff plus jitter), an Opta failure is sent
+to the active Alertmanager and remains active for eight days, covering the next weekly
+run. Success explicitly resolves it. The owning responder routes ordinary alerts to
+AIOps and Pushover; the Pushover receiver also mirrors notifications to Gmail via SMTP.
+Notifications repeat under the existing Alertmanager policy (normally four hours).
+A failed alert delivery is retried three times and logged.
+October 26 delivery verification used the disposable unregistered service
+`opta-weekly-delivery-test` (fingerprint `13e963b01fe3647e`). The owning Alertmanager
+recorded one email, Pushover and webhook delivery each, with no failed-delivery increase;
+AIOps recorded receipt without recovery actions. The fixture was explicitly resolved and
+confirmed absent from active alerts. Production imports were not forced to fail.
+Admin feed labels and URLs report the selected provider. On failure, inspect the fetch
+status, publication date and parser validation; do not restart the API to repair an
+upstream outage. `CLUB_RANKING_PROVIDER=clubelo` is an explicit rollback, subject to that
+source's availability. A provider switch takes effect on the next successful import.
+
+FootballDatabase polling remains disabled by default (`FOOTBALL_DATABASE_ENABLED=false`);
+while disabled, configured `merged`/`footballdatabase` defaults resolve to the active club
+feed to avoid stale blends. Explicit historical-source queries remain available. Club Elo
+fixture polling remains disabled (`CLUB_ELO_FIXTURES_ENABLED=false`) because its upstream
+CSV endpoint was deactivated. BSD remains the fixture, player and match-data provider.

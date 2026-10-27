@@ -220,6 +220,17 @@ const parsedLeagueTablesIntervalMs = Number(
 const LEAGUE_TABLES_INTERVAL_MS = Number.isFinite(parsedLeagueTablesIntervalMs)
   ? Math.max(15 * 1000, Math.floor(parsedLeagueTablesIntervalMs))
   : 2 * 60 * 1000;
+// Keep the legacy dataset/API selector stable; rows carry the actual provider.
+const { DEFAULT_OPTA_URL, OPTA_SOURCE, fetchOptaRankings } = require("./fetch_opta_rankings");
+const { buildOptaIndex, findOptaMatch, optaNameKey } = require("./opta_matching");
+const { WEEK_MS, weeklyClubRankingSchedule, clubRankingRefreshDue } = require("./club_ranking_schedule");
+const CLUB_RANKING_PROVIDER = process.env.CLUB_RANKING_PROVIDER || "opta";
+if (!["opta", "clubelo"].includes(CLUB_RANKING_PROVIDER)) {
+  throw new Error("CLUB_RANKING_PROVIDER must be opta or clubelo");
+}
+const OPTA_RANKINGS_URL = process.env.OPTA_RANKINGS_URL || DEFAULT_OPTA_URL;
+const CLUB_RANKING_LABEL = CLUB_RANKING_PROVIDER === "opta" ? OPTA_SOURCE : "Club Elo";
+const CLUB_RANKING_URL = CLUB_RANKING_PROVIDER === "opta" ? OPTA_RANKINGS_URL : (process.env.CLUB_ELO_BASE_URL || DEFAULT_CLUB_ELO_BASE_URL);
 const CLUB_ELO_BASE_URL = process.env.CLUB_ELO_BASE_URL || DEFAULT_CLUB_ELO_BASE_URL;
 const CLUB_ELO_OUTPUT_PATH = process.env.CLUB_ELO_OUTPUT_PATH || DEFAULT_CLUB_ELO_OUTPUT;
 const CLUB_ELO_TIMEZONE = process.env.CLUB_ELO_TIMEZONE || DEFAULT_CLUB_ELO_TIMEZONE;
@@ -232,15 +243,15 @@ const CLUB_ELO_MIN_BYTES = Number.isFinite(parsedClubEloMinBytes)
   ? Math.max(1, Math.floor(parsedClubEloMinBytes))
   : DEFAULT_CLUB_ELO_MIN_BYTES;
 const CLUB_ELO_INTERVAL_HOURS = Number(process.env.CLUB_ELO_UPDATE_INTERVAL_HOURS || 12);
-const CLUB_ELO_INTERVAL_MS = Number(
+const CLUB_ELO_INTERVAL_MS = CLUB_RANKING_PROVIDER === "opta" ? WEEK_MS : Number(
   process.env.CLUB_ELO_UPDATE_INTERVAL_MS || CLUB_ELO_INTERVAL_HOURS * 60 * 60 * 1000
 );
 const parsedClubEloRedisTtlSeconds = Number(
-  process.env.CLUB_ELO_REDIS_TTL_SECONDS || 7 * 24 * 60 * 60
+  process.env.CLUB_ELO_REDIS_TTL_SECONDS || 28 * 24 * 60 * 60
 );
 const CLUB_ELO_REDIS_TTL_SECONDS = Number.isFinite(parsedClubEloRedisTtlSeconds)
   ? Math.max(1, Math.floor(parsedClubEloRedisTtlSeconds))
-  : 7 * 24 * 60 * 60;
+  : 28 * 24 * 60 * 60;
 const CLUB_ELO_MANUAL_MAPPINGS_PATH =
   process.env.CLUB_ELO_MANUAL_MAPPINGS_PATH ||
   path.join(__dirname, "club_elo_manual_mappings.json");
@@ -1330,6 +1341,8 @@ let cachedFixtureViewFilterContextVersion = null;
 let cachedResolvedTopTeamsPreset = null;
 let cachedResolvedTopTeamsPresetVersion = null;
 let clubEloUpdating = false;
+let clubRankingWeeklyTimer = null;
+let clubRankingNextRefreshAt = null;
 let clubEloLastSuccessAt = null;
 let clubEloLastFailureAt = null;
 let clubEloOldestFromDate = null;
@@ -12649,6 +12662,9 @@ function currentWatchabilityContext() {
   const version = [
     clubEloLastUpdated || "unknown",
     cachedClubEloTeams.length,
+    currentPremierLeagueTeamsDatasetSnapshot().updated_at || "unknown",
+    currentPremierLeagueTeamsDatasetSnapshot().items.length,
+    cachedTeamCatalogVersion || "unknown",
     nationalEloLastUpdated || "unknown",
     cachedNationalEloTeams.length,
     leagueTablesLastUpdated || "unknown",
@@ -12685,14 +12701,16 @@ function watchabilityIndexForMatch(match, competitionWeight) {
   const awayRating = useNationalRatings
     ? context.nationalEloTeamForName(match.away_team)
     : clubAway;
-  const homeElo = Number(homeRating && (homeRating.Elo ?? homeRating.Points));
-  const awayElo = Number(awayRating && (awayRating.Elo ?? awayRating.Points));
+  const homeElo = Number(homeRating?.Elo ?? homeRating?.Points ?? NaN);
+  const awayElo = Number(awayRating?.Elo ?? awayRating?.Points ?? NaN);
   const table = watchabilityTableForLeague(match.league, context.tables);
   const rivalry = watchabilityRivalryForMatch(match, manualMappings);
 
   const index = calculateWatchability({
     competitionName: match.league,
     competitionWeight,
+    homeIsPremierLeague: context.fixtureContext.isPremierLeagueTeam(match.home_team, match.home_team_id),
+    awayIsPremierLeague: context.fixtureContext.isPremierLeagueTeam(match.away_team, match.away_team_id),
     homeElo: Number.isFinite(homeElo) ? homeElo : null,
     awayElo: Number.isFinite(awayElo) ? awayElo : null,
     homeStanding: watchabilityStandingForTeam(match.home_team, table, manualMappings),
@@ -14152,6 +14170,11 @@ function normalizeClubEloTeamRecord(record) {
     Elo: Number.isFinite(eloValue) ? eloValue : null,
     From: isDateOnly(fromValue) ? fromValue : null,
     To: isDateOnly(toValue) ? toValue : null,
+    ...(record.Source === OPTA_SOURCE ? {
+      Source: OPTA_SOURCE, OptaRating: record.OptaRating, OptaId: record.OptaId,
+      RatingModel: record.RatingModel, OptaAliases: record.OptaAliases || [],
+      OptaLeague: record.OptaLeague || null,
+    } : {}),
   };
 }
 
@@ -14582,6 +14605,10 @@ function buildClubEloCandidateIndex(clubEloTeams) {
   const byIdentityKey = new Map();
   const byToken = new Map();
   const entries = Array.isArray(clubEloTeams) ? clubEloTeams : [];
+  if (entries.length && entries.every((team) => team.Source === OPTA_SOURCE)) {
+    return { byNormalizedName, byIdentityKey, byToken, opta: buildOptaIndex(entries) };
+  }
+
 
   entries.forEach((team) => {
     if (!team || typeof team !== "object") return;
@@ -14610,7 +14637,8 @@ function buildClubEloCandidateIndex(clubEloTeams) {
     });
   });
 
-  return { byNormalizedName, byIdentityKey, byToken };
+  return { byNormalizedName, byIdentityKey, byToken,
+    opta: entries.some((team) => team.Source === OPTA_SOURCE) ? buildOptaIndex(entries) : null };
 }
 
 function normalizeMatchConfidenceThreshold(value, fallback) {
@@ -14676,6 +14704,12 @@ function findBestClubEloMatch(
     Math.min(minConfidence, 0.62)
   );
   const safeIndex = index || buildClubEloCandidateIndex(clubEloTeams);
+  if (safeIndex.opta) {
+    if (isLikelyNationalTeamName(teamName)) {
+      return { team: null, accepted: false, confidence: 0, method: "excluded_national_team" };
+    }
+    return findOptaMatch(teamName, safeIndex.opta);
+  }
   let manualTargetMissingForFallback = false;
 
   const safeManualMappings = manualMappings || loadClubEloManualMappings();
@@ -14865,6 +14899,7 @@ async function mapTeamsToClubElo(matches, clubEloTeams, leagueFilter = null, opt
     const excludedFromMatching = match && match.method === "excluded_national_team";
     if (!match || !match.team || !match.accepted) {
       results.push({
+        ...(index.opta ? { Source: OPTA_SOURCE } : {}),
         Name: name,
         Rank: null,
         Club: null,
@@ -14881,6 +14916,7 @@ async function mapTeamsToClubElo(matches, clubEloTeams, leagueFilter = null, opt
     } else {
       const team = match.team;
       results.push({
+        ...(team.Source === OPTA_SOURCE ? { Source: team.Source, OptaRating: team.OptaRating, OptaId: team.OptaId, RatingModel: team.RatingModel, RatingUpdatedAt: team.From } : {}),
         Name: name,
         Rank: Number.isFinite(team.Rank) ? team.Rank : null,
         Club: team.Club || null,
@@ -15218,6 +15254,7 @@ function rankingDatasourceLabel(source) {
 
 const TEAM_DATASOURCE_SORT_ORDER = Object.freeze({
   "Club Elo": 1,
+  "Opta Power Rankings": 1,
   FootballDatabase: 2,
   "National Elo": 3,
 });
@@ -15304,10 +15341,15 @@ function toUnifiedTeamRows(mappedTeams, source, teamType = TEAM_TYPE_CLUB) {
       Rank: null,
       Country: ranked ? normalizeCountryForRankingSource(team.Country, source) : null,
       Points: ranked ? points : null,
-      Datasource: ranked ? [sourceLabel] : [],
+      Datasource: ranked ? [team.Source === OPTA_SOURCE ? OPTA_SOURCE : sourceLabel] : [],
+      ...(ranked && team.Source === OPTA_SOURCE ? {
+        OptaRating: team.OptaRating, OptaId: team.OptaId, RatingModel: team.RatingModel,
+        RatingUpdatedAt: team.RatingUpdatedAt,
+      } : {}),
       aliases: [],
       Type: teamType,
       _source: source,
+      _rating_provider: team.Source || null,
       _match_confidence:
         team && Number.isFinite(team._match_confidence) ? team._match_confidence : 0,
       _closest_club: team && team._closest_club ? team._closest_club : null,
@@ -15423,7 +15465,9 @@ function dedupeUnifiedTeamRowsByManualMappings(rows, manualMappings = null) {
     const name = String(row && row.Name ? row.Name : "").trim();
     if (!name) return;
     const teamType = String(row && row.Type ? row.Type : TEAM_TYPE_CLUB).toLowerCase();
-    const canonicalKey = teamType === TEAM_TYPE_NATIONAL
+    const canonicalKey = row._rating_provider === OPTA_SOURCE
+      ? (row.OptaId || optaNameKey(name))
+      : teamType === TEAM_TYPE_NATIONAL
       ? normalizedTeamKey(name)
       : (resolveManualCanonicalTeamKey(name, safeMappings) || normalizedTeamKey(name));
     const nameKey = canonicalKey || normalizedTeamKey(name) || name.toLowerCase();
@@ -15690,6 +15734,10 @@ async function buildRankedTeamsForSource(
 function toTeamsApiTeamPayload(rows) {
   return (Array.isArray(rows) ? rows : []).map((row) => ({
     Name: row.Name || null,
+    ...(Number.isFinite(row.OptaRating) ? {
+      OptaRating: row.OptaRating, OptaId: row.OptaId, RatingModel: row.RatingModel,
+      RatingUpdatedAt: row.RatingUpdatedAt,
+    } : {}),
     OverallRank: Number.isFinite(row.Rank) ? row.Rank : null,
     TypeRank: Number.isFinite(row.TypeRank) ? row.TypeRank : null,
     Country: row.Country || null,
@@ -16699,7 +16747,7 @@ function buildFixtureViewFilterContext(options = {}) {
     ...catalogPremierLeagueTeams,
   ];
   const clubEloTeamForName = (teamName) => {
-    const normalizedName = normalizeFilterTeamName(teamName);
+    const normalizedName = clubEloIndex.opta ? optaNameKey(teamName) : normalizeFilterTeamName(teamName);
     if (clubEloMatchByNormalizedName.has(normalizedName)) {
       return clubEloMatchByNormalizedName.get(normalizedName);
     }
@@ -16721,7 +16769,7 @@ function buildFixtureViewFilterContext(options = {}) {
       options.isPremierLeagueTeam ||
       ((teamName) => teamMatchesPremierLeague(teamName, resolvedPremierLeagueTeams)),
     isTopClub: options.isTopClub || ((teamName) => {
-      const normalizedName = normalizeFilterTeamName(teamName);
+      const normalizedName = clubEloIndex.opta ? optaNameKey(teamName) : normalizeFilterTeamName(teamName);
       if (topClubByNormalizedName.has(normalizedName)) {
         return topClubByNormalizedName.get(normalizedName);
       }
@@ -17018,6 +17066,38 @@ function matchesVisibleForScoresPreferences(matches, preferences = {}, options =
       majorTournaments: preferences.majorTournamentsFilterEnabled === true,
       premierLeagueTeams,
     });
+  });
+}
+
+function calendarFeedOptions(query = {}) {
+  if (query.type === undefined || query.type === "matches") {
+    return query.minimumScore === undefined ? { type: "matches" } : null;
+  }
+  if (query.type !== "tv") return null;
+  const requestedMinimum = query.minimumScore ?? "0";
+  if (!["0", "55", "70", "85"].includes(requestedMinimum)) return null;
+  const minimumScore = Number(requestedMinimum);
+  const labels = { 0: "All televised matches", 55: "Watchable and above", 70: "Highly watchable and above", 85: "Must-watch" };
+  return { type: "tv", minimumScore, calendarName: `Top Scores — TV: ${labels[minimumScore]}` };
+}
+
+function matchesVisibleForTVCalendarPreferences(matches, preferences, minimumScore, options = {}) {
+  const ratingForMatch = options.ratingForMatch || ((match) =>
+    watchabilityIndexForMatch(match, competitionWeightForLeagueName(match.league)));
+  const selectedChannels = preferences.channelFilterEnabled === true && Array.isArray(preferences.selectedChannels)
+    ? preferences.selectedChannels : [];
+  return matchesVisibleForScoresPreferences(matches, preferences, options).flatMap((match) => {
+    const channels = Array.isArray(match.tv_channels)
+      ? match.tv_channels.map(channelName).filter(Boolean).filter((name) =>
+          selectedChannels.length === 0 ||
+          selectedChannels.some((selection) => channelMatchesSelection(name, selection)))
+      : [];
+    if (channels.length === 0) return [];
+    if (minimumScore > 0) {
+      const score = ratingForMatch(match)?.score;
+      if (!Number.isFinite(score) || score < minimumScore) return [];
+    }
+    return [{ ...match, tv_channels: [...new Set(channels)] }];
   });
 }
 
@@ -22349,8 +22429,26 @@ async function updateClubEloFixtures(options = {}) {
   }
 }
 
+function scheduleClubRankingWeeklyRefresh() {
+  if (clubRankingWeeklyTimer) cancelRuntimeTimeout(clubRankingWeeklyTimer);
+  const now = Date.now();
+  const { next } = weeklyClubRankingSchedule(now);
+  clubRankingNextRefreshAt = new Date(next).toISOString();
+  console.info(`[ClubRankings] Weekly refresh scheduled Sunday 09:00 Europe/London next_iso=${clubRankingNextRefreshAt}`);
+  clubRankingWeeklyTimer = registerRuntimeTimeout(async () => {
+    clubRankingWeeklyTimer = null;
+    try {
+      await updateClubEloTeams({ trigger: "weekly_sunday_uk" });
+    } finally {
+      scheduleClubRankingWeeklyRefresh();
+    }
+  }, next - now);
+}
+
 async function updateClubEloTeams(options = {}) {
-  return runEloImport("club_elo_rankings", "Club Elo", () => updateClubEloTeamsAttempt(options));
+  return runEloImport("club_elo_rankings", CLUB_RANKING_LABEL, () => updateClubEloTeamsAttempt(options), {
+    failureAlertTtlMs: CLUB_RANKING_PROVIDER === "opta" ? WEEK_MS + 24 * 60 * 60 * 1000 : undefined,
+  });
 }
 
 async function updateClubEloTeamsAttempt(options = {}) {
@@ -22369,12 +22467,14 @@ async function updateClubEloTeamsAttempt(options = {}) {
   const trigger = options && options.trigger ? String(options.trigger) : "scheduled";
   recordRuntimeComponentStart(COMPONENT_SOURCE_CLUB_ELO, {
     trigger,
-    url: CLUB_ELO_BASE_URL,
+    url: CLUB_RANKING_URL,
     interval_ms: CLUB_ELO_INTERVAL_MS,
   });
 
   try {
-    const result = await fetchClubEloRankings({
+    const result = CLUB_RANKING_PROVIDER === "opta"
+      ? await fetchOptaRankings({ url: OPTA_RANKINGS_URL })
+      : await fetchClubEloRankings({
       baseUrl: CLUB_ELO_BASE_URL,
       date: options && options.date ? String(options.date).trim() : undefined,
       timeZone: CLUB_ELO_TIMEZONE,
@@ -22384,7 +22484,7 @@ async function updateClubEloTeamsAttempt(options = {}) {
     const previousTeams = cachedClubEloTeams;
     const teams = normalizeClubEloTeamsPayload(result.teams);
     if (!Array.isArray(teams) || teams.length === 0) {
-      throw new Error("Club Elo update returned no teams");
+      throw new Error("Club rankings update returned no teams");
     }
     const teamsChanged = hashComparablePayload(teams) !== hashComparablePayload(previousTeams);
 
@@ -22392,12 +22492,12 @@ async function updateClubEloTeamsAttempt(options = {}) {
     recordsFetched = teams.length;
     setSourceCacheSize(SOURCE_CLUB_ELO, teams.length);
     const pollCompletedAtIso = new Date().toISOString();
-    if (teamsChanged || !clubEloLastUpdated) {
+    if (teamsChanged || !clubEloLastUpdated || CLUB_RANKING_PROVIDER === "opta") {
       clubEloLastUpdated = pollCompletedAtIso;
     }
     const durationSeconds = Math.max(0, (Date.now() - startedAtMs) / 1000);
     markClubEloSuccess(pollCompletedAtIso, teams, durationSeconds);
-    if (teamsChanged) {
+    if (teamsChanged || CLUB_RANKING_PROVIDER === "opta") {
       writeClubEloTeams(CLUB_ELO_OUTPUT_PATH, teams);
       await persistOperationalDatasetSafe(OP_DATASET_CLUB_ELO_TEAMS, teams, {
         updated_at: clubEloLastUpdated,
@@ -22422,7 +22522,7 @@ async function updateClubEloTeamsAttempt(options = {}) {
     });
     recordRuntimeComponentSuccess(COMPONENT_SOURCE_CLUB_ELO, {
       trigger,
-      url: CLUB_ELO_BASE_URL,
+      url: CLUB_RANKING_URL,
       interval_ms: CLUB_ELO_INTERVAL_MS,
       count: teams.length,
       updated_at: clubEloLastUpdated,
@@ -22436,8 +22536,8 @@ async function updateClubEloTeamsAttempt(options = {}) {
       count: teams.length,
       content_type: result.contentType,
       bytes: result.byteLength,
-      min_rows: CLUB_ELO_MIN_ROWS,
-      min_bytes: CLUB_ELO_MIN_BYTES,
+      min_rows: CLUB_RANKING_PROVIDER === "opta" ? 10000 : CLUB_ELO_MIN_ROWS,
+      min_bytes: CLUB_RANKING_PROVIDER === "opta" ? null : CLUB_ELO_MIN_BYTES,
       updated_at: clubEloLastUpdated,
     };
   } catch (err) {
@@ -22445,10 +22545,10 @@ async function updateClubEloTeamsAttempt(options = {}) {
     markClubEloFailure(new Date().toISOString(), durationSeconds);
     recordRuntimeComponentFailure(COMPONENT_SOURCE_CLUB_ELO, err, {
       trigger,
-      url: CLUB_ELO_BASE_URL,
+      url: CLUB_RANKING_URL,
       interval_ms: CLUB_ELO_INTERVAL_MS,
     });
-    console.warn("Failed to update Club Elo teams:", err.message || err);
+    console.warn(`Failed to update ${CLUB_RANKING_LABEL}:`, err.message || err);
     return {
       success: false,
       trigger,
@@ -23643,7 +23743,7 @@ const ADMIN_ARCH_COMPONENT_DEFS = Object.freeze([
   { id: "source_bsd_schedule", label: "BSD Schedule Fixtures", short_label: "BSD Schedule", group: "sources", kind: "source" },
   { id: "source_bsd_match_details", label: "BSD Match Details", short_label: "BSD Details", group: "sources", kind: "source" },
   { id: "source_bbc_tables", label: "BBC Tables", short_label: "BBC Tables", group: "sources", kind: "source" },
-  { id: "source_club_elo_rankings", label: "Club Elo Rankings", short_label: "Club Elo", group: "sources", kind: "source" },
+  { id: "source_club_elo_rankings", label: CLUB_RANKING_LABEL, short_label: CLUB_RANKING_PROVIDER === "opta" ? "Opta" : "Club Elo", group: "sources", kind: "source" },
   { id: "source_club_elo_fixtures", label: "Club Elo Fixtures", short_label: "Club Elo Fx", group: "sources", kind: "source" },
   { id: "source_football_database", label: "FootballDatabase Rankings", short_label: "FootballDB", group: "sources", kind: "source" },
   { id: "source_national_elo", label: "National Elo Rankings", short_label: "National Elo", group: "sources", kind: "source" },
@@ -23991,9 +24091,11 @@ async function buildAdminArchitectureOverviewPayload() {
   const bbcTablesHealth = combineAdminHealth(bbcPremierFeed, bbcLeagueTablesFeed);
   const clubEloFeed = buildUpstreamFeedSnapshot({
     id: COMPONENT_SOURCE_CLUB_ELO,
-    title: "Club Elo Rankings",
+    title: CLUB_RANKING_LABEL,
+    next_refresh_at: CLUB_RANKING_PROVIDER === "opta"
+      ? new Date(weeklyClubRankingSchedule().next).toISOString() : null,
     runtimeId: COMPONENT_SOURCE_CLUB_ELO,
-    url: CLUB_ELO_BASE_URL,
+    url: CLUB_RANKING_URL,
     interval_ms: CLUB_ELO_INTERVAL_MS,
     updated_at: clubEloLastUpdated,
     count: cachedClubEloTeams.length,
@@ -24473,7 +24575,7 @@ async function buildAdminArchitectureComponentDetail(componentId) {
         stats: [
           { label: "Endpoints", value: "/api/v1/teams, /api/v1/teams/:teamName, /api/v1/channels, /api/v1/competitions, /api/v1/teams/premier-league" },
           { label: "Default Team Ranking Source", value: TEAM_RANKING_DEFAULT_SOURCE },
-          { label: "Club Elo Rows", value: cachedClubEloTeams.length },
+          { label: `${CLUB_RANKING_LABEL} Rows`, value: cachedClubEloTeams.length },
           { label: "FootballDatabase Rows", value: cachedFootballDatabaseTeams.length },
           { label: "National Elo Rows", value: cachedNationalEloTeams.length },
         ],
@@ -24631,7 +24733,7 @@ async function buildAdminArchitectureComponentDetail(componentId) {
     },
     source_club_elo_rankings: {
       snapshot: feedSnapshots.club_elo,
-      description: "Club Elo rankings feed used to enrich /api/v1/teams responses.",
+      description: `${CLUB_RANKING_LABEL} feed used to enrich /api/v1/teams responses.`,
       writes_to: ["operational_redis.club_elo_teams"],
       used_by: ["metadata_api"],
       failure_impact: [
@@ -26049,7 +26151,7 @@ app.post(`${API_PREFIX}/teams/club-elo/sync`, async (_req, res) => {
   if (result && result.skipped && result.reason === "update_in_progress") {
     res.status(409).json({
       success: false,
-      error: "Club Elo sync already in progress.",
+      error: `${CLUB_RANKING_LABEL} sync already in progress.`,
       ...result,
     });
     return;
@@ -26057,7 +26159,7 @@ app.post(`${API_PREFIX}/teams/club-elo/sync`, async (_req, res) => {
   if (!result || !result.success) {
     res.status(502).json({
       success: false,
-      error: "Failed to sync Club Elo teams.",
+      error: `Failed to sync ${CLUB_RANKING_LABEL}.`,
       ...result,
     });
     return;
@@ -27344,6 +27446,11 @@ app.get(`${API_PREFIX}/status`, async (_req, res) => {
     league_tables_interval_ms: LEAGUE_TABLES_INTERVAL_MS,
     club_elo_count: clubEloDataset.items.length,
     club_elo_last_updated: clubEloDataset.updated_at || clubEloLastUpdated,
+    club_ranking_provider: CLUB_RANKING_PROVIDER,
+    club_ranking_schedule: CLUB_RANKING_PROVIDER === "opta" ? "Sunday 09:00 Europe/London" : "interval",
+    club_ranking_next_refresh_at: CLUB_RANKING_PROVIDER === "opta"
+      ? new Date(weeklyClubRankingSchedule().next).toISOString() : null,
+    club_ranking_url: CLUB_RANKING_URL,
     club_elo_base_url: CLUB_ELO_BASE_URL,
     club_elo_output_path: path.resolve(CLUB_ELO_OUTPUT_PATH),
     club_elo_timezone: CLUB_ELO_TIMEZONE,
@@ -27672,6 +27779,11 @@ app.post(`${API_PREFIX}/calendar-subscriptions`, async (req, res) => {
 });
 
 app.get(`${API_PREFIX}/calendar-subscriptions/:token.ics`, async (req, res) => {
+  const feedOptions = calendarFeedOptions(req.query);
+  if (!feedOptions) {
+    res.status(400).json({ error: "Invalid calendar type or TV watchability filter." });
+    return;
+  }
   const calendarToken = normalizeCalendarSubscriptionToken(req.params.token);
   if (!calendarToken) {
     res.status(404).end();
@@ -27702,17 +27814,16 @@ app.get(`${API_PREFIX}/calendar-subscriptions/:token.ics`, async (req, res) => {
       const matchId = String(match?.match_details_id || match?.id || "").toLowerCase();
       return !matchId || !cachedDeletedMatchIds.has(matchId);
     });
-    const visibleMatches = matchesVisibleForScoresPreferences(
-      candidates,
-      preferencesRecord.preferences
-    );
+    const visibleMatches = feedOptions.type === "tv"
+      ? matchesVisibleForTVCalendarPreferences(candidates, preferencesRecord.preferences, feedOptions.minimumScore)
+      : matchesVisibleForScoresPreferences(candidates, preferencesRecord.preferences);
     const latestUpdated = newestIsoTimestamp([
       cachedBsdMatchesUpdatedAt,
       preferencesRecord.updatedAt,
       subscription.updated_at,
     ]);
     const generatedAt = latestUpdated ? new Date(latestUpdated) : new Date(0);
-    const calendar = generateICalendar(visibleMatches, { generatedAt });
+    const calendar = generateICalendar(visibleMatches, { generatedAt, calendarName: feedOptions.calendarName });
 
     res.set("Content-Type", "text/calendar; charset=utf-8");
     res.set("Content-Disposition", 'inline; filename="top-scores.ics"');
@@ -32493,7 +32604,10 @@ async function bootstrapOperationalState(options = {}) {
     }
 
     void updateLeagueTables({ trigger: "startup_bootstrap" });
-    void updateClubEloTeams({ trigger: "startup_bootstrap" });
+    if (CLUB_RANKING_PROVIDER !== "opta" || !cachedClubEloTeams.length ||
+        clubRankingRefreshDue(clubEloLastSuccessAt || clubEloLastUpdated)) {
+      void updateClubEloTeams({ trigger: "startup_catchup" });
+    }
     if (CLUB_ELO_FIXTURES_ENABLED) void updateClubEloFixtures({ trigger: "startup_bootstrap" });
     if (FOOTBALL_DATABASE_ENABLED) void updateFootballDatabaseTeams({ trigger: "startup_bootstrap" });
     void updateNationalEloTeams({ trigger: "startup_bootstrap" });
@@ -32721,9 +32835,13 @@ function startScraperIntervals() {
     Number.isFinite(CLUB_ELO_INTERVAL_MS) && CLUB_ELO_INTERVAL_MS > 0
       ? CLUB_ELO_INTERVAL_MS
       : 12 * 60 * 60 * 1000;
-  registerRuntimeInterval(() => {
-    void updateClubEloTeams({ trigger: "interval" });
-  }, clubEloInterval);
+  if (CLUB_RANKING_PROVIDER === "opta") {
+    scheduleClubRankingWeeklyRefresh();
+  } else {
+    registerRuntimeInterval(() => {
+      void updateClubEloTeams({ trigger: "interval" });
+    }, clubEloInterval);
+  }
 
   const clubEloFixturesInterval =
     Number.isFinite(CLUB_ELO_FIXTURES_INTERVAL_MS) && CLUB_ELO_FIXTURES_INTERVAL_MS > 0
@@ -33827,6 +33945,8 @@ module.exports = {
     parseMatchStatusMinute,
     normalizeTeamName,
     findBestClubEloMatch,
+    buildRankedTeamsForSource,
+    toTeamsApiTeamPayload,
     findBestNationalEloMatch,
     normalizeTeamShortNameEntry,
     knownTeamLogoNameCandidates,
@@ -33863,6 +33983,8 @@ module.exports = {
     matchPassesFixtureViewOptions,
     notificationFixtureContext,
     matchesVisibleForScoresPreferences,
+    matchesVisibleForTVCalendarPreferences,
+    calendarFeedOptions,
     normalizeCalendarSubscriptionToken,
     calendarSubscriptionTokenHash,
     redactedRequestUrl,

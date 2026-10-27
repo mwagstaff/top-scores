@@ -1628,7 +1628,7 @@ struct Top_ScoresTests {
         #expect(nextDate == "2026-09-13")
     }
 
-    @Test func fixtureBrowserCurrentDateJump_isHiddenOnTodayAndAlwaysTargetsToday() {
+    @Test func fixtureBrowserCurrentDateJump_targetsTodayWhenAvailable() {
         let days = ["2026-09-13", "2026-09-14", "2026-09-15"].map {
             FixtureCalendarDay(
                 date: $0,
@@ -1661,6 +1661,83 @@ struct Top_ScoresTests {
                 availableDays: days
             ) == "2026-09-13"
         )
+    }
+
+    @Test func fixtureBrowserCurrentDateJump_targetsClosestAvailableDate() {
+        let days = ["2026-09-30", "2026-10-02"].map {
+            FixtureCalendarDay(
+                date: $0,
+                matchCount: 1,
+                topMatchCount: 1,
+                hasUnfinished: true,
+                topMatchesHaveUnfinished: true,
+                competitions: []
+            )
+        }
+
+        #expect(
+            FixtureBrowseSelectionResolver.currentDateJumpTargetKey(
+                from: "2026-09-30",
+                todayKey: "2026-10-01",
+                availableDays: days
+            ) == "2026-10-02"
+        )
+        #expect(
+            FixtureBrowseSelectionResolver.currentDateJumpTargetKey(
+                from: "2026-09-30",
+                todayKey: "2026-10-03",
+                availableDays: days
+            ) == "2026-10-02"
+        )
+        #expect(
+            FixtureBrowseSelectionResolver.currentDateJumpTargetKey(
+                from: "2026-10-02",
+                todayKey: "2026-10-01",
+                availableDays: days
+            ) == nil
+        )
+    }
+
+    @Test func fixtureBrowserAvailability_excludesTodayWithoutMatchingFixtures() {
+        let days = ["2026-10-26", "2026-10-27"].map {
+            FixtureCalendarDay(
+                date: $0,
+                matchCount: 1,
+                topMatchCount: 1,
+                hasUnfinished: true,
+                topMatchesHaveUnfinished: true,
+                competitions: []
+            )
+        }
+        let available = FixtureBrowseSelectionResolver.availableDays(
+            calendarDays: days,
+            topMatchesOnly: false,
+            selectedCompetitionIDs: [],
+            selectionApplied: true,
+            knownMatchCountsByDate: ["2026-10-26": 0, "2026-10-27": 1]
+        )
+
+        #expect(available.map(\.date) == ["2026-10-27"])
+        #expect(
+            FixtureBrowseSelectionResolver.currentDateJumpTargetKey(
+                from: "2026-10-27",
+                todayKey: "2026-10-26",
+                availableDays: available
+            ) == nil
+        )
+    }
+
+    @Test func fixtureBrowserAvailability_keepsTodaysCachedFilterAfterFreshnessExpires() {
+        #expect(FixtureBrowseAvailabilityPlanner.canUseCachedAvailability(
+            dateKey: "2026-10-26",
+            todayKey: "2026-10-26",
+            isFresh: false
+        ))
+        #expect(!FixtureBrowseAvailabilityPlanner.canUseCachedAvailability(
+            dateKey: "2026-10-27",
+            todayKey: "2026-10-26",
+            isFresh: false
+        ))
     }
 
     @Test func fixtureBrowserAvailability_limitsImmediateWorkToNearbyDates() {

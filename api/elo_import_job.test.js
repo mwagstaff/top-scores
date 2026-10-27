@@ -110,3 +110,13 @@ test("Sky OS hostname uses the registered monitoring host", async (t) => {
   await h.run("club", "Club Elo", async () => ({success:false}));
   assert.equal(h.requests[0].alert.labels.host,"sky");
 });
+
+test("weekly failure stays active through the next scheduled run and resolves on recovery", async () => {
+  const h = harness();
+  const failureAlertTtlMs = 8 * 24 * 60 * 60 * 1000;
+  await h.run("club_elo_rankings", "Opta Power Rankings", async () => ({success:false, error:"HTTP 503"}), { failureAlertTtlMs });
+  assert.equal(Date.parse(h.requests[0].alert.endsAt) - Date.parse(h.requests[0].alert.startsAt), failureAlertTtlMs);
+  await h.run("club_elo_rankings", "Opta Power Rankings", async () => ({success:true}));
+  assert.deepEqual(h.requests[0].alert.labels, h.requests[2].alert.labels);
+  assert.equal(h.requests[2].alert.endsAt, h.requests[2].alert.startsAt);
+});

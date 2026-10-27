@@ -25,3 +25,55 @@ Pass both the full team name and the API-provided short name to the website logo
 Validation: provider ordering, hot config reload, cache immutability, nested response integration, existing watchability calibration, and web decoding/order preservation are covered by automated tests. Browser checks cover live pills, primary-logo rows, ratings and alternate-name crests.
 
 The website TV Guide sidebar sorts live/upcoming televised matches by descending API watchability score, then kickoff time. Unrated matches sort last. It shows three recommendations and counts other live/upcoming televised matches for the selected date; incomplete pagination is marked with a plus sign. When none remain, it searches the next 14 days for UK broadcasts, shows matches from the first available date, and links the full guide to that date.
+
+
+## UK audience calibration (model v4)
+
+The shared API retains the competition weights (Premier League 100, FA Cup 65,
+EFL Cup 60, Serie A 45) and adds a single 15-point **Premier League cup appeal**
+component to FA Cup/EFL Cup fixtures with at least one current Premier League
+participant. Membership comes from the existing Premier League team context;
+there are no hardcoded club names, and two qualifying clubs do not double the bonus.
+This recognises UK interest in cup ties even when team-strength imbalance lowers
+the competitive-balance component. Other competitions retain their existing
+calibration, including marquee rivalries and European finals.
+
+The 27 October 2026 API snapshot now scores Fleetwood–Arsenal 62 (previously 47),
+ahead of Torino–Como 50, Bradford–Peterborough 50 and Sassuolo–Lazio 49. Snapshot
+regressions cover this order alongside the established Premier League and European
+calibrations. Missing ratings remain absent rather than becoming zero: balance
+uses a neutral baseline and team quality uses available ratings, or a neutral
+baseline if neither is available.
+
+The same score feeds web/iOS presentation and existing TV calendar/reminder
+thresholds. The thresholds remain 55/70/85; a score of 62 is a Good watch and does
+not cross the default 70-point TV reminder threshold.
+
+### Minimum rating and consistent stars
+
+The iOS TV listings picker persists its own minimum rating locally, independently
+of reminder and calendar settings. It defaults to Good watch (three stars) for users without a saved choice;
+a selected star threshold includes that rating and above. All matches includes
+unrated matches. It remains
+visible when filtering leaves no matches.
+
+Model v5 aligns labels and stars: 0–29 = 1 / For the diehards; 30–54 = 2 /
+Moderate; 55–69 = 3 / Good watch; 70–84 = 4 / Highly watchable; 85–100 = 5 /
+Must watch. iOS also derives these from score for older cached payloads.
+
+Premier League and Champions League fixtures receive a bounded elite-matchup
+bonus when both strength ratings exceed 1850. The bonus ramps linearly to its
+maximum at 1950 for the weaker club: 7 points for the Premier League and 6 for
+the Champions League. Missing ratings and weaker opposition receive no bonus.
+The breakdown shows this contribution alongside the existing factors.
+
+The minimum-rating control uses an interactive Liquid Glass capsule without a
+full-width material strip. Its anchored chooser shows six options in a two-row
+grid, with stars, labels and a selected checkmark. Accessibility Dynamic Type
+switches to a scrollable single-column sheet. Selection closes the chooser and
+continues to use the same persisted rating and filtering logic.
+
+When the minimum rating hides every listing, the empty state offers a link to
+the highest available lower rating and states the exact number of matches it
+will reveal. If only unrated listings exist, it offers All matches. Dates without
+any UK TV listings instead say there are no matches on UK TV for that date.

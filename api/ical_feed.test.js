@@ -81,3 +81,14 @@ test("a rescheduled fixture keeps the same UID while its start changes", () => {
   assert.match(first, /DTSTART:20260902T120000Z/);
   assert.match(second, /DTSTART:20260902T140000Z/);
 });
+
+test("TV calendar names distinguish subscriptions and structured broadcasts render as names", () => {
+  const match = { match_details_id: "42", date: "2026-09-02", home_team: "Home", away_team: "Away", tv_channels: [{ name: "Sky Sports" }, null] };
+  const options = { generatedAt: new Date(0) };
+  const standard = generateICalendar([match], options);
+  const tv = generateICalendar([match], { ...options, calendarName: "Top Scores — TV: Must-watch" });
+  assert.match(tv.body, /X-WR-CALNAME:Top Scores — TV: Must-watch/);
+  assert.match(tv.body, /DESCRIPTION:TV: Sky Sports/);
+  assert.doesNotMatch(tv.body, /object Object/);
+  assert.notEqual(tv.etag, standard.etag);
+});

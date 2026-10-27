@@ -860,13 +860,44 @@ struct MatchesView: View {
 
     private var scoresHeroHeader: some View {
         FootballHeroHeader(title: scoresHeaderTitle, subtitle: scoresHeaderSubtitle)
+        .padding(.top, mode == .fixtures && dynamicTypeSize.isAccessibilitySize ? 8 : 0)
         .animation(accessibilityReduceMotion ? nil : .easeOut(duration: 0.18), value: isTVListingsPresented)
+        .overlay(alignment: .topLeading) {
+            if mode == .fixtures,
+               let targetDateKey = fixtureBrowser.currentDateJumpTargetKey {
+                fixtureTodayButton(targetDateKey: targetDateKey)
+                    .padding(.leading, 14)
+            }
+        }
         .overlay(alignment: .topTrailing) {
             if mode == .fixtures {
                 fixtureHeaderMenu
                     .padding(.trailing, 14)
             }
         }
+    }
+
+    private func fixtureTodayButton(targetDateKey: String) -> some View {
+        let hint = targetDateKey == fixtureBrowser.todayDateKey
+            ? "Moves to today"
+            : "No matches today. Moves to \(Self.friendlyFixtureDateLabel(targetDateKey) ?? targetDateKey)"
+        return Button {
+            fixtureBrowser.selectDate(targetDateKey)
+        } label: {
+            VStack(spacing: 0) {
+                FixtureCurrentDateIcon(dateKey: fixtureBrowser.todayDateKey)
+                Text("Today")
+                    .font(.caption2.weight(.semibold))
+            }
+            .foregroundStyle(Color.accentColor)
+            .frame(width: 56, height: 44)
+            .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("fixtureCurrentDateJump-\(targetDateKey)")
+        .accessibilityLabel("Return to today")
+        .accessibilityHint(hint)
     }
 
     private var canShowTVListings: Bool {
@@ -971,48 +1002,70 @@ struct MatchesView: View {
             }
 
             HStack(spacing: 12) {
-                Spacer(minLength: 0)
-
                 Button {
                     returnToFixtureToday()
                 } label: {
                     Text("Back to today")
+                        .frame(maxWidth: .infinity, minHeight: 28)
                         .foregroundStyle(Color.primary)
                 }
                 .buttonStyle(.bordered)
                 .tint(Color.primary)
                 .disabled(!isFixtureTodayAvailable)
 
-                Button("Jump to date") {
+                Button {
                     jumpToFixtureDatePickerSelection()
+                } label: {
+                    Text("Jump to date")
+                        .frame(maxWidth: .infinity, minHeight: 28)
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(!isFixtureDatePickerSelectionAvailable)
             }
+            .frame(maxWidth: .infinity, alignment: .center)
             .padding(.top, 12)
             .padding(.horizontal, 16)
 
-            Button(action: subscribeToPersonalCalendar) {
+            Menu {
+                Button {
+                    subscribeToPersonalCalendar(feed: .matches)
+                } label: {
+                    Text("Match calendar")
+                    Text("Matches in your active Scores view")
+                }
+                Menu {
+                    ForEach(PersonalCalendarFeed.allCases.filter { $0.minimumScore != nil }, id: \.self) { feed in
+                        Button(feed.title) {
+                            subscribeToPersonalCalendar(feed: feed)
+                        }
+                    }
+                } label: {
+                    Text("TV calendar")
+                    Text("Uses your competition and channel settings")
+                }
+            } label: {
                 HStack(spacing: 7) {
                     if isSubscribingToCalendar {
                         ProgressView()
                             .controlSize(.small)
                     } else {
                         Image(systemName: "calendar.badge.plus")
+                            .accessibilityHidden(true)
                     }
                     Text(
                         isSubscribingToCalendar
                             ? "Preparing your calendar…"
-                            : "Subscribe to your match calendar"
+                            : "Subscribe to a calendar"
                     )
                 }
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(Color.accentColor)
-                .frame(maxWidth: .infinity)
+                .font(.body.weight(.semibold))
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.bordered)
+            .tint(Color.accentColor)
             .disabled(isSubscribingToCalendar)
-            .accessibilityHint("Opens Calendar to subscribe to matches in your active Scores view")
+            .accessibilityHint("Choose a match or TV calendar using your competition and channel settings")
             .padding(.top, 4)
             .padding(.horizontal, 16)
         }
@@ -1090,19 +1143,20 @@ struct MatchesView: View {
         isFixtureDatePickerPresented = false
     }
 
-    private func subscribeToPersonalCalendar() {
+    private func subscribeToPersonalCalendar(feed: PersonalCalendarFeed) {
         guard !isSubscribingToCalendar else { return }
         isSubscribingToCalendar = true
         Task { @MainActor in
             do {
                 let subscriptionURL = try await PersonalCalendarSubscriptionService.provision(
-                    preferences: preferences.snapshot
+                    preferences: preferences.snapshot,
+                    feed: feed
                 )
                 // Calendar's webcal handoff can lose its subscription prompt when
                 // another presentation is still being dismissed. Clear the compact
                 // date picker first, then open Calendar once its animation completes.
                 isFixtureDatePickerPresented = false
-                try? await Task.sleep(for: .milliseconds(350))
+                try await Task.sleep(for: .milliseconds(350))
                 openURL(subscriptionURL) { accepted in
                     isSubscribingToCalendar = false
                     if !accepted {
@@ -1110,6 +1164,8 @@ struct MatchesView: View {
                         showsCalendarSubscriptionError = true
                     }
                 }
+            } catch is CancellationError {
+                isSubscribingToCalendar = false
             } catch {
                 isSubscribingToCalendar = false
                 calendarSubscriptionErrorMessage = error.localizedDescription
@@ -1770,13 +1826,6 @@ struct MatchesView: View {
     }
 
     private var fixtureDateBrowserControl: some View {
-        let jumpTargetDateKey = fixtureBrowser.currentDateJumpTargetKey
-        let jumpTargetLabel: String?
-        if let jumpTargetDateKey {
-            jumpTargetLabel = Self.friendlyFixtureDateLabel(jumpTargetDateKey)
-        } else {
-            jumpTargetLabel = nil
-        }
         return FixtureDateCarousel(
             state: fixtureDateCarouselState,
             availableDays: fixtureBrowser.availableDays,
@@ -1784,9 +1833,6 @@ struct MatchesView: View {
             todayDateKey: fixtureBrowser.todayDateKey,
             hasLoadedCalendar: fixtureBrowser.hasLoadedCalendar,
             errorMessage: fixtureBrowser.errorMessage,
-            jumpDirection: fixtureBrowser.currentDateJumpDirection,
-            jumpTargetDateKey: jumpTargetDateKey,
-            jumpTargetLabel: jumpTargetLabel,
             height: fixtureDateCarouselHeight,
             onSelect: fixtureBrowser.selectDate
         )
@@ -4416,9 +4462,6 @@ private struct FixtureDateCarousel: View {
     let todayDateKey: String
     let hasLoadedCalendar: Bool
     let errorMessage: String?
-    let jumpDirection: FixtureBrowseSelectionResolver.DateJumpDirection?
-    let jumpTargetDateKey: String?
-    let jumpTargetLabel: String?
     let height: CGFloat
     let onSelect: (String) -> Void
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -4483,7 +4526,7 @@ private struct FixtureDateCarousel: View {
                     // Symmetric margins keep the selected tile at the physical centre.
                     .contentMargins(
                         .horizontal,
-                        jumpDirection == nil ? 12 : 66,
+                        12,
                         for: .scrollContent
                     )
                     .scrollIndicators(.hidden)
@@ -4511,15 +4554,6 @@ private struct FixtureDateCarousel: View {
                         guard let dateKey else { return }
                         state.centerOnSelection(dateKey)
                     }
-
-                    if let direction = jumpDirection,
-                       let targetDateKey = jumpTargetDateKey {
-                        HStack(spacing: 0) {
-                            if direction == .later { Spacer(minLength: 0) }
-                            currentDateButton(direction: direction, targetDateKey: targetDateKey)
-                            if direction == .earlier { Spacer(minLength: 0) }
-                        }
-                    }
                 }
                 .frame(height: height)
             }
@@ -4540,46 +4574,6 @@ private struct FixtureDateCarousel: View {
         (dynamicTypeSize.isAccessibilitySize ? 132 : 78) + 10
     }
 
-    private func currentDateButton(
-        direction: FixtureBrowseSelectionResolver.DateJumpDirection,
-        targetDateKey: String
-    ) -> some View {
-        Button {
-            onSelect(targetDateKey)
-        } label: {
-            ZStack {
-                HStack(spacing: 3) {
-                    if direction == .earlier {
-                        Image(systemName: "chevron.left")
-                    }
-                    FixtureCurrentDateIcon(dateKey: targetDateKey)
-                    if direction == .later {
-                        Image(systemName: "chevron.right")
-                    }
-                }
-                .font(.system(size: 15, weight: .bold))
-                .foregroundStyle(Color.accentColor)
-                .frame(width: 50, height: 42)
-                .background {
-                    FixtureGlassSurface(cornerRadius: 12)
-                }
-                .overlay {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Color.accentColor.opacity(0.66), lineWidth: 1)
-                }
-                .shadow(color: Color.accentColor.opacity(0.16), radius: 7)
-            }
-            // Own the complete area reserved over the carousel, preventing a partially
-            // obscured date tile from receiving this tap.
-            .frame(width: 66, height: height)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .zIndex(1)
-        .accessibilityIdentifier("fixtureCurrentDateJump-\(targetDateKey)")
-        .accessibilityLabel("Return to today")
-        .accessibilityHint("Moves to \(jumpTargetLabel ?? targetDateKey)")
-    }
 }
 
 private struct FixtureCurrentDateIcon: View {

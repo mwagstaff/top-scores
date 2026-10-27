@@ -223,6 +223,55 @@ struct TVListingsTimelineTests {
         #expect(match.watchabilityIndex?.components.first?.key == "competition")
     }
 
+    @Test func ratingThresholdsOverrideInconsistentCachedStarsAndLabels() {
+        let cases = [(0, 1), (29, 1), (30, 2), (54, 2), (55, 3), (69, 3), (70, 4), (84, 4), (85, 5), (100, 5)]
+        let labels = ["For the diehards", "Moderate", "Good watch", "Highly watchable", "Must watch"]
+        for (score, stars) in cases {
+            let index = MatchWatchabilityIndex(score: score, tier: "moderate", stars: 0, confidence: 0.64, modelVersion: "v4", components: [])
+            #expect(index.ratingStars == stars)
+            #expect(index.ratingTitle == labels[stars - 1])
+        }
+    }
+
+    @Test func minimumRatingFiltersBeforeTimelineAndKeepsUnratedOnlyInAllMatches() {
+        let rated = [54, 55, 70, 85].map { score in
+            Match(date: "2026-10-27", time: "20:00", homeTeam: "Team \(score)", awayTeam: "Away", league: "Premier League",
+                  watchabilityIndex: MatchWatchabilityIndex(score: score, tier: "moderate", stars: 0, confidence: 0.64, modelVersion: "v4", components: []),
+                  tvChannels: [TvChannel(name: "Sky Sports", countryCode: "GB")])
+        }
+        let matches = rated + [makeMatch(date: "2026-10-27", time: "19:00", home: "Unrated")]
+        #expect(TVListingsTimeline.matches(for: "2026-10-27", from: matches).count == 5)
+        #expect(TVListingsTimeline.matches(for: "2026-10-27", from: matches, minimumStars: 1).count == 4)
+        #expect(TVListingsTimeline.matches(for: "2026-10-27", from: matches, minimumStars: 3).map(\.homeTeam) == ["Team 55", "Team 70", "Team 85"])
+        #expect(TVListingsTimeline.matches(for: "2026-10-27", from: matches, minimumStars: 5).map(\.homeTeam) == ["Team 85"])
+        #expect(TVListingsTimeline.matches(for: "2026-10-28", from: matches, minimumStars: 5).isEmpty)
+    }
+
+    @Test func emptyRatingSuggestionChoosesHighestAvailableRatingAndExactCount() {
+        let rated = [30, 54, 29].map { score in
+            Match(date: "2026-10-27", time: "20:00", homeTeam: "Team \(score)", awayTeam: "Away", league: "Premier League",
+                  watchabilityIndex: MatchWatchabilityIndex(score: score, tier: "moderate", stars: 0, confidence: 0.64, modelVersion: "v4", components: []),
+                  tvChannels: [TvChannel(name: "Sky Sports", countryCode: "GB")])
+        }
+        let suggestion = TVListingsTimeline.lowerRatingSuggestion(in: rated, minimumStars: 3)
+        #expect(suggestion == .init(minimumStars: 2, matchCount: 2))
+        #expect(suggestion?.actionTitle == "Tap here to lower the rating and see 2 matches rated ‘Moderate’.")
+        #expect(TVListingsTimeline.lowerRatingSuggestion(in: rated, minimumStars: 5) == suggestion)
+        #expect(TVListingsTimeline.lowerRatingSuggestion(in: rated, minimumStars: 2) == nil)
+        #expect(TVListingsTimeline.matches(for: "2026-10-27", from: rated, minimumStars: suggestion!.minimumStars).count == suggestion?.matchCount)
+    }
+
+    @Test func emptyRatingSuggestionDistinguishesNoListingsFromUnratedListings() {
+        #expect(TVListingsTimeline.lowerRatingSuggestion(in: [], minimumStars: 3) == nil)
+        let unrated = [makeMatch(date: "2026-10-27", time: "19:00", home: "Unrated")]
+        let suggestion = TVListingsTimeline.lowerRatingSuggestion(in: unrated, minimumStars: 3)
+        #expect(suggestion == .init(minimumStars: 0, matchCount: 1))
+        #expect(suggestion?.actionTitle == "Tap here to show all matches and see 1 unrated match.")
+        #expect(TVListingsTimeline.lowerRatingSuggestion(in: unrated, minimumStars: 0) == nil)
+        let otherDate = TVListingsTimeline.matches(for: "2026-10-28", from: unrated)
+        #expect(TVListingsTimeline.lowerRatingSuggestion(in: otherDate, minimumStars: 3) == nil)
+    }
+
     private var testCalendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.locale = Locale(identifier: "en_GB")

@@ -52,10 +52,12 @@ nonisolated enum TVListingsTimeline {
 
     static func matches(
         for dateKey: String,
-        from matches: [Match]
+        from matches: [Match],
+        minimumStars: Int = 0
     ) -> [Match] {
         matches.compactMap { match in
             guard match.date == dateKey else { return nil }
+            guard minimumStars == 0 || (match.watchabilityIndex?.ratingStars ?? 0) >= minimumStars else { return nil }
             let channels = match.tvChannels
                 .filter {
                     $0.countryCode?.caseInsensitiveCompare(countryCode) == .orderedSame
@@ -65,6 +67,30 @@ nonisolated enum TVListingsTimeline {
             return match.withTvChannels(channels)
         }
         .sorted(by: chronologicalOrder)
+    }
+
+    struct LowerRatingSuggestion: Equatable {
+        let minimumStars: Int
+        let matchCount: Int
+
+        var actionTitle: String {
+            let matches = matchCount == 1 ? "match" : "matches"
+            guard minimumStars > 0 else {
+                return "Tap here to show all matches and see \(matchCount) unrated \(matches)."
+            }
+            let rating = MatchWatchabilityIndex.title(forStars: minimumStars)
+            return "Tap here to lower the rating and see \(matchCount) \(matches) rated ‘\(rating)’."
+        }
+    }
+
+    static func lowerRatingSuggestion(in listings: [Match], minimumStars: Int) -> LowerRatingSuggestion? {
+        guard minimumStars > 0, !listings.isEmpty,
+              !listings.contains(where: { ($0.watchabilityIndex?.ratingStars ?? 0) >= minimumStars }) else {
+            return nil
+        }
+        let nextStars = listings.compactMap { $0.watchabilityIndex?.ratingStars }.max() ?? 0
+        let count = listings.filter { nextStars == 0 || ($0.watchabilityIndex?.ratingStars ?? 0) >= nextStars }.count
+        return LowerRatingSuggestion(minimumStars: nextStars, matchCount: count)
     }
 
     static func currentTimeInsertionIndex(
@@ -149,13 +175,15 @@ struct TVListingsView: View {
 
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @AppStorage("tvListingsMinimumStars") private var minimumStars = 3
     @State private var autoScrolledDateKey: String?
     @State private var selectedWatchabilityMatch: Match?
 
     var body: some View {
         let listings = TVListingsTimeline.matches(
             for: selectedDateKey,
-            from: matches
+            from: matches,
+            minimumStars: minimumStars
         )
 
         Group {
@@ -170,6 +198,9 @@ struct TVListingsView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            minimumRatingPicker
+        }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             ukListingsNote
         }
@@ -177,6 +208,13 @@ struct TVListingsView: View {
         .sheet(item: $selectedWatchabilityMatch) { match in
             WatchabilityBreakdownSheet(match: match)
         }
+    }
+
+    private var minimumRatingPicker: some View {
+        TVMinimumRatingControl(minimumStars: $minimumStars)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
     }
 
     private var ukListingsNote: some View {
@@ -345,19 +383,39 @@ struct TVListingsView: View {
     }
 
     private var emptyState: some View {
-        VStack(spacing: 16) {
+        let allListings = TVListingsTimeline.matches(for: selectedDateKey, from: matches)
+        let suggestion = TVListingsTimeline.lowerRatingSuggestion(in: allListings, minimumStars: minimumStars)
+        return VStack(spacing: 16) {
             Image(systemName: errorMessage == nil ? "tv" : "wifi.exclamationmark")
                 .font(.system(size: 40))
                 .foregroundStyle(.secondary)
 
-            Text(errorMessage == nil ? "No televised matches" : "Unable to load TV listings")
+            Text(errorMessage != nil ? "Unable to load TV listings" : (allListings.isEmpty ? "No televised matches" : "No matches at this rating"))
                 .font(.title3)
 
-            Text(errorMessage ?? "There are no televised matches for this date.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 32)
+            VStack(spacing: 8) {
+                Text(errorMessage ?? (allListings.isEmpty
+                    ? "There are no matches on UK TV for this date."
+                    : "No televised matches meet this minimum rating."))
+                    .foregroundStyle(.secondary)
+
+                if errorMessage == nil, let suggestion {
+                    Button {
+                        minimumStars = suggestion.minimumStars
+                    } label: {
+                        Text(suggestion.actionTitle)
+                            .underline()
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(minHeight: 44)
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(Color.accentColor)
+                    .accessibilityIdentifier("tvLowerMinimumRating")
+                }
+            }
+            .font(.subheadline)
+            .multilineTextAlignment(.center)
+            .padding(.horizontal, 32)
 
             if errorMessage != nil {
                 Button("Try Again") {
@@ -391,6 +449,152 @@ struct TVListingsView: View {
                 }
             }
         }
+    }
+}
+
+private struct TVMinimumRatingControl: View {
+    @Binding var minimumStars: Int
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var isPresented = false
+
+    private var selectionTitle: String {
+        minimumStars == 0 ? "All matches" : MatchWatchabilityIndex.title(forStars: minimumStars)
+    }
+
+    var body: some View {
+        Button {
+            isPresented = true
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "line.3.horizontal.decrease")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 8) {
+                        Text("Minimum rating")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        if minimumStars > 0 {
+                            ratingStars(minimumStars)
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                    Text(selectionTitle)
+                        .font(.subheadline.weight(.semibold))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Image(systemName: "chevron.down")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: Capsule())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Minimum rating")
+        .accessibilityValue(minimumStars == 0 ? "All matches" : "\(minimumStars) stars, \(selectionTitle), and above")
+        .accessibilityHint("Choose which TV matches to show")
+        .accessibilityIdentifier("tvMinimumRating")
+        .popover(isPresented: $isPresented, arrowEdge: .top) {
+            chooser
+                .presentationCompactAdaptation(dynamicTypeSize.isAccessibilitySize ? .sheet : .popover)
+                .presentationBackground(.regularMaterial)
+        }
+    }
+
+    private var chooser: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Minimum rating")
+                        .font(.headline)
+                    Spacer(minLength: 12)
+                    Button("Done", systemImage: "xmark") {
+                        isPresented = false
+                    }
+                    .labelStyle(.iconOnly)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .buttonStyle(.plain)
+                }
+                Text("Show this rating and above.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                LazyVGrid(
+                    columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: dynamicTypeSize.isAccessibilitySize ? 1 : 3),
+                    spacing: 8
+                ) {
+                    ForEach(0...5, id: \.self) { stars in
+                        ratingOption(stars)
+                    }
+                }
+            }
+            .padding(16)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(idealWidth: 360, maxWidth: 420)
+        .frame(height: dynamicTypeSize.isAccessibilitySize ? 560 : 340)
+    }
+
+    private func ratingOption(_ stars: Int) -> some View {
+        let isSelected = minimumStars == stars
+        let title = stars == 0 ? "All matches" : MatchWatchabilityIndex.title(forStars: stars)
+        return Button {
+            minimumStars = stars
+            isPresented = false
+        } label: {
+            VStack(spacing: 10) {
+                HStack(spacing: 4) {
+                    if stars == 0 {
+                        Image(systemName: "tv")
+                            .font(.caption.weight(.semibold))
+                    } else {
+                        ratingStars(stars)
+                    }
+                    if isSelected {
+                        Image(systemName: "checkmark")
+                            .font(.caption2.weight(.bold))
+                    }
+                }
+                .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+                Text(title)
+                    .font(.caption.weight(.semibold))
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, minHeight: 76)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 8)
+            .background(isSelected ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 16))
+            .overlay {
+                RoundedRectangle(cornerRadius: 16)
+                    .strokeBorder(isSelected ? Color.accentColor.opacity(0.8) : Color.primary.opacity(0.08), lineWidth: 1)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 16))
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(stars == 0 ? title : "\(stars) stars, \(title), and above")
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+        .accessibilityIdentifier("tvMinimumRatingOption-\(stars)")
+    }
+
+    private func ratingStars(_ count: Int) -> some View {
+        HStack(spacing: 2) {
+            ForEach(0..<count, id: \.self) { _ in
+                Image(systemName: "star.fill")
+                    .font(.system(size: 10, weight: .semibold))
+            }
+        }
+        .accessibilityHidden(true)
     }
 }
 
@@ -559,7 +763,7 @@ private struct WatchabilityIndexRow: View {
         .animation(updateAnimation, value: index.score)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(
-            "Watchability: \(tierTitle), \(index.score) out of 100, \(index.stars) out of 5 stars"
+            "Watchability: \(tierTitle), \(index.score) out of 100, \(index.ratingStars) out of 5 stars"
         )
     }
 
@@ -591,10 +795,10 @@ private struct WatchabilityIndexRow: View {
     private var stars: some View {
         HStack(spacing: 3) {
             ForEach(1...5, id: \.self) { position in
-                Image(systemName: position <= index.stars ? "star.fill" : "star")
+                Image(systemName: position <= index.ratingStars ? "star.fill" : "star")
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(position <= index.stars ? tierColor : Color.secondary.opacity(0.46))
-                    .scaleEffect(accessibilityReduceMotion || position > index.stars ? 1 : 1.04)
+                    .foregroundStyle(position <= index.ratingStars ? tierColor : Color.secondary.opacity(0.46))
+                    .scaleEffect(accessibilityReduceMotion || position > index.ratingStars ? 1 : 1.04)
             }
         }
         .accessibilityHidden(true)
@@ -605,19 +809,14 @@ private struct WatchabilityIndexRow: View {
     }
 
     private var tierTitle: String {
-        switch index.tier {
-        case "must_watch": "Must Watch"
-        case "highly_watchable": "Highly Watchable"
-        case "good_watch": "Good Watch"
-        default: "Moderate"
-        }
+        index.ratingTitle
     }
 
     private var tierColor: Color {
-        switch index.tier {
-        case "must_watch": Color(red: 0.38, green: 0.86, blue: 0.35)
-        case "highly_watchable": Color(red: 0.92, green: 0.80, blue: 0.22)
-        case "good_watch": Color(red: 0.98, green: 0.63, blue: 0.16)
+        switch index.ratingStars {
+        case 5: Color(red: 0.38, green: 0.86, blue: 0.35)
+        case 4: Color(red: 0.92, green: 0.80, blue: 0.22)
+        case 3: Color(red: 0.98, green: 0.63, blue: 0.16)
         default: Color(red: 0.96, green: 0.47, blue: 0.16)
         }
     }
@@ -669,7 +868,7 @@ private struct WatchabilityBreakdownSheet: View {
                     .font(.headline)
 
                 HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text(index.tier.replacingOccurrences(of: "_", with: " ").capitalized)
+                    Text(index.ratingTitle)
                         .font(.title3.weight(.bold))
                         .foregroundStyle(accentColor(for: index))
                     Spacer(minLength: 8)
@@ -683,12 +882,12 @@ private struct WatchabilityBreakdownSheet: View {
 
                 HStack(spacing: 5) {
                     ForEach(1...5, id: \.self) { position in
-                        Image(systemName: position <= index.stars ? "star.fill" : "star")
+                        Image(systemName: position <= index.ratingStars ? "star.fill" : "star")
                     }
                 }
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(accentColor(for: index))
-                .accessibilityLabel("\(index.stars) out of 5 stars")
+                .accessibilityLabel("\(index.ratingStars) out of 5 stars")
             }
         }
     }
@@ -702,15 +901,15 @@ private struct WatchabilityBreakdownSheet: View {
                 Text(component.label)
                     .font(.subheadline.weight(.semibold))
                 Spacer(minLength: 8)
-                if component.key == "rivalry" {
-                    Text("+\(component.contribution, format: .number.precision(.fractionLength(0...1)))")
+                if component.weight == 0 {
+                    Text("\(component.contribution >= 0 ? "+" : "")\(component.contribution, format: .number.precision(.fractionLength(0...1)))")
                 } else {
                     Text("\(component.score)/100")
                 }
             }
             .foregroundStyle(.primary)
 
-            if component.key != "rivalry" {
+            if component.weight != 0 {
                 ProgressView(value: Double(component.score), total: 100)
                     .tint(accent)
             }
@@ -740,10 +939,10 @@ private struct WatchabilityBreakdownSheet: View {
     }
 
     private func accentColor(for index: MatchWatchabilityIndex) -> Color {
-        switch index.tier {
-        case "must_watch": Color(red: 0.38, green: 0.86, blue: 0.35)
-        case "highly_watchable": Color(red: 0.92, green: 0.80, blue: 0.22)
-        case "good_watch": Color(red: 0.98, green: 0.63, blue: 0.16)
+        switch index.ratingStars {
+        case 5: Color(red: 0.38, green: 0.86, blue: 0.35)
+        case 4: Color(red: 0.92, green: 0.80, blue: 0.22)
+        case 3: Color(red: 0.98, green: 0.63, blue: 0.16)
         default: Color(red: 0.96, green: 0.47, blue: 0.16)
         }
     }

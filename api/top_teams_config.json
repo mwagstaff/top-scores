@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "id": "preset:top-teams",
-  "revision": "2026-08-27.1",
+  "revision": "2026-10-26.1",
   "title": "Top teams",
   "club_elo_threshold": 1750,
   "premier_league_competition_id": "premier-league",
@@ -33,6 +33,6 @@
     "Any match involving Real Madrid, Barcelona or Bayern Munich",
     "Every Champions League league-phase or knockout match",
     "Champions League qualifying and other UEFA club matches involving UK or Irish clubs",
-    "Champions League qualifying and other UEFA club matches involving major Club Elo teams"
+    "Champions League qualifying and other UEFA club matches involving highly rated clubs"
   ]
 }

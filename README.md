@@ -7,7 +7,7 @@ Top Scores is a multi-surface football scores project with a Node/Express API, a
 - [`api`](api)
   - Main backend and data ingestion pipeline.
   - `server.js` is the primary API entry point.
-  - `fetch_*.js` scripts pull data from BBC Sport, Football on TV, Club Elo, Football Database, and National Elo sources.
+  - `fetch_*.js` scripts pull data from BBC Sport, Football on TV, Opta Power Rankings, Football Database, and National Elo sources.
   - `mongo_client.js` handles Mongo-backed durable state for user/device records, canonical match state, history, and migration targets.
   - `redis_client.js` now acts as the compatibility facade for existing callers, keeping Redis as a hot cache/fallback for operational state and short-lived coordination.
   - Admin/test harness HTML files and API-side tests also live here.
@@ -110,5 +110,6 @@ The backend logic lives in [`api/major_games_of_interest.js`](api/major_games_of
 `api/elo_import_job.js` uses `MONITORING_HOST` when set and maps Sky's legacy
 OS hostname `ubuntu-4gb-hel1-2` to the registered `sky` label. This prevents
 service/host mismatches at AIOps intake. The override changes alert labels only.
-Club Elo HTTP failures retain the last good rankings dataset; a 403 browser
-challenge is an upstream availability issue, not a reason to restart the API.
+Club ranking import failures retain the last good dataset. Opta Power Rankings is now
+the default provider; see [ranking source configuration](ARCHITECTURE_OVERVIEW.md#ranking-sources-october-2026).
+An upstream HTTP failure is not a reason to restart the API.

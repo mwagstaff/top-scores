@@ -104,7 +104,7 @@ function eventLines(match, generatedAt) {
   const league = String(match?.league || "").trim();
   if (league) description.push(league);
   const channels = Array.isArray(match?.tv_channels)
-    ? match.tv_channels.map((channel) => String(channel || "").trim()).filter(Boolean)
+    ? match.tv_channels.map((channel) => String((typeof channel === "object" ? channel?.name : channel) || "").trim()).filter(Boolean)
     : [];
   if (channels.length > 0) description.push(`TV: ${channels.join(", ")}`);
   if (description.length > 0) {

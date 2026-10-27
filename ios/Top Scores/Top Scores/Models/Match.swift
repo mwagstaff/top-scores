@@ -896,6 +896,30 @@ nonisolated struct MatchWatchabilityIndex: Codable, Hashable, Sendable {
     let modelVersion: String
     let components: [MatchWatchabilityComponent]
 
+    // Derive presentation from score so cached responses from older models
+    // use the same thresholds as the current API and minimum-rating filter.
+    var ratingStars: Int {
+        switch score {
+        case 85...: 5
+        case 70...: 4
+        case 55...: 3
+        case 30...: 2
+        default: 1
+        }
+    }
+
+    static func title(forStars stars: Int) -> String {
+        switch stars {
+        case 5: "Must watch"
+        case 4: "Highly watchable"
+        case 3: "Good watch"
+        case 2: "Moderate"
+        default: "For the diehards"
+        }
+    }
+
+    var ratingTitle: String { Self.title(forStars: ratingStars) }
+
     enum CodingKeys: String, CodingKey {
         case score
         case tier
