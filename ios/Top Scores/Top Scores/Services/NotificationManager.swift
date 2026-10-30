@@ -99,8 +99,7 @@ final class NotificationManager: NSObject, ObservableObject {
         diagnosticLog("[NotificationManager] APNS token updated and saved")
 
         // Trigger preferences sync to send token to server
-        let snapshot = PreferencesStore.loadSnapshot()
-        await PreferencesSyncService.shared.syncPreferences(snapshot)
+        await PreferencesSyncService.shared.syncPreferences()
     }
 
     /// Get the current APNS token if available

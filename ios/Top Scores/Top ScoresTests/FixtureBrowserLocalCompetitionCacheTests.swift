@@ -25,6 +25,7 @@ struct FixtureBrowserLocalCompetitionCacheTests {
                     "competitions": [
                         {"id":"premier-league","name":"Premier League","aliases":[],"weight":100,"region":"england"},
                         {"id":"la-liga","name":"La Liga","aliases":[],"weight":90,"region":"spain"},
+                        {"id":"ligue-1","name":"Ligue 1","aliases":[],"weight":70,"region":"france"},
                         {"id":"uefa-nations-league","name":"UEFA Nations League","aliases":[],"weight":80,"region":"europe"}
                     ]
                 }
@@ -37,13 +38,14 @@ struct FixtureBrowserLocalCompetitionCacheTests {
                     "days": [
                         {
                             "date":"2026-08-26",
-                            "match_count":2,
+                            "match_count":3,
                             "top_match_count":2,
                             "has_unfinished":true,
                             "top_matches_have_unfinished":true,
                             "competitions":[
                                 {"id":"premier-league","match_count":1,"has_unfinished":true},
-                                {"id":"la-liga","match_count":1,"has_unfinished":true}
+                                {"id":"la-liga","match_count":1,"has_unfinished":true},
+                                {"id":"ligue-1","match_count":1,"has_unfinished":true}
                             ]
                         },
                         {
@@ -81,6 +83,13 @@ struct FixtureBrowserLocalCompetitionCacheTests {
                             "league":"La Liga"
                         },
                         {
+                            "date":"2026-08-26",
+                            "time":"20:00",
+                            "home_team":"Lille",
+                            "away_team":"Lyon",
+                            "league":"Ligue 1"
+                        },
+                        {
                             "date":"2026-09-24",
                             "time":"19:45",
                             "home_team":"England",
@@ -110,12 +119,28 @@ struct FixtureBrowserLocalCompetitionCacheTests {
         let requestCountBeforeUnfilteredRead = requestLog.urls.count
         #expect(
             store.cachedUnfilteredMatches(for: "2026-08-26").map(\.homeTeam) ==
-                ["Arsenal", "Barcelona"]
+                ["Arsenal", "Barcelona", "Lille"]
         )
         #expect(requestLog.urls.count == requestCountBeforeUnfilteredRead)
-        await store.warmAllUpcomingFixtures()
+        #expect(store.calendarCompetitionSummariesByDate["2026-09-24"] == nil)
+        // Historical months are loaded on demand, not by upcoming-fixture warming.
+        let september = try #require(ISO8601DateFormatter().date(from: "2026-09-01T00:00:00Z"))
+        try await store.loadCalendarMonth(containing: september)
         #expect(requestLog.matchRequestCount == 2)
         let requestCountBeforeSwitch = requestLog.urls.count
+
+        store.configure(preferences: Self.preferences(
+            baseURL: baseURL, competitionID: "", optionID: FixtureViewOptionID.topTeamsPreset
+        ))
+        #expect(store.visibleMatches.map(\.homeTeam) == ["Arsenal", "Barcelona"])
+        let topSummaries = store.calendarCompetitionSummariesByDate["2026-08-26"]
+        #expect(topSummaries?.map(\.id) == ["premier-league", "la-liga"])
+        #expect(topSummaries?.map(\.matchCount) == [1, 1])
+        #expect(store.calendarCompetitionSummariesByDate["2026-09-24"]?.map(\.id) == ["uefa-nations-league"])
+        // Loading a cached month must not fetch the same matches again.
+        let august = try #require(ISO8601DateFormatter().date(from: "2026-08-01T00:00:00Z"))
+        try await store.loadCalendarMonth(containing: august)
+        #expect(requestLog.urls.count == requestCountBeforeSwitch)
 
         store.configure(
             preferences: Self.preferences(
@@ -147,11 +172,12 @@ struct FixtureBrowserLocalCompetitionCacheTests {
 
     private static func preferences(
         baseURL: String,
-        competitionID: String
+        competitionID: String,
+        optionID: String? = nil
     ) -> PreferencesSnapshot {
         PreferencesSnapshot(
             selectedLeagues: [],
-            selectedFixtureViewOptionIDs: [FixtureViewOptionID.competition(competitionID)],
+            selectedFixtureViewOptionIDs: [optionID ?? FixtureViewOptionID.competition(competitionID)],
             selectedChannels: [],
             fixtureAllMajorMatchesEnabled: false,
             englishPremierLeagueTeamsOnly: false,

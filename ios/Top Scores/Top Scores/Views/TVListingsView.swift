@@ -37,17 +37,7 @@ nonisolated enum TVListingsTimeline {
         now: Date = Date(),
         calendar: Calendar = .autoupdatingCurrent
     ) -> String {
-        guard let date = date(from: dateKey, calendar: calendar) else {
-            return "TV Listings"
-        }
-        if calendar.isDate(date, inSameDayAs: now) {
-            return "TV Today"
-        }
-        if let tomorrow = calendar.date(byAdding: .day, value: 1, to: now),
-           calendar.isDate(date, inSameDayAs: tomorrow) {
-            return "TV Tomorrow"
-        }
-        return "TV Listings"
+        "TV Guide"
     }
 
     static func matches(
@@ -172,6 +162,7 @@ struct TVListingsView: View {
     let fantasyContext: FantasyMatchRowContext
     let onSelectMatch: (Match) -> Void
     let onRefresh: () async -> Void
+    var allowsWatchabilityPresentation: () -> Bool = { true }
 
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -201,9 +192,6 @@ struct TVListingsView: View {
         .safeAreaInset(edge: .top, spacing: 0) {
             minimumRatingPicker
         }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            ukListingsNote
-        }
         .crashBreadcrumb("watchability_info", isPresented: selectedWatchabilityMatch != nil)
         .sheet(item: $selectedWatchabilityMatch) { match in
             WatchabilityBreakdownSheet(match: match)
@@ -217,15 +205,6 @@ struct TVListingsView: View {
             .padding(.vertical, 8)
     }
 
-    private var ukListingsNote: some View {
-        Label("TV listings show UK channels only.", systemImage: "info.circle")
-            .font(.caption2)
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.ultraThinMaterial)
-    }
 
     private func timeline(listings: [Match], now: Date) -> some View {
         let showsCurrentTime = TVListingsTimeline.isToday(selectedDateKey, now: now)
@@ -250,7 +229,10 @@ struct TVListingsView: View {
                                 fantasyContext: fantasyContext,
                                 usesAccessibleLayout: dynamicTypeSize.isAccessibilitySize,
                                 onSelect: onSelectMatch,
-                                onSelectWatchability: { selectedWatchabilityMatch = $0 }
+                                onSelectWatchability: {
+                                    guard allowsWatchabilityPresentation() else { return }
+                                    selectedWatchabilityMatch = $0
+                                }
                             )
                         }
 
@@ -673,6 +655,7 @@ private struct TVListingTimelineRow: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityHint("Show why this match received its rating")
+                .accessibilityIdentifier("tvWatchability-\(match.id)")
             }
         }
         .footballTintedSurface(

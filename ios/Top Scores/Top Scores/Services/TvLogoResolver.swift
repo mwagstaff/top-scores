@@ -368,6 +368,10 @@ nonisolated final class TvLogoResolver: @unchecked Sendable {
     }
 
     private let aliasKeywords: [(String, String)] = [
+        ("ligue1plus", "ligue1plus"),
+        ("s4c", "s4c"),
+        ("stv", "stv"),
+        ("deetv", "deetv"),
         ("skysports", "sky"),
         ("sky", "sky"),
         ("tntsports", "tnt"),

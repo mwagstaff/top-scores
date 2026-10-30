@@ -83,7 +83,7 @@ const light = norm([-0.45, 0.6, 0.65]);
 const mix = (a, b, t) => "#" + [0, 2, 4].map((i) => Math.round(parseInt(a.slice(i + 1, i + 3), 16) * (1 - t) + parseInt(b.slice(i + 1, i + 3), 16) * t).toString(16).padStart(2, "0")).join("");
 
 function icon(small) {
-  const R = small ? 474 : 372;
+  const R = small ? 400 : 372;
   const fs_ = build(small ? { tiltX: 0.12, tiltY: -0.1, spin: 0 } : { tiltX: 0.22, tiltY: -0.16, spin: 0.08 });
   const vis = fs_.filter((f) => f.c[2] > -0.35).sort((a, b) => a.c[2] - b.c[2]);
   const seam = small ? 26 : 9;

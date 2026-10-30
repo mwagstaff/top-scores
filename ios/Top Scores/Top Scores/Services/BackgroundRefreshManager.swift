@@ -93,14 +93,14 @@ enum BackgroundRefreshManager {
                 )
                 await fantasyRefresh
                 await missingLogoAuditCleanup
-                await PreferencesSyncService.shared.syncPreferences(snapshot)
+                await PreferencesSyncService.shared.flushPreferences()
                 await AppIconBadgeManager.update(preferences: snapshot, matches: sorted)
                 scheduleNextRefresh(intervalMinutes: snapshot.refreshIntervalMinutes)
                 task.setTaskCompleted(success: true)
             } catch {
                 await fantasyRefresh
                 await missingLogoAuditCleanup
-                await PreferencesSyncService.shared.syncPreferences(snapshot)
+                await PreferencesSyncService.shared.flushPreferences()
                 task.setTaskCompleted(success: false)
             }
         }

@@ -257,6 +257,20 @@ nonisolated enum FixtureBrowseSelectionResolver {
         }
     }
 
+    static func tvListingDays(from days: [FixtureCalendarDay], todayKey: String) -> [FixtureCalendarDay] {
+        guard !days.contains(where: { $0.date == todayKey }) else { return days }
+        // TV Today must show its empty state even when the fixture calendar has no matches today.
+        let today = FixtureCalendarDay(
+            date: todayKey,
+            matchCount: 0,
+            topMatchCount: 0,
+            hasUnfinished: false,
+            topMatchesHaveUnfinished: false,
+            competitions: []
+        )
+        return (days + [today]).sorted { $0.date < $1.date }
+    }
+
     static func defaultDateKey(
         from days: [FixtureCalendarDay],
         todayKey: String,
@@ -351,27 +365,20 @@ nonisolated enum FixtureBrowseSelectionResolver {
     }
 
     static func competitionSummaries(
-        for day: FixtureCalendarDay,
-        catalog: [CompetitionCatalogEntry],
-        selectedCompetitionIDs: Set<String>?
+        for matches: [Match],
+        catalog: [CompetitionCatalogEntry]
     ) -> [FixtureCalendarCompetitionSummary] {
-        let catalogByID = Dictionary(
-            uniqueKeysWithValues: catalog.map { ($0.stableID, $0) }
-        )
-        return day.competitions.compactMap { competition in
-            if let selectedCompetitionIDs,
-               !selectedCompetitionIDs.contains(competition.id) {
-                return nil
-            }
-            guard let catalogEntry = catalogByID[competition.id] else { return nil }
-            return FixtureCalendarCompetitionSummary(
-                id: competition.id,
-                name: catalogEntry.name,
-                matchCount: competition.matchCount,
-                weight: catalogEntry.weight
-            )
+        let lookup = competitionLookup(catalog)
+        let counts = matches.reduce(into: [String: Int]()) { counts, match in
+            guard let id = topTeamsCompetitionID(for: match, competitionLookup: lookup) else { return }
+            counts[id, default: 0] += 1
         }
-        .sorted { lhs, rhs in
+        return catalog.compactMap { entry in
+            guard let count = counts[entry.stableID], count > 0 else { return nil }
+            return FixtureCalendarCompetitionSummary(
+                id: entry.stableID, name: entry.name, matchCount: count, weight: entry.weight
+            )
+        }.sorted { lhs, rhs in
             if lhs.weight != rhs.weight { return lhs.weight > rhs.weight }
             return lhs.name.localizedCaseInsensitiveCompare(rhs.name) == .orderedAscending
         }
@@ -867,17 +874,17 @@ final class FixtureBrowserStore: ObservableObject {
 
     var calendarCompetitionSummariesByDate: [String: [FixtureCalendarCompetitionSummary]] {
         guard let snapshot else { return [:] }
-
-        let selectedCompetitionIDs: Set<String>? =
-            snapshot.fixtureViewShowsAll || calendarRequiresMatchLevelFiltering(snapshot)
-                ? nil
-                : selectedCompetitionIDs(for: snapshot)
-
-        return Dictionary(uniqueKeysWithValues: availableDays.map { day in
+        // Day-level API totals cannot represent team, rivalry, postponed or cup-round
+        // filters. Use exactly the same filtered fixtures as the Scores pages.
+        return Dictionary(uniqueKeysWithValues: availableDays.compactMap { day in
+            guard let bucket = cachePayload?.buckets[Self.bucketKey(dateKey: day.date)] else {
+                return nil
+            }
+            let matches = filteredMatches(
+                in: bucket, snapshot: snapshot, topMatchesOnly: snapshot.fixtureAllMajorMatchesEnabled
+            )
             let summaries = FixtureBrowseSelectionResolver.competitionSummaries(
-                for: day,
-                catalog: competitions,
-                selectedCompetitionIDs: selectedCompetitionIDs
+                for: matches, catalog: competitions
             )
             return (day.date, summaries)
         })
@@ -893,7 +900,7 @@ final class FixtureBrowserStore: ObservableObject {
     private static let catalogFreshnessInterval: TimeInterval = 24 * 60 * 60
     private var snapshot: PreferencesSnapshot?
     private var contextKey: String?
-    private var cachePayload: FixtureBrowseCachePayload?
+    @Published private var cachePayload: FixtureBrowseCachePayload?
     private var catalogFetchedAt: Date?
     private var refreshTask: Task<Void, Never>?
     private var selectedDateTask: Task<Void, Never>?
@@ -1136,6 +1143,13 @@ final class FixtureBrowserStore: ObservableObject {
         )
     }
 
+    func showTVListingsToday() {
+        refreshToday()
+        setTVListingsModeEnabled(true)
+        availableDays = FixtureBrowseSelectionResolver.tvListingDays(from: availableDays, todayKey: todayDateKey)
+        selectDate(todayDateKey)
+    }
+
     func setTVListingsModeEnabled(_ enabled: Bool) {
         guard isTVListingsModeEnabled != enabled else { return }
         isTVListingsModeEnabled = enabled
@@ -1191,6 +1205,36 @@ final class FixtureBrowserStore: ObservableObject {
     func warmAllUpcomingFixtures() async {
         scheduleAllUpcomingFixturesWarm()
         await allFixturesWarmTask?.value
+    }
+
+    func loadCalendarMonth(containing date: Date) async throws {
+        guard let snapshot, let baseURL = URL(string: snapshot.apiBaseURL),
+              let month = Calendar.current.dateInterval(of: .month, for: date) else { return }
+        let firstKey = Self.dateFormatter.string(from: month.start)
+        let endKey = Self.dateFormatter.string(from: month.end)
+        let days = (cachePayload?.calendarDays ?? []).filter {
+            $0.date >= firstKey && $0.date < endKey
+        }
+        let missing = days.map(\.date).filter { key in
+            guard let bucket = cachePayload?.buckets[Self.bucketKey(dateKey: key)] else { return true }
+            return !Self.isFresh(bucket: bucket, dateKey: key)
+        }
+        guard let first = missing.min(), let last = missing.max() else { return }
+        // Reuse the cache warmer's count-based batches to stay within the API page size.
+        let batches = FixtureBrowseWarmPlanner.batches(
+            in: days.filter { $0.date >= first && $0.date <= last }, startingAt: first
+        )
+        for batch in batches {
+            try Task.checkCancellation()
+            guard self.snapshot == snapshot, let start = batch.first, let end = batch.last else { return }
+            let response = try await APIClient(baseURL: baseURL, session: apiSession)
+                .fetchFixtureBrowseMatches(from: start.date, through: end.date, preferences: snapshot, hydrateStates: false)
+            try Task.checkCancellation()
+            guard self.snapshot == snapshot else { return }
+            _ = storeRangeResponse(response, for: batch.map(\.date), updatePageCache: false)
+            recomputeAvailableDays(keepCurrentDate: true)
+        }
+        persistCache()
     }
 
     func setAutoRefreshEnabled(_ enabled: Bool, refreshImmediately: Bool = false) {
@@ -1348,7 +1392,7 @@ final class FixtureBrowserStore: ObservableObject {
     ) {
         guard self.snapshot == snapshot else { return }
         let knownMatchCountsByDate = knownAvailability.mapValues(\.matchCount)
-        let days = FixtureBrowseSelectionResolver.availableDays(
+        var days = FixtureBrowseSelectionResolver.availableDays(
             calendarDays: cachePayload?.calendarDays ?? [],
             topMatchesOnly: calendarUsesTopMatches(snapshot),
             selectedCompetitionIDs: selectedCompetitionIDs,
@@ -1356,6 +1400,9 @@ final class FixtureBrowserStore: ObservableObject {
             showAllMatches: calendarShowsAllMatches(snapshot),
             knownMatchCountsByDate: knownMatchCountsByDate
         )
+        if isTVListingsModeEnabled {
+            days = FixtureBrowseSelectionResolver.tvListingDays(from: days, todayKey: todayDateKey)
+        }
         if availableDays != days {
             availableDays = days
         }

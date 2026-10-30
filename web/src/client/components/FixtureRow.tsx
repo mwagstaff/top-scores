@@ -52,11 +52,13 @@ export const FixtureRow = memo(function FixtureRow({
   match,
   showBroadcast = true,
   showRating = false,
+  compactTV = false,
   showDetails = false,
 }: {
   match: Match;
   showBroadcast?: boolean;
   showRating?: boolean;
+  compactTV?: boolean;
   showDetails?: boolean;
 }) {
   const live = isMatchLive(match);
@@ -141,7 +143,9 @@ export const FixtureRow = memo(function FixtureRow({
         </Link>
         <TeamCrest name={match.awayTeam} shortName={match.awayShortName} />
       </div>
-      <BroadcastChannels channels={channels} matchLabel={`${match.homeTeam} v ${match.awayTeam}`} />
+      {compactTV ? (
+        channels.length > 0 && <FixtureTVSummary match={match} channels={channels} />
+      ) : <BroadcastChannels channels={channels} matchLabel={`${match.homeTeam} v ${match.awayTeam}`} />}
       {showDetails && (live || isMatchFinished(match) || abandoned) && (
         <div ref={detailsAnchor} className="fixture-compact-details">
           <CompactMatchEvents details={details} homeTeam={match.homeTeam} awayTeam={match.awayTeam} />
@@ -157,6 +161,55 @@ export const FixtureRow = memo(function FixtureRow({
     </div>
   );
 });
+
+function FixtureTVSummary({ match, channels }: { match: Match; channels: TvChannel[] }) {
+  const id = useId();
+  const anchor = useRef<HTMLDivElement>(null);
+  const [popover, setPopover] = useState<{ kind: "channels" | "rating"; above: boolean; maxHeight: number } | null>(null);
+  const show = (kind: "channels" | "rating") => {
+    const bounds = anchor.current?.getBoundingClientRect();
+    if (!bounds) return;
+    const below = window.innerHeight - bounds.bottom;
+    const above = bounds.top >= 256 || bounds.top > below;
+    setPopover({ kind, above, maxHeight: Math.max(80, Math.min(240, (above ? bounds.top : below) - 16)) });
+  };
+  useEffect(() => {
+    if (!popover) return;
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setPopover(null);
+    };
+    document.addEventListener("keydown", dismiss);
+    return () => document.removeEventListener("keydown", dismiss);
+  }, [Boolean(popover)]);
+  const matchLabel = `${match.homeTeam} v ${match.awayTeam}`;
+  return <div ref={anchor} className={`fixture-tv-summary${popover ? " has-popover" : ""}`}>
+    {(["channels", ...(match.watchabilityIndex ? ["rating"] : [])] as ("channels" | "rating")[]).map(kind => (
+      <div key={kind} className={`fixture-tv-target fixture-tv-${kind}`}
+        onPointerEnter={event => { if (event.pointerType !== "touch") show(kind); }}
+        onPointerLeave={event => { if (!event.currentTarget.contains(document.activeElement)) setPopover(null); }}
+        onFocus={() => show(kind)}
+        onBlur={() => setPopover(null)}
+      >
+        <Link className="fixture-tv-trigger" to={matchPath(match)} state={{ match }}
+          aria-label={kind === "channels" ? `TV channels for ${matchLabel}; open match details` : `Match rating for ${matchLabel}; open match details`}
+          aria-describedby={popover?.kind === kind ? `${id}-${kind}` : undefined}
+        >
+          {kind === "channels" ? <ChannelLogo channel={channels[0]} showTitle={false} /> : <WatchabilityRating match={match} variant="stars" />}
+        </Link>
+        {popover?.kind === kind && <div id={`${id}-${kind}`} role="tooltip"
+          className={`fixture-tv-popover${popover.above ? " is-above" : " is-below"}`}
+        >
+          <div className="fixture-tv-popover-content" style={{ maxHeight: popover.maxHeight }}>
+            {kind === "channels" ? <>
+              <span className="eyebrow">UK TV channels</span>
+              <ul>{channels.map(channel => <li key={channel.name}><ChannelLogo channel={channel} showTitle={false} /></li>)}</ul>
+            </> : <WatchabilityRating match={match} variant="label" />}
+          </div>
+        </div>}
+      </div>
+    ))}
+  </div>;
+}
 
 export function BroadcastChannels({ channels, matchLabel }: { channels: TvChannel[]; matchLabel: string }) {
   const [channelsOpen, setChannelsOpen] = useState(false);
@@ -203,17 +256,17 @@ export function BroadcastChannels({ channels, matchLabel }: { channels: TvChanne
 ) : null;
 }
 
-export function ChannelLogo({ channel }: { channel: TvChannel }) {
+export function ChannelLogo({ channel, showTitle = true }: { channel: TvChannel; showTitle?: boolean }) {
   const [failed, setFailed] = useState(false);
   const bundled =
-    /amazon|prime ?video|apple|bbc|channel ?4|dazn|disney|hbo|itv|laliga|now ?tv|premier ?sports|sky|tnt/i.test(
+    /amazon|prime ?video|apple|bbc|channel ?4|dazn|disney|hbo|itv|laliga|ligue\s*1\s*(\+|plus)|^s4c\b|^stv\b|^deetv\b|now ?tv|premier ?sports|sky|tnt/i.test(
       channel.name,
     );
   const source = bundled
     ? `/logos/tv?name=${encodeURIComponent(channel.name)}`
     : channel.logo;
   return (
-    <span className="channel-logo" title={channel.name}>
+    <span className="channel-logo" title={showTitle ? channel.name : undefined}>
       {!failed && source && (
         <img
           src={source}
@@ -230,13 +283,13 @@ export function ChannelLogo({ channel }: { channel: TvChannel }) {
   );
 }
 
-export function WatchabilityRating({ match }: { match: Match }) {
+export function WatchabilityRating({ match, variant = "full" }: { match: Match; variant?: "full" | "stars" | "label" }) {
   const rating = match.watchabilityIndex;
   if (!rating) return null;
   const label = rating.tier.replaceAll("_", " ");
-  return <span className={`watchability-rating tier-${rating.tier}`} aria-label={`Watchability: ${label}, ${rating.score} out of 100, ${rating.stars} out of 5 stars`}>
-    <span className="watchability-label">{label}</span>
-    <span className="watchability-score">{rating.score}/100</span>
+  return <span className={`watchability-rating watchability-rating-${variant} tier-${rating.tier}`} aria-label={`Watchability: ${label}, ${rating.score} out of 100, ${rating.stars} out of 5 stars`}>
+    {variant !== "stars" && <span className="watchability-label">{label.charAt(0).toUpperCase() + label.slice(1)}</span>}
+    {variant === "full" && <span className="watchability-score">{rating.score}/100</span>}
     <span className="watchability-stars" aria-hidden="true">{"★".repeat(rating.stars)}<span>{"☆".repeat(5 - rating.stars)}</span></span>
   </span>;
 }

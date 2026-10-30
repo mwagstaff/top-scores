@@ -1,111 +1,52 @@
 import SwiftUI
-import UIKit
 
-struct FixtureAvailableDatePicker: UIViewRepresentable {
-    @Binding var selection: Date
-    let availableDateKeys: Set<String>
-    let dateRange: ClosedRange<Date>
+struct FixtureCalendarMonth: Identifiable {
+    let date: Date
+    let days: [Date]
+    let leadingEmptyDays: Int
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator(selection: $selection, availableDateKeys: availableDateKeys)
+    var id: String { Self.monthKey(for: date) }
+
+    static func dateKey(for date: Date, calendar: Calendar = .current) -> String {
+        let parts = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
     }
 
-    func makeUIView(context: Context) -> UICalendarView {
-        let calendarView = UICalendarView()
-        calendarView.calendar = .current
-        calendarView.locale = .current
-        calendarView.timeZone = .current
-        calendarView.tintColor = UIColor(Color.accentColor)
-        calendarView.availableDateRange = availableDateInterval
-
-        let dateSelection = UICalendarSelectionSingleDate(delegate: context.coordinator)
-        calendarView.selectionBehavior = dateSelection
-        updateSelection(dateSelection, in: calendarView, animated: false)
-        return calendarView
+    static func monthKey(for date: Date) -> String {
+        String(dateKey(for: date).prefix(7))
     }
 
-    func updateUIView(_ calendarView: UICalendarView, context: Context) {
-        context.coordinator.selection = $selection
-        context.coordinator.availableDateKeys = availableDateKeys
-        calendarView.availableDateRange = availableDateInterval
-
-        guard let dateSelection = calendarView.selectionBehavior
-            as? UICalendarSelectionSingleDate else {
-            return
+    static func months(in range: ClosedRange<Date>, calendar: Calendar = .current) -> [Self] {
+        guard var month = calendar.dateInterval(of: .month, for: range.lowerBound)?.start,
+              let lastMonth = calendar.dateInterval(of: .month, for: range.upperBound)?.start else {
+            return []
         }
-        updateSelection(dateSelection, in: calendarView, animated: false)
+        var result: [Self] = []
+        while month <= lastMonth {
+            guard let dayRange = calendar.range(of: .day, in: .month, for: month),
+                  let nextMonth = calendar.date(byAdding: .month, value: 1, to: month) else { break }
+            let days = dayRange.compactMap { calendar.date(byAdding: .day, value: $0 - 1, to: month) }
+            result.append(Self(
+                date: month,
+                days: days,
+                leadingEmptyDays: (calendar.component(.weekday, from: month) - calendar.firstWeekday + 7) % 7
+            ))
+            month = nextMonth
+        }
+        return result
     }
+}
 
-    private var availableDateInterval: DateInterval {
-        let calendar = Calendar.current
-        let endOfLastDay = calendar.date(
-            byAdding: .day,
-            value: 1,
-            to: calendar.startOfDay(for: dateRange.upperBound)
-        )?.addingTimeInterval(-1) ?? dateRange.upperBound
-        return DateInterval(
-            start: calendar.startOfDay(for: dateRange.lowerBound),
-            end: endOfLastDay
-        )
-    }
+/// Both the day markers and its summary use the same ordered, filtered competitions.
+struct FixtureCalendarIndicators {
+    let competitions: [FixtureCalendarCompetitionSummary]
 
-    private func updateSelection(
-        _ dateSelection: UICalendarSelectionSingleDate,
-        in calendarView: UICalendarView,
-        animated: Bool
-    ) {
-        let calendar = Calendar.current
-        let selectedComponents = calendar.dateComponents(
-            [.calendar, .era, .year, .month, .day],
-            from: selection
-        )
-        guard Coordinator.dateKey(from: dateSelection.selectedDate) !=
-                Coordinator.dateKey(from: selectedComponents) else {
-            return
-        }
-        dateSelection.setSelected(selectedComponents, animated: animated)
-        calendarView.setVisibleDateComponents(selectedComponents, animated: animated)
-    }
-
-    @MainActor
-    final class Coordinator: NSObject, UICalendarSelectionSingleDateDelegate {
-        var selection: Binding<Date>
-        var availableDateKeys: Set<String>
-
-        init(selection: Binding<Date>, availableDateKeys: Set<String>) {
-            self.selection = selection
-            self.availableDateKeys = availableDateKeys
-        }
-
-        func dateSelection(
-            _ selection: UICalendarSelectionSingleDate,
-            canSelectDate dateComponents: DateComponents?
-        ) -> Bool {
-            guard let dateKey = Self.dateKey(from: dateComponents) else { return false }
-            return availableDateKeys.contains(dateKey)
-        }
-
-        func dateSelection(
-            _ dateSelection: UICalendarSelectionSingleDate,
-            didSelectDate dateComponents: DateComponents?
-        ) {
-            guard let dateComponents,
-                  let dateKey = Self.dateKey(from: dateComponents),
-                  availableDateKeys.contains(dateKey),
-                  let date = Calendar.current.date(from: dateComponents) else {
-                return
-            }
-            selection.wrappedValue = date
-        }
-
-        static func dateKey(from components: DateComponents?) -> String? {
-            guard let year = components?.year,
-                  let month = components?.month,
-                  let day = components?.day else {
-                return nil
-            }
-            return String(format: "%04d-%02d-%02d", year, month, day)
-        }
+    var visible: [FixtureCalendarCompetitionSummary] { Array(competitions.prefix(3)) }
+    var overflowCount: Int { max(0, competitions.count - 3) }
+    var overflowMatchCount: Int { competitions.dropFirst(3).reduce(0) { $0 + $1.matchCount } }
+    var accessibilityDescription: String {
+        competitions.map { "\($0.name), \($0.matchCount) " + ($0.matchCount == 1 ? "match" : "matches") }
+            .joined(separator: "; ")
     }
 }
 

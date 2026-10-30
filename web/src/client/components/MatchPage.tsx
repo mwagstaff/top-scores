@@ -15,7 +15,7 @@ import { teamPath } from "../catalog";
 import type { Match } from "../types";
 import { CompactMatchEvents } from "./CompactMatchEvents";
 import { MatchCard } from "./MatchCard";
-import { ChannelLogo, TeamCrest } from "./FixtureRow";
+import { ChannelLogo, TeamCrest, WatchabilityRating } from "./FixtureRow";
 import { StadiumBackdrop } from "./StadiumBackdrop";
 import { PageMeta } from "./PageMeta";
 import { useInitialSeed } from "../bootstrap";
@@ -88,9 +88,22 @@ export default function MatchPage() {
           matchDetails: normalizeMatchDetails(raw),
         };
         if (controller.signal.aborted) return;
+        // Detail responses can omit the API rating supplied by fixture lists.
+        next.watchabilityIndex ??= cachedMatch(id)?.watchabilityIndex
+          ?? seedMatch?.watchabilityIndex ?? location.state?.match?.watchabilityIndex;
         setMatch(next);
         setError("");
         interval = isMatchLive(next) ? 10_000 : 60_000;
+        if (!next.watchabilityIndex && validDate(next.date) && ukChannels(next.tvChannels).length && !isMatchFinished(next) && !isMatchAbandoned(next)) {
+          try {
+            let day = await loadDay(next.date);
+            while (!controller.signal.aborted && !day.matches.some(candidate => candidate.id === id) && day.hasMore) {
+              day = await loadDay(next.date, false, true, day.page + 1);
+            }
+            const rating = day.matches.find(candidate => candidate.id === id)?.watchabilityIndex;
+            if (!controller.signal.aborted && rating) setMatch({ ...next, watchabilityIndex: rating });
+          } catch { /* Keep the available details if the fixture rating cannot load. */ }
+        }
       } catch (error) {
         if (!controller.signal.aborted)
           setError(
@@ -210,7 +223,7 @@ export default function MatchPage() {
         <section className="uk-broadcast-panel">
           <div>
             <span className="eyebrow">Where to watch</span>
-            <h2>Live in the UK</h2>
+            {match.watchabilityIndex && <h2><WatchabilityRating match={match} variant="label" /></h2>}
           </div>
           <div className="broadcast-channels">
             {channels.length ? (

@@ -165,8 +165,10 @@ struct MatchDetailView: View {
                     .font(.caption2.weight(.bold))
                     .tracking(1.5)
                     .foregroundStyle(.secondary)
-                Text("Live in \(Locale.current.localizedString(forRegionCode: Locale.current.region?.identifier ?? "") ?? "your region")")
-                    .font(.title3.weight(.semibold))
+                if let index = activeMatch.watchabilityIndex {
+                    WatchabilityRatingView(index: index)
+                        .font(.subheadline.weight(.semibold))
+                }
             }
 
             if localChannels.isEmpty {

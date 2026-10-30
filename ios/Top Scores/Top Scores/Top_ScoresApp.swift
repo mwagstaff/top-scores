@@ -79,6 +79,7 @@ struct Top_ScoresApp: App {
             LiveActivitySyncService.shared.handleScenePhaseChange(newPhase)
             switch newPhase {
             case .background:
+                Task { await PreferencesSyncService.shared.flushPreferences() }
                 deferredStartupWorkTask?.cancel()
                 deferredStartupWorkTask = nil
                 BackgroundRefreshManager.scheduleNextRefresh(
@@ -133,7 +134,7 @@ struct Top_ScoresApp: App {
                 operation: "startup_preferences_sync"
             ) else { return }
             PerformanceSignposter.startup.emitEvent("DeferredStartupPreferencesSync")
-            await PreferencesSyncService.shared.syncPreferences(snapshot)
+            await PreferencesSyncService.shared.syncPreferences()
             guard !Task.isCancelled else { return }
 
             try? await Task.sleep(nanoseconds: startupDeferredSpacingNanos)

@@ -445,6 +445,10 @@ function loadTeamShortNameEntries() {
 
 function resolveTvLogo(channelName) {
   const normalized = stripDiacritics(channelName).toLowerCase();
+  if (/ligue\s*1\s*(\+|plus)/.test(normalized)) return tvLogoIndex.get("ligue 1+") || null;
+  if (/^s4c\b/.test(normalized)) return tvLogoIndex.get("s4c") || null;
+  if (/^stv\b/.test(normalized)) return tvLogoIndex.get("stv") || null;
+  if (/^deetv\b/.test(normalized)) return tvLogoIndex.get("deetv") || null;
   if (normalized.includes("amazon") || normalized.includes("prime video") || normalized.includes("primevideo")) {
     return tvLogoIndex.get("amazon") || null;
   }

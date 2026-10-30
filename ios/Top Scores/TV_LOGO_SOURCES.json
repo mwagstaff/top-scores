@@ -1,0 +1,25 @@
+{
+  "retrieved": "2026-10-30",
+  "logos": {
+    "ligue 1+": {
+      "url": "https://ligue1.com/images/partnerships/LIGUE1PLUS.webp",
+      "background": null,
+      "notes": "Official broadcaster artwork, converted/resized to PNG; solid background where needed for contrast in both appearances."
+    },
+    "s4c": {
+      "url": "https://images.cms.v3.s4c.cymru/media/media_assets/a505bea6-513c-4a9e-93db-2f73047611a3.png",
+      "background": "#142033",
+      "notes": "Official broadcaster artwork, converted/resized to PNG; solid background where needed for contrast in both appearances."
+    },
+    "stv": {
+      "url": "https://player.stv.tv/player-web/_next/static/media/favicon.3wgtgt-pqqqmv.svg",
+      "background": "#ffffff",
+      "notes": "Official broadcaster artwork, converted/resized to PNG; solid background where needed for contrast in both appearances."
+    },
+    "deetv": {
+      "url": "https://d2w7ezqn6qf6x1.cloudfront.net/images/logos/PsrZUl4m1iPHPXGkvoQieAuKccf0R7Kt0LOaBcyl.png",
+      "background": "#142033",
+      "notes": "Official broadcaster artwork, converted/resized to PNG; solid background where needed for contrast in both appearances."
+    }
+  }
+}

@@ -201,6 +201,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
     let showTodayUnfinishedFixturesBadge: Bool
     let fixturesViewDensity: FixturesViewDensity
     let showCompactFixtureTvLogo: Bool
+    let showCompactFixtureStarRating: Bool
     let showCompactFixtureFantasyLogo: Bool
     let showKickoffTimeDividers: Bool
     let showFantasyFixtureLogos: Bool
@@ -283,6 +284,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         showTodayUnfinishedFixturesBadge: Bool = PreferencesStore.defaultShowTodayUnfinishedFixturesBadge,
         fixturesViewDensity: FixturesViewDensity = PreferencesStore.defaultFixturesViewDensity,
         showCompactFixtureTvLogo: Bool = PreferencesStore.defaultShowCompactFixtureTvLogo,
+        showCompactFixtureStarRating: Bool = PreferencesStore.defaultShowCompactFixtureStarRating,
         showCompactFixtureFantasyLogo: Bool = PreferencesStore.defaultShowCompactFixtureFantasyLogo,
         showKickoffTimeDividers: Bool = PreferencesStore.defaultShowKickoffTimeDividers,
         showFantasyFixtureLogos: Bool = PreferencesStore.defaultShowFantasyFixtureLogos,
@@ -325,6 +327,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         self.showTodayUnfinishedFixturesBadge = showTodayUnfinishedFixturesBadge
         self.fixturesViewDensity = fixturesViewDensity
         self.showCompactFixtureTvLogo = showCompactFixtureTvLogo
+        self.showCompactFixtureStarRating = showCompactFixtureStarRating
         self.showCompactFixtureFantasyLogo = showCompactFixtureFantasyLogo
         self.showKickoffTimeDividers = showKickoffTimeDividers
         self.showFantasyFixtureLogos = showFantasyFixtureLogos
@@ -369,6 +372,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         case showTodayUnfinishedFixturesBadge
         case fixturesViewDensity
         case showCompactFixtureTvLogo
+        case showCompactFixtureStarRating
         case showCompactFixtureFantasyLogo
         case showKickoffTimeDividers
         case showFantasyFixtureLogos
@@ -430,6 +434,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         showTodayUnfinishedFixturesBadge = try container.decodeIfPresent(Bool.self, forKey: .showTodayUnfinishedFixturesBadge) ?? PreferencesStore.defaultShowTodayUnfinishedFixturesBadge
         fixturesViewDensity = try container.decodeIfPresent(FixturesViewDensity.self, forKey: .fixturesViewDensity) ?? PreferencesStore.defaultFixturesViewDensity
         showCompactFixtureTvLogo = try container.decodeIfPresent(Bool.self, forKey: .showCompactFixtureTvLogo) ?? PreferencesStore.defaultShowCompactFixtureTvLogo
+        showCompactFixtureStarRating = try container.decodeIfPresent(Bool.self, forKey: .showCompactFixtureStarRating) ?? PreferencesStore.defaultShowCompactFixtureStarRating
         showCompactFixtureFantasyLogo = try container.decodeIfPresent(Bool.self, forKey: .showCompactFixtureFantasyLogo) ?? PreferencesStore.defaultShowCompactFixtureFantasyLogo
         showKickoffTimeDividers = try container.decodeIfPresent(Bool.self, forKey: .showKickoffTimeDividers) ?? PreferencesStore.defaultShowKickoffTimeDividers
         let legacyContainer = try decoder.container(keyedBy: LegacyCodingKeys.self)
@@ -479,6 +484,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         try container.encode(showTodayUnfinishedFixturesBadge, forKey: .showTodayUnfinishedFixturesBadge)
         try container.encode(fixturesViewDensity, forKey: .fixturesViewDensity)
         try container.encode(showCompactFixtureTvLogo, forKey: .showCompactFixtureTvLogo)
+        try container.encode(showCompactFixtureStarRating, forKey: .showCompactFixtureStarRating)
         try container.encode(showCompactFixtureFantasyLogo, forKey: .showCompactFixtureFantasyLogo)
         try container.encode(showKickoffTimeDividers, forKey: .showKickoffTimeDividers)
         try container.encode(showFantasyFixtureLogos, forKey: .showFantasyFixtureLogos)
@@ -523,6 +529,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         lhs.showTodayUnfinishedFixturesBadge == rhs.showTodayUnfinishedFixturesBadge &&
         lhs.fixturesViewDensity == rhs.fixturesViewDensity &&
         lhs.showCompactFixtureTvLogo == rhs.showCompactFixtureTvLogo &&
+        lhs.showCompactFixtureStarRating == rhs.showCompactFixtureStarRating &&
         lhs.showCompactFixtureFantasyLogo == rhs.showCompactFixtureFantasyLogo &&
         lhs.showKickoffTimeDividers == rhs.showKickoffTimeDividers &&
         lhs.showFantasyFixtureLogos == rhs.showFantasyFixtureLogos &&
@@ -633,6 +640,7 @@ final class PreferencesStore: ObservableObject {
     nonisolated static let defaultShowTodayUnfinishedFixturesBadge = false
     nonisolated static let defaultFixturesViewDensity: FixturesViewDensity = .compact
     nonisolated static let defaultShowCompactFixtureTvLogo = true
+    nonisolated static let defaultShowCompactFixtureStarRating = true
     nonisolated static let defaultShowCompactFixtureFantasyLogo = true
     nonisolated static let defaultShowKickoffTimeDividers = false
     nonisolated static let defaultShowFantasyFixtureLogos = false
@@ -776,6 +784,10 @@ final class PreferencesStore: ObservableObject {
         didSet { persist() }
     }
 
+    @Published var showCompactFixtureStarRating: Bool {
+        didSet { persist() }
+    }
+
     @Published var showCompactFixtureFantasyLogo: Bool {
         didSet { persist() }
     }
@@ -913,6 +925,8 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultFixturesViewDensity
         let showCompactFixtureTvLogo = userDefaults.object(forKey: Keys.showCompactFixtureTvLogo) as? Bool
             ?? Self.defaultShowCompactFixtureTvLogo
+        let showCompactFixtureStarRating = userDefaults.object(forKey: Keys.showCompactFixtureStarRating) as? Bool
+            ?? Self.defaultShowCompactFixtureStarRating
         let showCompactFixtureFantasyLogo = userDefaults.object(forKey: Keys.showCompactFixtureFantasyLogo) as? Bool
             ?? Self.defaultShowCompactFixtureFantasyLogo
         let showKickoffTimeDividers = userDefaults.object(forKey: Keys.showKickoffTimeDividers) as? Bool
@@ -966,6 +980,7 @@ final class PreferencesStore: ObservableObject {
         self.showTodayUnfinishedFixturesBadge = showTodayUnfinishedFixturesBadge
         self.fixturesViewDensity = fixturesViewDensity
         self.showCompactFixtureTvLogo = showCompactFixtureTvLogo
+        self.showCompactFixtureStarRating = showCompactFixtureStarRating
         self.showCompactFixtureFantasyLogo = showCompactFixtureFantasyLogo
         self.showKickoffTimeDividers = showKickoffTimeDividers
         self.showFantasyFixtureLogos = showFantasyFixtureLogos
@@ -1017,6 +1032,7 @@ final class PreferencesStore: ObservableObject {
             showTodayUnfinishedFixturesBadge: showTodayUnfinishedFixturesBadge,
             fixturesViewDensity: fixturesViewDensity,
             showCompactFixtureTvLogo: showCompactFixtureTvLogo,
+            showCompactFixtureStarRating: showCompactFixtureStarRating,
             showCompactFixtureFantasyLogo: showCompactFixtureFantasyLogo,
             showKickoffTimeDividers: showKickoffTimeDividers,
             showFantasyFixtureLogos: showFantasyFixtureLogos,
@@ -1085,6 +1101,7 @@ final class PreferencesStore: ObservableObject {
             showTodayUnfinishedFixturesBadge: showTodayUnfinishedFixturesBadge,
             fixturesViewDensity: fixturesViewDensity,
             showCompactFixtureTvLogo: showCompactFixtureTvLogo,
+            showCompactFixtureStarRating: showCompactFixtureStarRating,
             showCompactFixtureFantasyLogo: showCompactFixtureFantasyLogo,
             showKickoffTimeDividers: showKickoffTimeDividers,
             showFantasyFixtureLogos: showFantasyFixtureLogos,
@@ -1132,6 +1149,7 @@ final class PreferencesStore: ObservableObject {
         userDefaults.set(showTodayUnfinishedFixturesBadge, forKey: Keys.showTodayUnfinishedFixturesBadge)
         userDefaults.set(fixturesViewDensity.rawValue, forKey: Keys.fixturesViewDensity)
         userDefaults.set(showCompactFixtureTvLogo, forKey: Keys.showCompactFixtureTvLogo)
+        userDefaults.set(showCompactFixtureStarRating, forKey: Keys.showCompactFixtureStarRating)
         userDefaults.set(showCompactFixtureFantasyLogo, forKey: Keys.showCompactFixtureFantasyLogo)
         userDefaults.set(showKickoffTimeDividers, forKey: Keys.showKickoffTimeDividers)
         userDefaults.set(showFantasyFixtureLogos, forKey: Keys.showFantasyFixtureLogos)
@@ -1151,7 +1169,7 @@ final class PreferencesStore: ObservableObject {
 
         // Sync preferences to Redis
         Task {
-            await PreferencesSyncService.shared.syncPreferences(snapshot)
+            await PreferencesSyncService.shared.syncPreferences()
         }
     }
 
@@ -1253,6 +1271,8 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultFixturesViewDensity
         let showCompactFixtureTvLogo = userDefaults.object(forKey: Keys.showCompactFixtureTvLogo) as? Bool
             ?? Self.defaultShowCompactFixtureTvLogo
+        let showCompactFixtureStarRating = userDefaults.object(forKey: Keys.showCompactFixtureStarRating) as? Bool
+            ?? Self.defaultShowCompactFixtureStarRating
         let showCompactFixtureFantasyLogo = userDefaults.object(forKey: Keys.showCompactFixtureFantasyLogo) as? Bool
             ?? Self.defaultShowCompactFixtureFantasyLogo
         let showKickoffTimeDividers = userDefaults.object(forKey: Keys.showKickoffTimeDividers) as? Bool
@@ -1306,6 +1326,7 @@ final class PreferencesStore: ObservableObject {
             showTodayUnfinishedFixturesBadge: showTodayUnfinishedFixturesBadge,
             fixturesViewDensity: fixturesViewDensity,
             showCompactFixtureTvLogo: showCompactFixtureTvLogo,
+            showCompactFixtureStarRating: showCompactFixtureStarRating,
             showCompactFixtureFantasyLogo: showCompactFixtureFantasyLogo,
             showKickoffTimeDividers: showKickoffTimeDividers,
             showFantasyFixtureLogos: showFantasyFixtureLogos,
@@ -1352,6 +1373,7 @@ final class PreferencesStore: ObservableObject {
         static let showTodayUnfinishedFixturesBadge = "preferences.showTodayUnfinishedFixturesBadge"
         static let fixturesViewDensity = "preferences.fixturesViewDensity"
         static let showCompactFixtureTvLogo = "preferences.showCompactFixtureTvLogo"
+        static let showCompactFixtureStarRating = "preferences.showCompactFixtureStarRating"
         static let showCompactFixtureFantasyLogo = "preferences.showCompactFixtureFantasyLogo"
         static let showKickoffTimeDividers = "preferences.showKickoffTimeDividers"
         static let showFantasyFixtureLogos = "preferences.showFantasyFixtureLogos"

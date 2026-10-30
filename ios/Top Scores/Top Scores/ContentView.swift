@@ -33,11 +33,6 @@ struct ContentView: View {
                 store: matchesStore,
                 fixturesCoordinator: fixturesCoordinator
             )
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    if selectedTab == 0 && fixturesCoordinator.isDockEnabled {
-                        FixtureCompetitionDockView(coordinator: fixturesCoordinator)
-                    }
-                }
                 .tabItem {
                     Label("Scores", systemImage: "soccerball")
                 }
@@ -82,37 +77,9 @@ struct ContentView: View {
                 }
                 .tag(3)
         }
-        .overlayPreferenceValue(FixtureCompetitionDockBoundsPreferenceKey.self) { dockBounds in
-            if selectedTab == 0,
-               fixturesCoordinator.isDockEnabled,
-               fixturesCoordinator.hasExpandedPanel,
-               let dockBounds {
-                GeometryReader { proxy in
-                    let dockFrame = proxy[dockBounds]
-                    let bottomPadding = max(0, proxy.size.height - dockFrame.minY + 2)
-
-                    VStack(spacing: 0) {
-                        Spacer(minLength: 0)
-                        FixtureCompetitionDockView(
-                            coordinator: fixturesCoordinator,
-                            content: .panel
-                        )
-                        .padding(.horizontal, 24)
-                        .padding(.bottom, bottomPadding)
-                    }
-                }
-            }
-        }
-        .sheet(isPresented: $fixturesCoordinator.isTeamPickerPresented) {
-            FixtureCompetitionDockView(
-                coordinator: fixturesCoordinator,
-                content: .teamPicker
-            )
-        }
         .sheet(item: $notificationManager.pendingTVReminder) { target in
             TVReminderMatchesView(target: target)
         }
-        .crashBreadcrumb("team_picker", isPresented: fixturesCoordinator.isTeamPickerPresented)
         .onChange(of: selectedTab) { _, tab in CrashBreadcrumbs.record("tab \(tab)") }
         .background(FootballVisualStyle.pageBackground)
         .tint(Color.accentColor)
@@ -359,7 +326,7 @@ private struct ContentLifecycleCoordinator: View {
     ) async {
         syncWatchFantasyTables()
         FantasySyncStore.persist(managerEntryID: managerEntryID, squad: squad)
-        await PreferencesSyncService.shared.syncPreferences(preferences.snapshot)
+        await PreferencesSyncService.shared.syncPreferences()
     }
 
     private func syncWatchFantasyTables() {

@@ -87,7 +87,7 @@ export function AppShell({ children }: PropsWithChildren) {
             aria-label="Top Scores home"
           >
             <img
-              src="/generated-assets/app-icon.png?v=2"
+              src="/generated-assets/app-icon.png?v=3"
               width="44"
               height="44"
               alt=""

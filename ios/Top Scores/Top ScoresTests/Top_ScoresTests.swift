@@ -321,12 +321,12 @@ struct Top_ScoresTests {
         #expect(coordinator.isDateSwipeEnabled)
     }
 
-    @Test @MainActor func matchFilters_customOpensRailAndReturningToMenuDiscardsDraft() {
+    @Test @MainActor func matchFilters_customOpensDialogAndClosingDiscardsDraft() {
         let coordinator = FixturesViewCoordinator()
         coordinator.toggleMatchFilters(reduceMotion: true)
         coordinator.showCustomFixtureFilters(reduceMotion: true)
 
-        #expect(coordinator.isCompetitionDockExpanded)
+        #expect(coordinator.isCustomOptionsPresented)
         #expect(!coordinator.isFixtureFavouritesMenuExpanded)
 
         coordinator.expandedFixtureRegionID = "england"
@@ -601,6 +601,7 @@ struct Top_ScoresTests {
         #expect(!store.showTodayUnfinishedFixturesBadge)
         #expect(store.fixturesViewDensity == .compact)
         #expect(store.showCompactFixtureTvLogo)
+        #expect(store.showCompactFixtureStarRating)
         #expect(store.showCompactFixtureFantasyLogo)
         #expect(!store.showKickoffTimeDividers)
         #expect(!store.showFantasyFixtureLogos)
@@ -705,12 +706,30 @@ struct Top_ScoresTests {
 
         let store = PreferencesStore(userDefaults: defaults)
         store.showCompactFixtureTvLogo = false
+        store.showCompactFixtureStarRating = false
         store.showCompactFixtureFantasyLogo = false
         store.showKickoffTimeDividers = true
 
         let reloaded = PreferencesStore(userDefaults: defaults)
         #expect(reloaded.fixturesViewDensity == .compact)
         #expect(!reloaded.showCompactFixtureTvLogo)
+        #expect(!reloaded.showCompactFixtureStarRating)
+        #expect(!reloaded.snapshot.showCompactFixtureStarRating)
+        #expect(!reloaded.unfilteredSnapshot.showCompactFixtureStarRating)
+        #expect(!PreferencesStore.loadSnapshot(userDefaults: defaults).showCompactFixtureStarRating)
+        #expect(!MatchRowPreferences(preferences: reloaded, hasFantasyManagerEntry: false).showCompactFixtureStarRating)
+        let encoded = try JSONEncoder().encode(reloaded.snapshot)
+        let decoded = try JSONDecoder().decode(PreferencesSnapshot.self, from: encoded)
+        #expect(!decoded.showCompactFixtureStarRating)
+        let payload = PreferencesSyncService.shared.preferencesPayload(reloaded.snapshot)
+        #expect(payload["showCompactFixtureStarRating"] as? Bool == false)
+
+        var legacyPayload = try #require(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        legacyPayload.removeValue(forKey: "showCompactFixtureStarRating")
+        let legacyData = try JSONSerialization.data(withJSONObject: legacyPayload)
+        let migrated = try JSONDecoder().decode(PreferencesSnapshot.self, from: legacyData)
+        #expect(migrated.showCompactFixtureStarRating)
+        #expect(migrated != decoded)
         #expect(!reloaded.showCompactFixtureFantasyLogo)
         #expect(reloaded.showKickoffTimeDividers)
     }

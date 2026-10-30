@@ -244,6 +244,12 @@ struct PreferencesView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
+                        Toggle("Compact star rating", isOn: $preferences.showCompactFixtureStarRating)
+                            .accessibilityIdentifier("showCompactFixtureStarRating")
+                        Text("Shows watchability stars in the bottom-right corner of match rows on Scores.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
                         Toggle("Fantasy Premier League indicator", isOn: showCompactFixtureFantasyLogoBinding)
                         Text("Shows a purple chevron on fixture rows when your squad has one or more players involved in the match.")
                             .font(.footnote)

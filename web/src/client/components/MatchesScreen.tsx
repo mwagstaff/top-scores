@@ -316,7 +316,7 @@ export function MatchesScreen({
     day?: { date: string; matches: Match[] };
   } | null>(null);
   useEffect(() => {
-    if (!payload || selectedTVMatches.length || competition || mode === "results") return;
+    if (!tv || !payload || selectedTVMatches.length || competition || mode === "results") return;
     let active = true;
     const included = params.get("comps")?.split(",");
     setFutureTV({ key: guideKey, status: "loading" });
@@ -328,7 +328,7 @@ export function MatchesScreen({
         if (active) setFutureTV({ key: guideKey, status: "error" });
       });
     return () => { active = false; };
-  }, [guideKey, Boolean(payload), selectedTVMatches.length, competition, mode]);
+  }, [guideKey, Boolean(payload), selectedTVMatches.length, competition, mode, tv]);
   const fallback = futureTV?.key === guideKey && !selectedTVMatches.length ? futureTV : null;
   const guideMatches = selectedTVMatches.length ? selectedTVMatches : fallback?.day?.matches || [];
   const guideDate = selectedTVMatches.length ? date : fallback?.day?.date || date;
@@ -364,7 +364,7 @@ export function MatchesScreen({
         </header>
       )}
       <div
-        className={`scores-layout${mode === "results" ? " results-layout" : ""}`}
+        className={`scores-layout${mode === "results" ? " results-layout" : ""}${!tv ? " scores-layout-full" : ""}`}
       >
         <section
           className={`scores-primary${mode === "fixtures" && !tv ? " fixtures-with-side-tv" : ""}`}
@@ -526,6 +526,7 @@ export function MatchesScreen({
                       key={match.id}
                       showBroadcast={mode !== "results"}
                       showRating={tv}
+                      compactTV={mode === "fixtures" && !tv}
                       showDetails={showDetails}
                     />
                   ))}
@@ -599,7 +600,7 @@ export function MatchesScreen({
             </div>
           )}
         </section>
-        {!competition && mode !== "results" && (
+        {tv && !competition && mode !== "results" && (
           <aside className="watch-sidebar" aria-label="UK viewing guide">
             <h2>TV Guide</h2>
             {!selectedTVMatches.length && !loading && !payload?.hasMore && fallback?.day?.date !== date && (

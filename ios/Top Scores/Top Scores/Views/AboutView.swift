@@ -148,7 +148,7 @@ struct AboutView: View {
                             Spacer()
                             Button("Sync preferences now") {
                                 Task {
-                                    await PreferencesSyncService.shared.syncPreferences(preferences.snapshot)
+                                    await PreferencesSyncService.shared.syncPreferences()
                                     await refreshDiagnostics()
                                 }
                             }

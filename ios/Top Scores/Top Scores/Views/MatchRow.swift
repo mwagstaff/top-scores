@@ -19,6 +19,7 @@ struct MatchRowPreferences: Equatable {
     let showFantasyFixtureLogos: Bool
     let showCompactFixtureFantasyLogo: Bool
     let showCompactFixtureTvLogo: Bool
+    let showCompactFixtureStarRating: Bool
 
     init(preferences: PreferencesStore, hasFantasyManagerEntry: Bool) {
         self.hasFantasyManagerEntry = hasFantasyManagerEntry
@@ -27,6 +28,7 @@ struct MatchRowPreferences: Equatable {
         showFantasyFixtureLogos = preferences.showFantasyFixtureLogos
         showCompactFixtureFantasyLogo = preferences.showCompactFixtureFantasyLogo
         showCompactFixtureTvLogo = preferences.showCompactFixtureTvLogo
+        showCompactFixtureStarRating = preferences.showCompactFixtureStarRating
     }
 
     static let disabledFantasy = MatchRowPreferences(
@@ -35,7 +37,8 @@ struct MatchRowPreferences: Equatable {
         showFantasyRealTimePoints: false,
         showFantasyFixtureLogos: false,
         showCompactFixtureFantasyLogo: false,
-        showCompactFixtureTvLogo: false
+        showCompactFixtureTvLogo: false,
+        showCompactFixtureStarRating: false
     )
 
     private init(
@@ -44,7 +47,8 @@ struct MatchRowPreferences: Equatable {
         showFantasyRealTimePoints: Bool,
         showFantasyFixtureLogos: Bool,
         showCompactFixtureFantasyLogo: Bool,
-        showCompactFixtureTvLogo: Bool
+        showCompactFixtureTvLogo: Bool,
+        showCompactFixtureStarRating: Bool
     ) {
         self.hasFantasyManagerEntry = hasFantasyManagerEntry
         self.showFantasyExpectedPoints = showFantasyExpectedPoints
@@ -52,6 +56,7 @@ struct MatchRowPreferences: Equatable {
         self.showFantasyFixtureLogos = showFantasyFixtureLogos
         self.showCompactFixtureFantasyLogo = showCompactFixtureFantasyLogo
         self.showCompactFixtureTvLogo = showCompactFixtureTvLogo
+        self.showCompactFixtureStarRating = showCompactFixtureStarRating
     }
 }
 
@@ -71,6 +76,7 @@ struct MatchRow: View {
     var apiBaseURL: String? = nil
     var showLeague: Bool = false
     var showBroadcastDetails: Bool = true
+    var showWatchabilityRating: Bool = false
     var showFantasyBadge: Bool = true
     var showFantasyPlayerContributions: Bool = false
     var centerFooterText: String? = nil
@@ -249,7 +255,9 @@ struct MatchRow: View {
                     accessibilityCompactTeamLine(isHome: true)
                     accessibilityCompactTeamLine(isHome: false)
 
-                    compactFixtureSecondRow
+                    if !showWatchabilityRating {
+                        compactFixtureSecondRow
+                    }
                 }
             } else {
                 if showLeague {
@@ -276,7 +284,9 @@ struct MatchRow: View {
                             teamNameLabel(isHome: false)
                         }
 
-                        compactFixtureSecondRow
+                        if !showWatchabilityRating {
+                            compactFixtureSecondRow
+                        }
                     }
                     .frame(maxWidth: .infinity)
 
@@ -299,6 +309,10 @@ struct MatchRow: View {
             if showTeamEvents && hasTeamMatchEvents {
                 MatchTeamEventListView(entries: teamEventEntries)
                     .padding(.top, 4)
+            }
+
+            if showWatchabilityRating {
+                compactFixtureSecondRow
             }
         }
         .padding(cardPadding)
@@ -755,18 +769,37 @@ struct MatchRow: View {
             .fixedSize(horizontal: true, vertical: false)
     }
 
+    private var compactWatchabilityIndex: MatchWatchabilityIndex? {
+        showWatchabilityRating ? match.watchabilityIndex : nil
+    }
+
     @ViewBuilder
     private var compactFixtureSecondRow: some View {
-        if let channel = compactPrimaryBroadcastChannel {
-            if let logo = compactPrimaryBroadcastLogo {
-                Image(uiImage: logo)
-                    .resizable()
-                    .scaledToFit()
-                    .frame(height: dynamicTypeSize.isAccessibilitySize ? 32 : 24)
-                    .scaleEffect(0.8)
-                    .accessibilityLabel("Watch on \(channel.name)")
-            } else {
-                compactBroadcastLabel(channel)
+        if compactPrimaryBroadcastChannel != nil || compactWatchabilityIndex != nil {
+            ZStack(alignment: .trailing) {
+                Group {
+                    if let channel = compactPrimaryBroadcastChannel {
+                        if let logo = compactPrimaryBroadcastLogo {
+                            Image(uiImage: logo)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(height: dynamicTypeSize.isAccessibilitySize ? 32 : 24)
+                                .scaleEffect(0.8)
+                                .accessibilityLabel("Watch on \(channel.name)")
+                        } else {
+                            compactBroadcastLabel(channel)
+                        }
+                    }
+                }
+                // Reserve equal space on both sides so stars never shift the TV logo.
+                .padding(.horizontal, compactWatchabilityIndex == nil ? 0 : 64)
+                .frame(maxWidth: .infinity, minHeight: 24)
+
+                if let index = compactWatchabilityIndex {
+                    WatchabilityRatingView(index: index, showsLabel: false)
+                        .font(.system(size: 8, weight: .semibold))
+                        .fixedSize()
+                }
             }
         }
     }

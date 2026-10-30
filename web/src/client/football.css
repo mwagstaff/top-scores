@@ -1402,7 +1402,7 @@ button:disabled {
 }
 .fixture-match-line {
   display: grid;
-  grid-template-columns: 46.8px minmax(0, 1fr) 22px 54px 22px minmax(0, 1fr) 46.8px;
+  grid-template-columns: 46.8px minmax(0, 1fr) 22px minmax(54px, max-content) 22px minmax(0, 1fr) 46.8px;
   gap: 10px;
   align-items: center;
   width: 100%;
@@ -1562,7 +1562,7 @@ button:disabled {
   justify-content: center;
   gap: 4px;
   min-height: 26px;
-  padding: 3px 5px;
+  padding: 3px 9px;
   border-radius: 9px;
   background: var(--live-pill);
   color: white;
@@ -1582,6 +1582,7 @@ button:disabled {
   background: white;
   width: 5px;
   height: 5px;
+  flex-shrink: 0;
 }
 @keyframes live-pill-pulse {
   0%,
@@ -1634,7 +1635,7 @@ button:disabled {
 @container (max-width: 380px) {
   .fixture-match-line {
     grid-template-columns:
-      26px minmax(0, 1fr) 14px 54px 14px minmax(0, 1fr)
+      26px minmax(0, 1fr) 14px minmax(54px, max-content) 14px minmax(0, 1fr)
       26px;
   }
   .fixture-row.is-live .fixture-state {
@@ -1704,17 +1705,117 @@ button:disabled {
   gap: 16px;
 }
 /* Keep broadcasts beside the match when the fixture list has room. */
-@container (min-width: 540px) {
+.scores-layout.scores-layout-full {
+  grid-template-columns: minmax(0, 1fr);
+}
+.fixture-tv-summary {
+  position: relative;
+  display: grid;
+  grid-template-columns: 110px 78px;
+  align-items: start;
+  justify-content: center;
+  gap: 12px;
+}
+.fixture-tv-trigger {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  min-height: 44px;
+}
+.fixture-tv-trigger > .channel-logo {
+  min-height: 24px;
+}
+.fixture-tv-rating .watchability-rating-stars {
+  height: 24px;
+}
+.fixture-row:has(.has-popover) {
+  z-index: 3;
+}
+.fixture-tv-popover {
+  position: absolute;
+  z-index: 3;
+  right: 0;
+  width: min(280px, calc(100vw - 80px));
+  color: var(--text);
+  text-align: left;
+}
+.fixture-tv-popover.is-above {
+  bottom: 100%;
+  padding-bottom: 8px;
+}
+.fixture-tv-popover.is-below {
+  top: 100%;
+  padding-top: 8px;
+}
+.fixture-tv-popover-content {
+  overflow-y: auto;
+  padding: 16px;
+  background: var(--surface-strong);
+  border: 1px solid var(--surface-border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px #04080c66;
+}
+.fixture-tv-popover ul {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+.fixture-tv-popover .channel-logo {
+  flex-direction: row;
+  justify-content: flex-start;
+  max-width: none;
+  gap: 12px;
+  text-align: left;
+  font-size: 12px;
+}
+.fixture-tv-popover .channel-logo img {
+  flex-shrink: 0;
+}
+.fixture-tv-popover .watchability-rating-label {
+  flex-direction: column;
+  align-items: center;
+}
+.fixture-tv-popover .watchability-stars {
+  font-size: 28px;
+  white-space: nowrap;
+}
+.fixture-tv-popover .watchability-label {
+  font-size: 14px;
+  text-transform: none;
+}
+.watchability-rating.watchability-rating-stars,
+.watchability-rating.watchability-rating-label {
+  display: flex;
+  align-items: center;
+  margin: 0;
+}
+.watchability-rating.watchability-rating-stars .watchability-stars {
+  font-size: 14px;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+.watchability-rating.watchability-rating-label {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.watchability-rating.watchability-rating-label > .watchability-stars {
+  order: -1;
+}
+@container (min-width: 680px) {
   .fixtures-with-side-tv .fixture-row.app-fixture {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 132px;
+    grid-template-columns: minmax(0, 1fr) 212px;
     gap: 8px 16px;
     padding-block: 12px;
   }
   .fixtures-with-side-tv .fixture-match-line {
     grid-column: 1;
     grid-row: 1;
-    grid-template-columns: 32px minmax(0, 1fr) 20px 54px 20px minmax(0, 1fr) 32px;
+    grid-template-columns: 32px minmax(0, 1fr) 20px minmax(54px, max-content) 20px minmax(0, 1fr) 32px;
     gap: 8px;
   }
   .fixtures-with-side-tv .fixture-match-line .team-crest,
@@ -1722,7 +1823,7 @@ button:disabled {
     width: 32px;
     height: 32px;
   }
-  .fixtures-with-side-tv .fixture-row > .fixture-tv-logos {
+  .fixtures-with-side-tv .fixture-tv-summary {
     grid-column: 2;
     grid-row: 1;
     padding-left: 12px;

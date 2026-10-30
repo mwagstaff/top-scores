@@ -29,14 +29,14 @@ Use Avenir Next, Avenir, Segoe UI, sans-serif: no web-font download. Page titles
 
 - `AppShell`: compact header, desktop competition rail, mobile bottom navigation and skip link. Main content has an explicit focus target.
 - `MatchesScreen`: compact functional heading without promotional copy, a responsive strip of surrounding weekdays and dates with previous/next/calendar controls, all/live/TV filters, optional search, competition scope, then football.
-- `FixtureRow`: symmetric home crest/name/score, central kickoff or match status, then away score/name/crest. On Scores & fixtures, the primary UK channel logo and readable channel name sit in a compact right-hand column when the fixture list is at least 540px wide; narrower lists keep the channel below so team names remain readable. The primary-channel button slides open the alternatives without navigating. Alternative logos load only after the first expansion.
-- `MatchPage`: team identity and score dominate; UK broadcasting is directly below the hero. Existing events, lineups, commentary and player detail functionality remain available.
+- `FixtureRow`: symmetric home crest/name/score, central kickoff or match status, then away score/name/crest. On Scores & fixtures, the primary UK channel logo and readable channel name sit beside a compact stars-only match rating when the fixture list is at least 680px wide; narrower lists keep both together below so team names remain readable. Both open match details, with no channel dropdown, chevron or separate hover highlight. Hover or keyboard focus reveals a rich popover: all UK channel logos and names for the logo, or large stars and the rating label for the compact stars. Escape dismisses the popover. Compact stars align vertically with the logo image, above its channel name.
+- `MatchPage`: team identity and score dominate; UK broadcasting is directly below the hero, headed by the API match rating stars and label when available. Existing events, lineups, commentary and player detail functionality remain available.
 - `CompetitionPage`: fixtures, results and standings for the named competition. Never silently substitute another competition's table.
 - `StadiumBackdrop`: decorative imagery, independent of match data, with source credit. It must never contain essential text.
 
 Use a 4px spacing rhythm with common gaps of 8, 12, 16, 24 and 32px. Main content is capped at 1504px. Website controls use a restrained 6px radius. Prefer separators over nested containers.
 
-Above 1200px, provide a right-hand UK broadcast guide. Below 1200px, remove this secondary column. Below 900px, remove the competition rail. At 600px and below, use bottom navigation, compact date controls and a second row for TV listings. Keep full names and scores legible at 320px. Reserve space for asynchronously loaded secondary match information and standings.
+Scores & fixtures uses the full content width without a broadcast sidebar. Above 1200px, the separate TV listings page retains its right-hand UK broadcast guide. Below 1200px, remove this secondary column. Below 900px, remove the competition rail. At 600px and below, use bottom navigation, compact date controls and a second row for TV listings. Keep full names and scores legible at 320px. Reserve space for asynchronously loaded secondary match information and standings.
 
 ## Football state and interactions
 

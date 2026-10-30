@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 import os
 
 private struct FantasySyncPlayerPayload: Encodable, Sendable {
@@ -302,54 +303,96 @@ actor PreferencesSyncService {
     static let shared = PreferencesSyncService()
 
     private var syncTask: Task<Void, Never>?
-    private var pendingSnapshot: PreferencesSnapshot?
+    private var syncRequested = false
     private var pendingSyncDeadline: Date?
     private var lastSyncAttempt: Date?
     private var lastSyncSuccess: Date?
     private var lastSyncFailure: Date?
     private var lastSyncHTTPStatus: Int?
     private var lastSyncFailureReason: String?
-    private let minSyncInterval: TimeInterval = 2.0 // Debounce syncs to max once per 2 seconds
+    private let minSyncInterval: TimeInterval
+    private let retryInterval: TimeInterval
+    private let snapshotProvider: @Sendable () async -> PreferencesSnapshot
+    private let sendSnapshot: (@Sendable (PreferencesSnapshot) async -> Bool)?
     private let revisionDefaultsKey = "preferences.syncRevision"
     private var lastIssuedRevision: Int
 
-    private init() {
+    init(
+        minSyncInterval: TimeInterval = 2,
+        retryInterval: TimeInterval = 1,
+        snapshotProvider: @escaping @Sendable () async -> PreferencesSnapshot = {
+            await MainActor.run { PreferencesStore.loadSnapshot() }
+        },
+        sendSnapshot: (@Sendable (PreferencesSnapshot) async -> Bool)? = nil
+    ) {
+        self.minSyncInterval = minSyncInterval
+        self.retryInterval = retryInterval
+        self.snapshotProvider = snapshotProvider
+        self.sendSnapshot = sendSnapshot
         lastIssuedRevision = UserDefaults.standard.integer(forKey: revisionDefaultsKey)
     }
 
-    /// Syncs user preferences to the Redis backend
-    func syncPreferences(_ snapshot: PreferencesSnapshot) async {
-        let now = Date()
-        pendingSnapshot = snapshot
-        if syncTask == nil,
-           lastSyncAttempt.map({ now.timeIntervalSince($0) >= minSyncInterval }) ?? true {
-            pendingSyncDeadline = now
-        } else {
-            pendingSyncDeadline = now.addingTimeInterval(minSyncInterval)
+    /// Requests a sync of persisted settings, never a caller's possibly stale snapshot.
+    func syncPreferences() {
+        syncRequested = true
+        // Do not extend the deadline on every request: background/foreground
+        // refreshes must not postpone a user's filter change indefinitely.
+        if pendingSyncDeadline == nil {
+            pendingSyncDeadline = max(Date(), (lastSyncAttempt ?? .distantPast)
+                .addingTimeInterval(minSyncInterval))
         }
         guard syncTask == nil else { return }
+        syncTask = Task { await drainSyncQueue() }
+    }
 
-        syncTask = Task {
-            await drainSyncQueue()
-        }
+    func flushPreferences() async {
+        pendingSyncDeadline = Date()
+        syncPreferences()
+        await syncTask?.value
+    }
+
+    private func cancelSync() {
+        syncRequested = true
+        syncTask?.cancel()
     }
 
     private func drainSyncQueue() async {
-        while pendingSnapshot != nil {
-            guard let deadline = pendingSyncDeadline else { break }
-            let wait = deadline.timeIntervalSinceNow
-            if wait > 0 {
-                try? await Task.sleep(nanoseconds: UInt64(wait * 1_000_000_000))
+        let backgroundTask = sendSnapshot == nil
+            ? await PreferencesSyncBackgroundTask { Task { await self.cancelSync() } }
+            : nil
+        var failures = 0
+        while syncRequested && !Task.isCancelled {
+            if let deadline = pendingSyncDeadline {
+                let wait = deadline.timeIntervalSinceNow
+                if wait > 0 {
+                    do { try await Task.sleep(for: .seconds(wait)) }
+                    catch { break }
+                }
             }
-
-            // A newer edit may have extended the quiet period while this task slept.
-            guard pendingSyncDeadline == deadline else { continue }
-            guard let snapshot = pendingSnapshot else { continue }
-            pendingSnapshot = nil
+            guard syncRequested, !Task.isCancelled else { break }
+            syncRequested = false
             pendingSyncDeadline = nil
-            await performSync(snapshot)
+            // Load after any debounce or retry delay. Deferred startup and
+            // background refresh work may have started under a different filter.
+            let snapshot = await snapshotProvider()
+            guard !Task.isCancelled else { syncRequested = true; break }
+            let succeeded: Bool
+            if let sendSnapshot {
+                succeeded = await sendSnapshot(snapshot)
+            } else {
+                succeeded = await performSync(snapshot)
+            }
+            if succeeded {
+                failures = 0
+            } else {
+                syncRequested = true
+                failures += 1
+                if failures >= 3 { break }
+                pendingSyncDeadline = Date().addingTimeInterval(retryInterval * pow(2, Double(failures - 1)))
+            }
         }
         syncTask = nil
+        await backgroundTask?.end()
     }
 
     func diagnostics() -> PreferencesSyncDiagnostics {
@@ -370,7 +413,7 @@ actor PreferencesSyncService {
             throw CalendarSubscriptionRegistrationError.invalidBaseURL
         }
 
-        pendingSnapshot = nil
+        syncRequested = false
         pendingSyncDeadline = nil
         lastIssuedRevision += 1
         UserDefaults.standard.set(lastIssuedRevision, forKey: revisionDefaultsKey)
@@ -415,7 +458,7 @@ actor PreferencesSyncService {
         }
     }
 
-    private func performSync(_ snapshot: PreferencesSnapshot) async {
+    private func performSync(_ snapshot: PreferencesSnapshot) async -> Bool {
         let signpost = PerformanceSignposter.preferences.beginInterval("PreferencesSync")
         defer { PerformanceSignposter.preferences.endInterval("PreferencesSync", signpost) }
 
@@ -431,7 +474,7 @@ actor PreferencesSyncService {
             lastSyncFailure = now
             lastSyncHTTPStatus = nil
             lastSyncFailureReason = "Invalid API base URL"
-            return
+            return false
         }
 
         let endpoint = baseURL.appendingPathComponent("preferences")
@@ -475,7 +518,7 @@ actor PreferencesSyncService {
                 lastSyncFailure = Date()
                 lastSyncHTTPStatus = nil
                 lastSyncFailureReason = "Invalid response type"
-                return
+                return false
             }
 
             if (200...299).contains(httpResponse.statusCode) {
@@ -491,6 +534,7 @@ actor PreferencesSyncService {
                 lastSyncFailure = nil
                 lastSyncHTTPStatus = httpResponse.statusCode
                 lastSyncFailureReason = nil
+                return true
             } else {
                 let errorBody = String(data: data, encoding: .utf8) ?? "No response body"
                 diagnosticLog("[PreferencesSync] Failed to sync: HTTP %d - %@", httpResponse.statusCode, errorBody)
@@ -504,6 +548,7 @@ actor PreferencesSyncService {
             lastSyncHTTPStatus = nil
             lastSyncFailureReason = error.localizedDescription
         }
+        return false
     }
 
     private func getDeviceToken() -> String {
@@ -550,6 +595,7 @@ actor PreferencesSyncService {
             "showTodayUnfinishedFixturesBadge": snapshot.showTodayUnfinishedFixturesBadge,
             "fixturesViewDensity": snapshot.fixturesViewDensity.rawValue,
             "showCompactFixtureTvLogo": snapshot.showCompactFixtureTvLogo,
+            "showCompactFixtureStarRating": snapshot.showCompactFixtureStarRating,
             "showCompactFixtureFantasyLogo": snapshot.showCompactFixtureFantasyLogo,
             "showKickoffTimeDividers": snapshot.showKickoffTimeDividers,
             "showFantasyFixtureLogos": snapshot.showFantasyFixtureLogos,
@@ -698,6 +744,7 @@ actor PreferencesSyncService {
                 showTodayUnfinishedFixturesBadge: preferences["showTodayUnfinishedFixturesBadge"] as? Bool ?? PreferencesStore.defaultShowTodayUnfinishedFixturesBadge,
                 fixturesViewDensity: fixturesViewDensity,
                 showCompactFixtureTvLogo: preferences["showCompactFixtureTvLogo"] as? Bool ?? PreferencesStore.defaultShowCompactFixtureTvLogo,
+                showCompactFixtureStarRating: preferences["showCompactFixtureStarRating"] as? Bool ?? PreferencesStore.defaultShowCompactFixtureStarRating,
                 showCompactFixtureFantasyLogo: preferences["showCompactFixtureFantasyLogo"] as? Bool ?? PreferencesStore.defaultShowCompactFixtureFantasyLogo,
                 showKickoffTimeDividers: preferences["showKickoffTimeDividers"] as? Bool ?? PreferencesStore.defaultShowKickoffTimeDividers,
                 showFantasyFixtureLogos: preferences["showFantasyFixtureLogos"] as? Bool ?? legacyShowFantasyMatchPills,
@@ -713,5 +760,23 @@ actor PreferencesSyncService {
             diagnosticLog("[PreferencesSync] Error fetching preferences: %@", error.localizedDescription)
             return nil
         }
+    }
+}
+
+@MainActor
+private final class PreferencesSyncBackgroundTask {
+    private var identifier: UIBackgroundTaskIdentifier = .invalid
+
+    init(onExpiration: @escaping @MainActor @Sendable () -> Void) {
+        identifier = UIApplication.shared.beginBackgroundTask(withName: "PreferencesSync") { [weak self] in
+            onExpiration()
+            self?.end()
+        }
+    }
+
+    func end() {
+        guard identifier != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(identifier)
+        identifier = .invalid
     }
 }

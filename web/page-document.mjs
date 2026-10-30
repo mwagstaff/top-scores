@@ -213,7 +213,7 @@ export function createPageRenderer(
       status = 404;
     }
     const canonical = `${origin}${url.pathname === "/fixtures" ? "/" : url.pathname}${validDate(url.searchParams.get("date")) && !matchRoute ? `?date=${date}` : ""}`;
-    const head = `<link rel="canonical" href="${escape(canonical)}"><meta property="og:title" content="${escape(title)} · Top Scores"><meta property="og:description" content="${escape(description)}"><meta property="og:url" content="${escape(canonical)}"><meta property="og:image" content="${escape(origin)}/generated-assets/apple-touch-icon.png?v=2">${status !== 200 ? '<meta name="robots" content="noindex">' : ""}`;
+    const head = `<link rel="canonical" href="${escape(canonical)}"><meta property="og:title" content="${escape(title)} · Top Scores"><meta property="og:description" content="${escape(description)}"><meta property="og:url" content="${escape(canonical)}"><meta property="og:image" content="${escape(origin)}/generated-assets/apple-touch-icon.png?v=3">${status !== 200 ? '<meta name="robots" content="noindex">' : ""}`;
     let root = `<div class="server-page"><a class="wordmark" href="/">top scores.</a><nav aria-label="Primary"><a href="/">Scores & fixtures</a><a href="/tv">On TV</a><a href="/results">Results</a><a href="/tables">Tables</a></nav><main>${content}</main><footer class="site-footer"><span>Top Scores</span><a href="https://skynolimit.dev/">Developed by Sky No Limit</a></footer></div>`;
     if (renderContent && status === 200) {
       seed = {
