@@ -72,6 +72,7 @@ struct FixtureBrowserLocalCompetitionCacheTests {
                             "date":"2026-08-26",
                             "time":"19:00",
                             "home_team":"Arsenal",
+                            "tv_channels":[{"name":"Sky Sports","countryCode":"GB"}],
                             "away_team":"Chelsea",
                             "league":"Premier League"
                         },
@@ -79,6 +80,7 @@ struct FixtureBrowserLocalCompetitionCacheTests {
                             "date":"2026-08-26",
                             "time":"20:00",
                             "home_team":"Barcelona",
+                            "tv_channels":[{"name":"DAZN","countryCode":"ES"}],
                             "away_team":"Valencia",
                             "league":"La Liga"
                         },
@@ -168,6 +170,33 @@ struct FixtureBrowserLocalCompetitionCacheTests {
                 .queryItems?
                 .contains(where: { $0.name == "view_option" }) != true
         })
+
+        // TV pages use the same device buckets but their own ready/empty state.
+        #expect(store.tvGuideMatchesByDate["2026-08-26"] == nil)
+        store.setDateSwipeInteractionActive(true)
+        store.setTVListingsModeEnabled(true)
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(store.isLoadingTVGuideDate("2026-08-26"))
+        #expect(store.isLoadingTVGuideDate("2026-09-24"))
+        store.setDateSwipeInteractionActive(false)
+        for _ in 0..<100 where store.tvGuideMatchesByDate["2026-09-24"] == nil {
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        #expect(store.tvGuideMatchesByDate["2026-08-26"]?.map(\.homeTeam) == ["Arsenal"])
+        #expect(store.tvGuideMatchesByDate["2026-09-24"] == [])
+        #expect(!store.isLoadingTVGuideDate("2026-09-24"))
+        #expect(store.tvGuideMatchesByDate["2099-01-01"] == nil)
+        let disabled = TVListingsTimeline.disabledDateKeys(in: store.tvGuideMatchesByDate, minimumStars: 0)
+        #expect(disabled.contains("2026-09-24"))
+        #expect(!disabled.contains("2026-08-26"))
+        #expect(!disabled.contains("2099-01-01"))
+        // Fast selection does not pair the new key with the previous page's matches.
+        store.selectDate("2026-09-24")
+        #expect(store.tvGuideMatchesByDate["2026-09-24"] == [])
+        store.selectDate("2026-08-26")
+        #expect(store.tvGuideMatchesByDate["2026-08-26"]?.map(\.homeTeam) == ["Arsenal"])
+        store.setTVListingsModeEnabled(false)
+
     }
 
     private static func preferences(

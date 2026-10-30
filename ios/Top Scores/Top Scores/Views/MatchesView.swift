@@ -4266,6 +4266,7 @@ private struct FixtureDateCarousel: View {
     let errorMessage: String?
     let height: CGFloat
     let onSelect: (String) -> Void
+    var disabledDateKeys: Set<String> = []
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
@@ -4312,6 +4313,8 @@ private struct FixtureDateCarousel: View {
                                     )
                                 }
                                 .id(day.date)
+                                .disabled(disabledDateKeys.contains(day.date))
+                                .opacity(disabledDateKeys.contains(day.date) ? 0.35 : 1)
                                 .buttonStyle(.plain)
                                 .accessibilityIdentifier("fixtureDate-\(day.date)")
                                 .accessibilityAddTraits(selected ? .isSelected : [])
@@ -4644,6 +4647,19 @@ private struct FixtureTVGuideView: View {
     @StateObject private var swipeCoordinator = FixturesViewCoordinator()
     @State private var carouselState = FixtureDateCarouselState()
     @State private var navigationMatch: MatchNavigation?
+    @AppStorage("tvListingsMinimumStars") private var minimumStars = 3
+
+    private var disabledDateKeys: Set<String> {
+        TVListingsTimeline.disabledDateKeys(in: browser.tvGuideMatchesByDate, minimumStars: minimumStars)
+    }
+
+    private func adjacentDate(offset: Int) -> String? {
+        guard let selected = browser.selectedDateKey else { return nil }
+        let candidates = browser.availableDays.filter { !disabledDateKeys.contains($0.date) }
+        return offset < 0
+            ? candidates.last(where: { $0.date < selected })?.date
+            : candidates.first(where: { $0.date > selected })?.date
+    }
 
     var body: some View {
         NavigationStack {
@@ -4652,7 +4668,8 @@ private struct FixtureTVGuideView: View {
                     state: carouselState, availableDays: browser.availableDays,
                     selectedDateKey: browser.selectedDateKey, todayDateKey: browser.todayDateKey,
                     hasLoadedCalendar: browser.hasLoadedCalendar, errorMessage: browser.errorMessage,
-                    height: dynamicTypeSize.isAccessibilitySize ? 74 : 62, onSelect: browser.selectDate
+                    height: dynamicTypeSize.isAccessibilitySize ? 74 : 62, onSelect: browser.selectDate,
+                    disabledDateKeys: disabledDateKeys
                 )
                 GeometryReader { geometry in
                     datePagedContent(width: geometry.size.width)
@@ -4680,16 +4697,16 @@ private struct FixtureTVGuideView: View {
     }
 
     private func datePagedContent(width: CGFloat) -> some View {
-        let previous = browser.adjacentDateKey(offset: -1)
-        let next = browser.adjacentDateKey(offset: 1)
+        let previous = adjacentDate(offset: -1)
+        let next = adjacentDate(offset: 1)
         return FixtureDatePagingContainer(
             containerWidth: width,
             currentDateKey: browser.selectedDateKey,
             previousDateKey: previous, nextDateKey: next,
-            previousPageIsReady: previous.map { browser.cachedMatchesByDate[$0] != nil } ?? false,
-            nextPageIsReady: next.map { browser.cachedMatchesByDate[$0] != nil } ?? false,
-            previousPageMatchCount: previous.map { browser.cachedUnfilteredMatches(for: $0).count } ?? 0,
-            nextPageMatchCount: next.map { browser.cachedUnfilteredMatches(for: $0).count } ?? 0,
+            previousPageIsReady: previous.map { browser.tvGuideMatchesByDate[$0] != nil } ?? false,
+            nextPageIsReady: next.map { browser.tvGuideMatchesByDate[$0] != nil } ?? false,
+            previousPageMatchCount: previous.map { browser.tvGuideMatchesByDate[$0]?.count ?? 0 } ?? 0,
+            nextPageMatchCount: next.map { browser.tvGuideMatchesByDate[$0]?.count ?? 0 } ?? 0,
             previousPageRevision: 0, currentPageRevision: 0, nextPageRevision: 0,
             isSwipeEnabled: navigationMatch == nil,
             reduceMotion: reduceMotion,
@@ -4705,9 +4722,9 @@ private struct FixtureTVGuideView: View {
             if let date {
                 let isCurrent = date == browser.selectedDateKey
                 TVListingsView(
-                    matches: isCurrent ? browser.selectedDateUnfilteredMatches : browser.cachedUnfilteredMatches(for: date),
+                    matches: browser.tvGuideMatchesByDate[date] ?? [],
                     selectedDateKey: date,
-                    isLoading: isCurrent ? browser.isLoadingSelectedDate : browser.cachedMatchesByDate[date] == nil,
+                    isLoading: browser.isLoadingTVGuideDate(date),
                     errorMessage: isCurrent ? browser.errorMessage : nil,
                     rowPreferences: rowPreferences, fantasyContext: fantasyContext,
                     onSelectMatch: { match in

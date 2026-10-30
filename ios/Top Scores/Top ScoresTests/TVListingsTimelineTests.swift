@@ -272,6 +272,18 @@ struct TVListingsTimelineTests {
         #expect(TVListingsTimeline.lowerRatingSuggestion(in: otherDate, minimumStars: 3) == nil)
     }
 
+    @Test func carouselDisablesOnlyPreparedDatesWithoutMatchingRatings() {
+        let unrated = makeMatch(date: "2026-10-27", time: "19:00", home: "Unrated")
+        let rated = Match(date: "2026-10-28", time: "20:00", homeTeam: "Rated", awayTeam: "Away", league: "Premier League",
+                          watchabilityIndex: MatchWatchabilityIndex(score: 70, tier: "high", stars: 4, confidence: 1, modelVersion: "v5", components: []),
+                          tvChannels: [TvChannel(name: "Sky Sports", countryCode: "GB")])
+        let pages = ["2026-10-27": [unrated], "2026-10-28": [rated], "2026-10-29": []]
+        #expect(TVListingsTimeline.disabledDateKeys(in: pages, minimumStars: 0) == ["2026-10-29"])
+        #expect(TVListingsTimeline.disabledDateKeys(in: pages, minimumStars: 3) == ["2026-10-27", "2026-10-29"])
+        #expect(TVListingsTimeline.disabledDateKeys(in: pages, minimumStars: 5) == Set(pages.keys))
+        #expect(!TVListingsTimeline.disabledDateKeys(in: pages, minimumStars: 5).contains("2026-10-30"))
+    }
+
     private var testCalendar: Calendar {
         var calendar = Calendar(identifier: .gregorian)
         calendar.locale = Locale(identifier: "en_GB")

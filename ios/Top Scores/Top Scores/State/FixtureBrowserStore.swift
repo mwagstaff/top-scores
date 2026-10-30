@@ -825,6 +825,11 @@ final class FixtureBrowserStore: ObservableObject {
     @Published private(set) var availableDays: [FixtureCalendarDay] = []
     @Published private(set) var visibleMatches: [Match] = []
     @Published private(set) var selectedDateUnfilteredMatches: [Match] = []
+    // A missing key is unprepared; an empty array is a confirmed empty TV date.
+    @Published private(set) var tvGuideMatchesByDate: [String: [Match]] = [:]
+    private var tvGuidePreparationTask: Task<Void, Never>?
+    private var tvGuidePreparationID = UUID()
+    private var tvGuideDirtyDates: Set<String> = []
     @Published private(set) var selectedDateKey: String?
     @Published private(set) var isLoadingSelectedDate = false
     @Published private(set) var hasLoadedCalendar = false
@@ -862,6 +867,12 @@ final class FixtureBrowserStore: ObservableObject {
 
     var cachedMatchesByDate: [String: [Match]] {
         pageCache.matchesByDate
+    }
+
+    func isLoadingTVGuideDate(_ dateKey: String) -> Bool {
+        let isSelected = dateKey == selectedDateKey
+        if isSelected, errorMessage != nil { return false }
+        return tvGuideMatchesByDate[dateKey] == nil || (isSelected && isLoadingSelectedDate)
     }
 
     func cachedUnfilteredMatches(for dateKey: String) -> [Match] {
@@ -1041,6 +1052,13 @@ final class FixtureBrowserStore: ObservableObject {
             CompetitionBadgeCache.shared.warmIfNeeded(entries: competitions)
         }
 
+        if previousSnapshot != preferences {
+            tvGuidePreparationTask?.cancel()
+            tvGuidePreparationID = UUID()
+            tvGuideMatchesByDate = [:]
+            tvGuideDirtyDates = Set(cachePayload?.buckets.keys.map { $0 } ?? [])
+            prepareTVGuidePages()
+        }
         recomputeAvailableDays(keepCurrentDate: !contextChanged && !resetSelectedDate)
         loadSelectedDateIfNeeded(force: false)
 
@@ -1083,6 +1101,7 @@ final class FixtureBrowserStore: ObservableObject {
             prefetchRequestID = UUID()
         }
         let selectionPublishStartedAt = ProcessInfo.processInfo.systemUptime
+        if isTVListingsModeEnabled { errorMessage = nil }
         selectedDateKey = dateKey
         logDateSelectionPhase(
             "publish_selected_date",
@@ -1153,6 +1172,13 @@ final class FixtureBrowserStore: ObservableObject {
     func setTVListingsModeEnabled(_ enabled: Bool) {
         guard isTVListingsModeEnabled != enabled else { return }
         isTVListingsModeEnabled = enabled
+        if enabled {
+            tvGuideDirtyDates.formUnion(cachePayload?.buckets.keys.map { $0 } ?? [])
+            prepareTVGuidePages()
+        } else {
+            tvGuidePreparationTask?.cancel()
+            tvGuidePreparationID = UUID()
+        }
         recomputeAvailableDays(keepCurrentDate: true)
         loadSelectedDateIfNeeded(force: false)
     }
@@ -2052,6 +2078,49 @@ final class FixtureBrowserStore: ObservableObject {
             oldestKeys.forEach { payload.buckets.removeValue(forKey: $0) }
         }
         cachePayload = payload
+        tvGuideDirtyDates.formUnion(buckets.keys)
+        prepareTVGuidePages()
+    }
+
+    private func prepareTVGuidePages() {
+        guard isTVListingsModeEnabled, let snapshot, let payload = cachePayload else { return }
+        tvGuidePreparationTask?.cancel()
+        let requestID = UUID()
+        tvGuidePreparationID = requestID
+        let dirtyDates = tvGuideDirtyDates
+        let buckets = payload.buckets.filter { dirtyDates.contains($0.key) }
+        let retainedDates = Set(payload.buckets.keys)
+        let catalog = competitions
+        tvGuidePreparationTask = Task.detached(priority: .utility) { [weak self] in
+            var prepared: [String: [Match]] = [:]
+            for (date, bucket) in buckets {
+                guard !Task.isCancelled else { return }
+                let matches = FixtureBrowseSelectionResolver.filterMatches(
+                    bucket.matches, topMatchesOnly: false, selectedCompetitionIDs: [],
+                    competitions: catalog, showAllMatches: true,
+                    includePostponed: snapshot.showPostponedGames,
+                    includeFACupEarlyRounds: snapshot.showFACupEarlyRounds
+                )
+                prepared[date] = TVListingsTimeline.matches(for: date, from: matches)
+            }
+            guard !Task.isCancelled else { return }
+            await self?.applyTVGuidePages(prepared, dirtyDates: dirtyDates,
+                                         retainedDates: retainedDates, requestID: requestID)
+        }
+    }
+
+    private func applyTVGuidePages(
+        _ prepared: [String: [Match]], dirtyDates: Set<String>,
+        retainedDates: Set<String>, requestID: UUID
+    ) async {
+        do { try await waitUntilDateSwipeWorkMayPublish() }
+        catch { return }
+        guard requestID == tvGuidePreparationID, isTVListingsModeEnabled else { return }
+        let merged = tvGuideMatchesByDate.filter { retainedDates.contains($0.key) }
+            .merging(prepared) { _, new in new }
+        if tvGuideMatchesByDate != merged { tvGuideMatchesByDate = merged }
+        tvGuideDirtyDates.subtract(dirtyDates)
+        tvGuidePreparationTask = nil
     }
 
     private func schedulePageCacheRebuild() {

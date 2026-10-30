@@ -59,6 +59,13 @@ nonisolated enum TVListingsTimeline {
         .sorted(by: chronologicalOrder)
     }
 
+    static func disabledDateKeys(in preparedPages: [String: [Match]], minimumStars: Int) -> Set<String> {
+        Set(preparedPages.compactMap { date, matches in
+            matches.contains { minimumStars == 0 || ($0.watchabilityIndex?.ratingStars ?? 0) >= minimumStars }
+                ? nil : date
+        })
+    }
+
     struct LowerRatingSuggestion: Equatable {
         let minimumStars: Int
         let matchCount: Int
@@ -353,15 +360,11 @@ struct TVListingsView: View {
     }
 
     private var loadingState: some View {
-        VStack(spacing: 10) {
-            ProgressView()
-                .controlSize(.regular)
-            Text("Loading TV listings")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .accessibilityElement(children: .combine)
+        ProgressView()
+            .controlSize(.regular)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityLabel("Loading TV listings")
+            .accessibilityIdentifier("tvListingsLoading")
     }
 
     private var emptyState: some View {

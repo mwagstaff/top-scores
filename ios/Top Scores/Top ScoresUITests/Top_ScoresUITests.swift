@@ -246,6 +246,7 @@ final class Top_ScoresUITests: XCTestCase {
     @MainActor
     func testTVGuideHorizontalDateSwipes() throws {
         let app = XCUIApplication()
+        app.launchArguments = ["-tvListingsMinimumStars", "0"]
         app.launch()
         let options = app.buttons["fixtureOptionsButton"]
         XCTAssertTrue(options.waitForExistence(timeout: 30))
