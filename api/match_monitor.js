@@ -2230,9 +2230,9 @@ async function persistNotificationHistory({
 }
 
 function tvReminderChannels(match, prefs) {
-  return [...new Set((match.tv_channels || []).map(extractTvChannelName).filter(Boolean)
+  return broadcastPriorities.order([...new Set((match.tv_channels || []).map(extractTvChannelName).filter(Boolean)
     .filter((name) => !prefs.channelFilterEnabled || !prefs.selectedChannels?.length ||
-      prefs.selectedChannels.some((selection) => channelMatchesSelection(name, selection))))];
+      prefs.selectedChannels.some((selection) => channelMatchesSelection(name, selection))))]);
 }
 
 let tvReminderProvider = null;

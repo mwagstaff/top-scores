@@ -78,3 +78,21 @@ test('reminder channel names follow the existing Scores channel-family selection
   assert.deepEqual(tvReminderChannels(fixture, { channelFilterEnabled: true, selectedChannels: ['BBC (all)'] }), []);
   assert.equal(tvReminderChannels(fixture, { channelFilterEnabled: false }).length, 3);
 });
+
+test('reminders use app broadcast priorities for single and grouped notification bodies', () => {
+  const { __testHooks: { tvReminderChannels } } = require('./match_monitor');
+  const names = ['HBO Max (UK)', 'TNT Sports 1', 'TNT Sports Ultimate', 'HBO Max'];
+  const expected = ['TNT Sports 1', 'TNT Sports Ultimate', 'HBO Max (UK)', 'HBO Max'];
+  for (const tv_channels of [names, names.map(name => ({ name, countryCode: 'GB' }))]) {
+    const fixture = { ...match, tv_channels };
+    assert.deepEqual(tvReminderChannels(fixture, {}), expected);
+    assert.deepEqual(tvReminderChannels(fixture, { channelFilterEnabled: true, selectedChannels: ['TNT Sports (all)'] }), expected.slice(0, 2));
+    assert.deepEqual(tvReminderChannels(fixture, { channelFilterEnabled: true, selectedChannels: ['HBO Max (UK)', 'HBO Max'] }), expected.slice(2));
+    for (const matches of [[fixture], [fixture, { ...fixture, id: 'bsd_2' }]]) {
+      const group = reminderGroups(user, matches, now, tvReminderChannels)[0];
+      const body = reminderMessage(user, group, now).body;
+      assert.equal(body.split(expected.join(', ')).length - 1, matches.length);
+    }
+    assert.deepEqual(fixture.tv_channels, tv_channels);
+  }
+});

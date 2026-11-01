@@ -208,7 +208,7 @@ final class FantasyViewModel: ObservableObject {
         )
     }
 
-    private struct FantasySquadSnapshot {
+    struct FantasySquadSnapshot {
         let gameweek: FantasyGameweek
         let picksResponse: FantasyPicksResponse
         let liveResponse: FantasyEventLiveResponse
@@ -561,19 +561,13 @@ final class FantasyViewModel: ObservableObject {
                 ?? snapshot.gameweek
             let previousDataChecked = snapshot.gameweek.dataChecked == true
 
-            let refreshedLive: FantasyEventLiveResponse
-            if FantasyTeamGameweekResolver.isLiveScoringGameweek(refreshedGameweek)
-                || refreshedGameweek.dataChecked == true {
-                refreshedLive = try await timed(
-                    "current_score_live event_id=\(refreshedGameweek.id)"
-                ) {
-                    try await fantasyPublicClient.fetchEventLive(eventID: refreshedGameweek.id)
-                }
-            } else {
-                refreshedLive = FantasyEventLiveResponse(elements: [])
-            }
-            let refreshedPicks = snapshot.picksResponse
-            let refreshedFixtures = snapshot.fixtures
+            let refreshedSnapshot = try await fetchCurrentScoreSnapshot(
+                gameweek: refreshedGameweek,
+                picksResponse: snapshot.picksResponse
+            )
+            let refreshedPicks = refreshedSnapshot.picksResponse
+            let refreshedLive = refreshedSnapshot.liveResponse
+            let refreshedFixtures = refreshedSnapshot.fixtures
 
             let mergedSeasonFixtures = Self.mergingFixtures(
                 refreshedFixtures,
@@ -588,12 +582,6 @@ final class FantasyViewModel: ObservableObject {
                 bootstrap: refreshedBootstrap
             )
 
-            let refreshedSnapshot = FantasySquadSnapshot(
-                gameweek: refreshedGameweek,
-                picksResponse: refreshedPicks,
-                liveResponse: refreshedLive,
-                fixtures: refreshedFixtures
-            )
             guard !Task.isCancelled, rivalRefreshToken == refreshToken else { return false }
             currentSquadSnapshot = refreshedSnapshot
             currentSquadBootstrap = refreshedBootstrap
@@ -642,6 +630,31 @@ final class FantasyViewModel: ObservableObject {
             }
             return false
         }
+    }
+
+    func fetchCurrentScoreSnapshot(
+        gameweek: FantasyGameweek,
+        picksResponse: FantasyPicksResponse
+    ) async throws -> FantasySquadSnapshot {
+        // Points and fixture flags must advance together; kickoff-time inference
+        // expires after three hours and cannot replace an actual final status.
+        async let fixtures = timed("current_score_fixtures event_id=\(gameweek.id)") {
+            try await fantasyPublicClient.fetchEventFixtures(eventID: gameweek.id)
+        }
+        let live: FantasyEventLiveResponse
+        if FantasyTeamGameweekResolver.isLiveScoringGameweek(gameweek) || gameweek.dataChecked == true {
+            live = try await timed("current_score_live event_id=\(gameweek.id)") {
+                try await fantasyPublicClient.fetchEventLive(eventID: gameweek.id)
+            }
+        } else {
+            live = FantasyEventLiveResponse(elements: [])
+        }
+        return try await FantasySquadSnapshot(
+            gameweek: gameweek,
+            picksResponse: picksResponse,
+            liveResponse: live,
+            fixtures: fixtures
+        )
     }
 
     private func squadTeamIDs(in snapshot: FantasySquadSnapshot) -> Set<Int> {
