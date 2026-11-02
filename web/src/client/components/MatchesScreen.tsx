@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useRef } from "react";
-import { Link, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { competitionDateCounts, preferredCompetitionDate } from "../competitionDates";
 import { competitionLogo } from "../competitionLogos";
 import { loadCompetitions } from "../catalog";
@@ -35,6 +35,7 @@ export function MatchesScreen({
   tv?: boolean;
   competition?: string;
 }) {
+  const navigate = useNavigate();
   const dateRail = useRef<HTMLDivElement>(null);
   const [params, setParams] = useSearchParams();
   const savedView = useMatchViewPreferences();
@@ -274,6 +275,27 @@ export function MatchesScreen({
       }),
     [relevant, filter, query],
   );
+  const [allCompetitionCount, setAllCompetitionCount] = useState<{ key: string; count: number } | null>(null);
+  const emptyCountKey = `${date}:${mode}:${tv}`;
+  useEffect(() => {
+    if (!payload || matches.length || error) return;
+    let active = true;
+    setAllCompetitionCount(null);
+    void (async () => {
+      let day = await loadDay(date);
+      while (active && day.hasMore) day = await loadDay(date, false, false, day.page + 1);
+      const count = day.matches.filter(match => {
+        const finished = isMatchFinished(match) || isMatchAbandoned(match);
+        if (mode === "results" && !finished) return false;
+        if (tv && (finished || !ukChannels(match.tvChannels).length)) return false;
+        return true;
+      }).length;
+      if (active) setAllCompetitionCount({ key: emptyCountKey, count });
+    })().catch(() => { /* Keep the all-competitions action available without an unverified count. */ });
+    return () => { active = false; };
+  }, [payload, matches.length, error, emptyCountKey, date, mode, tv]);
+  const availableCount = allCompetitionCount?.key === emptyCountKey ? allCompetitionCount.count : undefined;
+  const noMoreTVToday = tv && date === today && availableCount === 0;
   const groups = useMemo(() => {
     const groups = new Map<string, Match[]>();
     for (const match of matches)
@@ -536,31 +558,42 @@ export function MatchesScreen({
           ) : (
             !error && (
               <div className="football-empty">
-                <span aria-hidden="true">◷</span>
+                {noMoreTVToday ? (
+                  <svg className="empty-tv" viewBox="0 0 160 120" fill="none" aria-hidden="true">
+                    <rect x="12" y="10" width="136" height="86" rx="9" fill="var(--surface)" stroke="currentColor" strokeWidth="3" />
+                    <rect x="21" y="19" width="118" height="62" rx="3" fill="#060b10" stroke="currentColor" strokeOpacity="0.3" />
+                    <circle cx="80" cy="89" r="2" fill="currentColor" />
+                    <path d="M65 97l-7 14m37-14 7 14M49 112h62" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                  </svg>
+                ) : <span aria-hidden="true">◷</span>}
                 <h3>
-                  {query
+                  {noMoreTVToday
+                      ? "No more matches on TV today"
+                      : query
                       ? "No matches found"
                       : filter === "tv"
                         ? "No UK broadcasts listed"
                         : "A quiet day for football"}
                 </h3>
                 <p>
-                  {query
+                  {noMoreTVToday
+                    ? "Choose another day to see what’s on TV."
+                    : query
                     ? "Try another team or channel, or widen your filters."
                     : "Choose another day or explore all competitions."}
                 </p>
-                <button
+                {!noMoreTVToday && <button
                   onClick={() => {
                     setQuery("");
-                    change({
-                      date: today,
-                      view: "all",
-                      comps: "",
-                    });
+                    if (competition) {
+                      navigate(`${mode === "results" ? "/results" : tv ? "/tv" : "/"}?date=${date}&scope=all`);
+                    } else {
+                      change({ scope: "all", comps: "" });
+                    }
                   }}
                 >
-                  Show today’s matches
-                </button>
+                  {availableCount === undefined ? "Show matches across all competitions" : `Show ${availableCount} ${availableCount === 1 ? "match" : "matches"} across all competitions`}
+                </button>}
               </div>
             )
           )}

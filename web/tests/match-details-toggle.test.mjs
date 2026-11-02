@@ -22,7 +22,7 @@ registerHooks({
       format: "module",
       shortCircuit: true,
       source: ts.transpileModule(readFileSync(new URL(url), "utf8"), {
-        compilerOptions: { jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.ESNext },
+        compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX, module: ts.ModuleKind.ESNext },
       }).outputText,
     };
   },
@@ -111,6 +111,78 @@ test("match view choices survive dates, routes, and a new visit while URLs can o
     assert.equal(toggle()?.props.checked, false);
     assert.equal(scopeButton("Premier League teams").props["aria-pressed"], true);
     assert.deepEqual(JSON.parse(stored.get("top-scores.match-view.v1")), { scope: "epl", showDetails: false, showStats: true });
+  } finally {
+    if (renderer) await act(async () => { renderer.unmount(); });
+    globalThis.fetch = originalFetch;
+  }
+});
+
+
+test("empty TV view counts all competition pages and clears the scope without changing the date", async t => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-01T12:00:00Z") });
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  const match = (id, status = "NS", channels = [{ name: "BBC One", country_code: "GB" }]) => ({
+    match_details_id: id, date: "2026-11-03", time: "20:00", league: "League One",
+    score_status: status, home_team: `Home ${id}`, away_team: `Away ${id}`, tv_channels: channels,
+  });
+  globalThis.fetch = async url => {
+    const parsed = new URL(String(url), "https://example.test");
+    requests.push(parsed);
+    if (!parsed.pathname.endsWith("/matches")) return new Response("[]");
+    const filtered = parsed.searchParams.has("view_option");
+    const secondPage = parsed.searchParams.get("page") === "2";
+    const items = filtered ? [] : secondPage ? [match("3"), match("finished", "FT"), match("no-tv", "NS", [])] : [match("1"), match("2")];
+    return new Response(JSON.stringify(items), { headers: { "X-Has-More": String(!filtered && !secondPage) } });
+  };
+  let renderer, location;
+  function Harness() {
+    location = useLocation();
+    return React.createElement(MatchesScreen, { tv: true });
+  }
+  try {
+    await act(async () => {
+      renderer = create(React.createElement(MemoryRouter, { initialEntries: ["/tv?date=2026-11-03&scope=top"] }, React.createElement(Harness)));
+    });
+    const button = renderer.root.findAllByType("button").find(node => node.children.includes("Show 3 matches across all competitions"));
+    assert.ok(button);
+    assert.equal(renderer.root.findAllByProps({ className: "empty-tv" }).length, 0);
+    assert.ok(requests.some(url => url.searchParams.get("page") === "2" && !url.searchParams.has("view_option")));
+    await act(async () => { button.props.onClick(); });
+    assert.match(location.search, /scope=all/);
+    assert.match(location.search, /date=2026-11-03/);
+    assert.equal(renderer.root.findAllByProps({ className: "football-empty" }).length, 0);
+  } finally {
+    if (renderer) await act(async () => { renderer.unmount(); });
+    globalThis.fetch = originalFetch;
+  }
+});
+
+
+test("TV empty state confirms no remaining broadcasts across all competitions today", async t => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-05T12:00:00Z") });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async url => {
+    const parsed = new URL(String(url), "https://example.test");
+    const filtered = parsed.searchParams.has("view_option");
+    const items = !filtered && parsed.searchParams.get("start") === "2026-11-05" ? [{
+      match_details_id: "finished-tv", date: "2026-11-05", time: "10:00", league: "League One",
+      score_status: "FT", home_team: "Home FC", away_team: "Away FC",
+      tv_channels: [{ name: "BBC One", country_code: "GB" }],
+    }, {
+      match_details_id: "not-on-tv", date: "2026-11-05", time: "20:00", league: "League Two",
+      score_status: "NS", home_team: "Other FC", away_team: "Visitors FC", tv_channels: [],
+    }] : [];
+    return new Response(JSON.stringify(items));
+  };
+  let renderer;
+  try {
+    await act(async () => {
+      renderer = create(React.createElement(MemoryRouter, { initialEntries: ["/tv?scope=top"] }, React.createElement(MatchesScreen, { tv: true })));
+    });
+    assert.equal(renderer.root.findAllByProps({ className: "empty-tv" }).length, 1);
+    assert.ok(renderer.root.findAllByType("h3").some(node => node.children.includes("No more matches on TV today")));
+    assert.equal(renderer.root.findByProps({ className: "football-empty" }).findAllByType("button").length, 0);
   } finally {
     if (renderer) await act(async () => { renderer.unmount(); });
     globalThis.fetch = originalFetch;
