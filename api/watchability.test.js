@@ -4,6 +4,33 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const { calculateWatchability, tierForScore, starsForScore } = require("./watchability");
 
+test("club profiles correct the November 8 ordering independently of current form", () => {
+  // Public API snapshot captured on 3 November 2026.
+  const fixtures = require("./test/fixtures/watchability-2026-11-08.json");
+  const expected = [78, 77, 73, 80, 84];
+  fixtures.forEach(({ input, previousScore }, index) => {
+    assert.equal(calculateWatchability({ ...input, homeTeamName: null, awayTeamName: null }).score, previousScore);
+    const result = calculateWatchability(input);
+    assert.equal(result.score, expected[index]);
+    assert.equal(result.stars, 4);
+    const reversed = { ...input, homeTeamName: input.awayTeamName, awayTeamName: input.homeTeamName, homeElo: input.awayElo, awayElo: input.homeElo, homeStanding: input.awayStanding, awayStanding: input.homeStanding };
+    assert.equal(calculateWatchability(reversed).score, result.score);
+  });
+  assert.ok(expected[4] > expected[0]);
+});
+
+test("club appeal is bounded, alias-aware and independent of strength", () => {
+  const component = input => calculateWatchability({ competitionName: "Premier League", ...input }).components.find(c => c.key === "club_profile");
+  assert.equal(component({ homeTeamName: "Man Utd", awayTeamName: "Aston Villa" }).contribution, 2);
+  assert.equal(component({ homeTeamName: "Manchester United", awayTeamName: "Aston Villa", homeElo: 1500, awayElo: 1600 }).contribution, 2);
+  assert.equal(component({ homeTeamName: "Liverpool", awayTeamName: "Arsenal" }).contribution, 4);
+  assert.equal(component({ homeTeamName: "Brighton & Hove Albion", awayTeamName: "Brentford", homeElo: 2000, awayElo: 2000 }).contribution, -8);
+  assert.equal(component({ homeTeamName: "Liverpool" }), undefined);
+  for (const competitionName of ["Championship", "FA Cup", "UEFA Champions League", "International Friendly"]) {
+    assert.equal(component({ competitionName, homeTeamName: "Liverpool", awayTeamName: "Arsenal" }), undefined);
+  }
+});
+
 function standing(position, points, overrides = {}) {
   return {
     position,

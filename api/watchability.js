@@ -1,6 +1,25 @@
 "use strict";
 
-const MODEL_VERSION = "v5";
+const MODEL_VERSION = "v6";
+
+// Editorial UK audience appeal, independent of current strength/form. These
+// tiers are policy, not measured supporter counts; review them deliberately.
+const CLUB_PROFILE_TIERS = [
+  { score: 100, names: ["Arsenal", "Chelsea", "Liverpool", "Manchester City", "Man City", "Manchester United", "Man Utd", "Tottenham", "Tottenham Hotspur", "Spurs"] },
+  { score: 75, names: ["Aston Villa", "Newcastle", "Newcastle United"] },
+  { score: 50, names: ["Everton", "Leeds", "Leeds United", "West Ham", "West Ham United", "Nottingham Forest", "Nottm Forest", "Sunderland"] },
+];
+const clubProfileKey = (name) => String(name || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+const CLUB_PROFILES = new Map(CLUB_PROFILE_TIERS.flatMap(({ score, names }) => names.map(name => [clubProfileKey(name), score])));
+
+function clubProfileAdjustment(input) {
+  if (!["premier league", "english premier league"].includes(String(input.competitionName || "").trim().toLowerCase())) return null;
+  if (!String(input.homeTeamName || "").trim() || !String(input.awayTeamName || "").trim()) return null;
+  const home = CLUB_PROFILES.get(clubProfileKey(input.homeTeamName)) ?? 25;
+  const away = CLUB_PROFILES.get(clubProfileKey(input.awayTeamName)) ?? 25;
+  const score = (home + away) / 2;
+  return { score, contribution: Math.round((-12 + 16 * score / 100) * 10) / 10 };
+}
 
 const FACTORS = Object.freeze({
   competition: { label: "Competition", weight: 0.5 },
@@ -213,6 +232,18 @@ function calculateWatchability(input = {}) {
       weight: 0,
       contribution: clubDrawAdjustment.contribution,
       detail: "Adjusts the Premier League baseline using the highest pre-match club strength in the fixture.",
+    });
+  }
+
+  const clubProfile = clubProfileAdjustment(input);
+  if (clubProfile) {
+    components.push({
+      key: "club_profile",
+      label: "Club profile",
+      score: rounded(clubProfile.score),
+      weight: 0,
+      contribution: clubProfile.contribution,
+      detail: "Editorial UK audience appeal based on both clubs’ established profiles, independently of current strength and form. Adjustment ranges from -8 to +4 points.",
     });
   }
 

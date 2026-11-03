@@ -42,6 +42,12 @@ const match = {
   league_subcategory: "Round 4", tv_channels: ["Sky Sports"],
 };
 
+test("server forwards canonical club names for profile scoring", () => {
+  const rate = adapter({ ratings: { "Man United": { Name: "Manchester United", Points: 1850 }, Villa: { Name: "Aston Villa", Points: 1900 } } });
+  const result = rate({ ...match, league: "Premier League", home_team: "Man United", away_team: "Villa" }, 100);
+  assert.equal(result.components.find(c => c.key === "club_profile").contribution, 2);
+});
+
 test("server forwards current Premier League membership and ratings into cup scoring", () => {
   const rate = adapter({
     premierLeagueTeams: ["Arsenal"],

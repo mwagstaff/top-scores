@@ -408,7 +408,7 @@ test("toMatchListPayload includes a stable watchability breakdown for televised 
 
   assert.equal(payload.watchability_index.tier, "highly_watchable");
   assert.equal(payload.watchability_index.stars, 4);
-  assert.equal(payload.watchability_index.model_version, "v5");
+  assert.equal(payload.watchability_index.model_version, "v6");
   assert.ok(payload.watchability_index.components.length >= 6);
 });
 

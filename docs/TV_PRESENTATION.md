@@ -29,6 +29,28 @@ The separate TV listings page retains a TV Guide sidebar; Scores & fixtures has 
 
 ## UK audience calibration (model v4)
 
+### Club profile (model v6)
+
+Premier League fixtures now also include a separate editorial **Club profile**
+component, independent of current ratings, league position and form. The explicit
+UK audience tiers in `api/watchability.js` are 100 for Arsenal, Chelsea,
+Liverpool, Manchester City, Manchester United and Tottenham; 75 for Aston Villa
+and Newcastle; 50 for Everton, Leeds, West Ham, Nottingham Forest and Sunderland;
+and 25 for other named clubs. These are product judgements about established
+audience appeal, not measured fan counts. Review these tiers deliberately.
+
+The average of both clubs' tiers maps to a bounded -8 to +4 point adjustment
+(`-12 + 16 * average / 100`). One big club therefore cannot earn the maximum
+boost by itself. Missing names omit the component. Canonical club names from
+the ranking lookup handle aliases. Other competitions retain their calibration.
+
+Using the public API data captured on 3 November for 8 November, Brighton–Brentford
+changes from 86 (five stars) to 78 (four), while Manchester United–Aston Villa
+changes from 82 to 84 (four), correctly ranking United–Villa higher without
+automatically awarding five stars. Existing form, strength, stakes and rivalry
+factors still apply. The API match-list Last-Modified timestamp now includes
+process startup so model-only deployments invalidate older conditional requests.
+
 The shared API retains the competition weights (Premier League 100, FA Cup 65,
 EFL Cup 60, Serie A 45) and adds a single 15-point **Premier League cup appeal**
 component to FA Cup/EFL Cup fixtures with at least one current Premier League

@@ -12708,6 +12708,8 @@ function watchabilityIndexForMatch(match, competitionWeight) {
 
   const index = calculateWatchability({
     competitionName: match.league,
+    homeTeamName: clubHome?.Name || match.home_team,
+    awayTeamName: clubAway?.Name || match.away_team,
     competitionWeight,
     homeIsPremierLeague: context.fixtureContext.isPremierLeagueTeam(match.home_team, match.home_team_id),
     awayIsPremierLeague: context.fixtureContext.isPremierLeagueTeam(match.away_team, match.away_team_id),
@@ -25219,6 +25221,8 @@ app.get(`${API_PREFIX}/matches`, async (req, res) => {
       mergedDataset.updated_at,
       bbcRangeDataset.updated_at,
       broadcastPriorities.updatedAt,
+      // A deployment can change ratings without changing upstream fixtures.
+      new Date(PROCESS_START_TIME_SECONDS * 1000).toISOString(),
     ]);
     setLastModifiedHeaders(res, latestUpdated);
     res.set("X-Operational-Source", canonicalSource);
