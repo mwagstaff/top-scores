@@ -320,6 +320,33 @@ Grouped standings expose each group's promotion/qualification/relegation bands a
 
 The web and iOS portrait loaders treat decoded 1×1 responses as missing images and fall back to player initials. This is required because the BSD image proxy can return a successful 1×1 missing-image response rather than an HTTP error.
 
+### Top Teams eligibility (November 2026)
+
+`api/top_teams_config.json` owns the Top Teams rules shared by fixtures, the
+website, notifications and Live Activities. For Champions League qualifying and
+other UEFA club matches, a club qualifies at a compatibility score of **1,800**,
+or **1,750** if it is one of the 24 configured `established_major_clubs`.
+Opta contestant IDs identify those clubs; exact configured names/aliases support
+the legacy Club Elo provider. A club with another Opta ID cannot inherit the
+lower threshold through a matching name. Ratings themselves remain unchanged.
+
+The existing exceptions remain: current Premier League clubs, the configured
+international teams and Real Madrid/Barcelona/Bayern in any competition;
+Champions League league-phase/knockout fixtures; and UK/Irish clubs in UEFA
+fixtures. Either opponent may qualify a match. The curated list is not an
+unconditional inclusion list: Ajax, Feyenoord, Marseille and Frankfurt still
+need to meet the 1,750 floor for this particular rule.
+
+`/api/v1/match-view-presets/top-teams` exposes both thresholds, the curated list,
+and resolved `conditional_uefa_teams`/`major_teams`. Existing iOS clients consume
+the resolved arrays without recalculating thresholds, preserving schema-v1
+compatibility. Their local preset cache lasts six hours; server notification
+eligibility changes when the API and monitor load the deployed config. A
+deployment does not remove already-delivered notifications. Verify the public
+preset and filtered matches after deployment, including Rennes–Olympiacos being
+absent and the retained clubs being present. Do not infer APNs device delivery
+from these eligibility checks.
+
 ### Ranking sources (October 2026)
 
 Club rankings default to **Opta Power Rankings**, using the embedded men's dataset in

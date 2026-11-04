@@ -16592,7 +16592,14 @@ const TOP_TEAMS_HOME_ASSOCIATION_COUNTRY_CODES = new Set(
     : []
 );
 const TOP_TEAMS_CLUB_ELO_THRESHOLD = Number(
-  DEFAULT_TOP_TEAMS_CONFIG.club_elo_threshold || 1750
+  DEFAULT_TOP_TEAMS_CONFIG.club_elo_threshold || 1800
+);
+const TOP_TEAMS_ESTABLISHED_MAJOR_CLUB_ELO_THRESHOLD = Number(
+  DEFAULT_TOP_TEAMS_CONFIG.established_major_club_elo_threshold || 1750
+);
+const TOP_TEAMS_ESTABLISHED_MAJOR_CLUBS = DEFAULT_TOP_TEAMS_CONFIG.established_major_clubs || [];
+const TOP_TEAMS_ESTABLISHED_MAJOR_OPTA_IDS = new Set(
+  TOP_TEAMS_ESTABLISHED_MAJOR_CLUBS.map((team) => team.opta_id)
 );
 const TOP_UEFA_CLUB_ELO_RANK_CUTOFF = 40;
 const TOP_UEFA_CLUB_ELO_FALLBACK_SCORE = 1700;
@@ -16618,7 +16625,16 @@ function isChampionsLeagueQualifyingMatch(match) {
 
 function clubEloRowMeetsTopTeamsThreshold(row) {
   const elo = Number(row && (row.Elo ?? row.elo));
-  return Number.isFinite(elo) && elo >= TOP_TEAMS_CLUB_ELO_THRESHOLD;
+  if (!Number.isFinite(elo)) return false;
+  if (elo >= TOP_TEAMS_CLUB_ELO_THRESHOLD) return true;
+  if (elo < TOP_TEAMS_ESTABLISHED_MAJOR_CLUB_ELO_THRESHOLD) return false;
+  // Opta identity wins over names: an unrelated club with the same name must
+  // never inherit the concession. Exact aliases support the legacy Elo feed.
+  if (row.OptaId) return TOP_TEAMS_ESTABLISHED_MAJOR_OPTA_IDS.has(row.OptaId);
+  return configuredTopTeamsTeamMatches(
+    row.Name || row.name || row.Club || row.club,
+    TOP_TEAMS_ESTABLISHED_MAJOR_CLUBS
+  );
 }
 
 function matchPassesTopTeamsPreset(match, context = {}) {
@@ -16963,6 +16979,8 @@ function buildResolvedTopTeamsPreset() {
     revision: String(DEFAULT_TOP_TEAMS_CONFIG.revision || "1"),
     title: String(DEFAULT_TOP_TEAMS_CONFIG.title || "Top teams"),
     club_elo_threshold: TOP_TEAMS_CLUB_ELO_THRESHOLD,
+    established_major_club_elo_threshold: TOP_TEAMS_ESTABLISHED_MAJOR_CLUB_ELO_THRESHOLD,
+    established_major_clubs: TOP_TEAMS_ESTABLISHED_MAJOR_CLUBS,
     premier_league_competition_id: TOP_TEAMS_PREMIER_LEAGUE_ID,
     champions_league_competition_id: TOP_TEAMS_CHAMPIONS_LEAGUE_ID,
     other_uefa_competition_ids: Array.from(TOP_TEAMS_OTHER_UEFA_COMPETITION_IDS),
