@@ -397,6 +397,7 @@ struct MatchesView: View {
 
     @EnvironmentObject private var preferences: PreferencesStore
     @EnvironmentObject private var fantasyViewModel: FantasyViewModel
+    @ObservedObject private var premierLeagueTeamsStore = PremierLeagueTeamsStore.shared
     @Environment(\.accessibilityReduceMotion) private var accessibilityReduceMotion
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.scenePhase) private var scenePhase
@@ -1558,7 +1559,17 @@ struct MatchesView: View {
                 fantasyViewModel: fantasyViewModel
             )
         }
-        Button(action: openMatch) { rowContent }
+        let isHighlighted = preferences.highlightEnglishEuropeanClubs &&
+            premierLeagueTeamsStore.matcher.isEnglishClubInEurope(match)
+        Button(action: openMatch) {
+            rowContent
+                .background {
+                    if isHighlighted {
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(Color.accentColor.opacity(0.14))
+                    }
+                }
+        }
         .disabled(match.isPostponed)
         .buttonStyle(.plain)
         .onAppear {

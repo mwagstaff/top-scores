@@ -202,6 +202,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
     let fixturesViewDensity: FixturesViewDensity
     let showCompactFixtureTvLogo: Bool
     let showCompactFixtureStarRating: Bool
+    let highlightEnglishEuropeanClubs: Bool
     let showCompactFixtureFantasyLogo: Bool
     let showKickoffTimeDividers: Bool
     let showFantasyFixtureLogos: Bool
@@ -285,6 +286,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         fixturesViewDensity: FixturesViewDensity = PreferencesStore.defaultFixturesViewDensity,
         showCompactFixtureTvLogo: Bool = PreferencesStore.defaultShowCompactFixtureTvLogo,
         showCompactFixtureStarRating: Bool = PreferencesStore.defaultShowCompactFixtureStarRating,
+        highlightEnglishEuropeanClubs: Bool = PreferencesStore.defaultHighlightEnglishEuropeanClubs,
         showCompactFixtureFantasyLogo: Bool = PreferencesStore.defaultShowCompactFixtureFantasyLogo,
         showKickoffTimeDividers: Bool = PreferencesStore.defaultShowKickoffTimeDividers,
         showFantasyFixtureLogos: Bool = PreferencesStore.defaultShowFantasyFixtureLogos,
@@ -328,6 +330,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         self.fixturesViewDensity = fixturesViewDensity
         self.showCompactFixtureTvLogo = showCompactFixtureTvLogo
         self.showCompactFixtureStarRating = showCompactFixtureStarRating
+        self.highlightEnglishEuropeanClubs = highlightEnglishEuropeanClubs
         self.showCompactFixtureFantasyLogo = showCompactFixtureFantasyLogo
         self.showKickoffTimeDividers = showKickoffTimeDividers
         self.showFantasyFixtureLogos = showFantasyFixtureLogos
@@ -373,6 +376,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         case fixturesViewDensity
         case showCompactFixtureTvLogo
         case showCompactFixtureStarRating
+        case highlightEnglishEuropeanClubs
         case showCompactFixtureFantasyLogo
         case showKickoffTimeDividers
         case showFantasyFixtureLogos
@@ -435,6 +439,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         fixturesViewDensity = try container.decodeIfPresent(FixturesViewDensity.self, forKey: .fixturesViewDensity) ?? PreferencesStore.defaultFixturesViewDensity
         showCompactFixtureTvLogo = try container.decodeIfPresent(Bool.self, forKey: .showCompactFixtureTvLogo) ?? PreferencesStore.defaultShowCompactFixtureTvLogo
         showCompactFixtureStarRating = try container.decodeIfPresent(Bool.self, forKey: .showCompactFixtureStarRating) ?? PreferencesStore.defaultShowCompactFixtureStarRating
+        highlightEnglishEuropeanClubs = try container.decodeIfPresent(Bool.self, forKey: .highlightEnglishEuropeanClubs) ?? PreferencesStore.defaultHighlightEnglishEuropeanClubs
         showCompactFixtureFantasyLogo = try container.decodeIfPresent(Bool.self, forKey: .showCompactFixtureFantasyLogo) ?? PreferencesStore.defaultShowCompactFixtureFantasyLogo
         showKickoffTimeDividers = try container.decodeIfPresent(Bool.self, forKey: .showKickoffTimeDividers) ?? PreferencesStore.defaultShowKickoffTimeDividers
         let legacyContainer = try decoder.container(keyedBy: LegacyCodingKeys.self)
@@ -485,6 +490,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         try container.encode(fixturesViewDensity, forKey: .fixturesViewDensity)
         try container.encode(showCompactFixtureTvLogo, forKey: .showCompactFixtureTvLogo)
         try container.encode(showCompactFixtureStarRating, forKey: .showCompactFixtureStarRating)
+        try container.encode(highlightEnglishEuropeanClubs, forKey: .highlightEnglishEuropeanClubs)
         try container.encode(showCompactFixtureFantasyLogo, forKey: .showCompactFixtureFantasyLogo)
         try container.encode(showKickoffTimeDividers, forKey: .showKickoffTimeDividers)
         try container.encode(showFantasyFixtureLogos, forKey: .showFantasyFixtureLogos)
@@ -530,6 +536,7 @@ struct PreferencesSnapshot: Codable, Equatable, Sendable {
         lhs.fixturesViewDensity == rhs.fixturesViewDensity &&
         lhs.showCompactFixtureTvLogo == rhs.showCompactFixtureTvLogo &&
         lhs.showCompactFixtureStarRating == rhs.showCompactFixtureStarRating &&
+        lhs.highlightEnglishEuropeanClubs == rhs.highlightEnglishEuropeanClubs &&
         lhs.showCompactFixtureFantasyLogo == rhs.showCompactFixtureFantasyLogo &&
         lhs.showKickoffTimeDividers == rhs.showKickoffTimeDividers &&
         lhs.showFantasyFixtureLogos == rhs.showFantasyFixtureLogos &&
@@ -641,6 +648,7 @@ final class PreferencesStore: ObservableObject {
     nonisolated static let defaultFixturesViewDensity: FixturesViewDensity = .compact
     nonisolated static let defaultShowCompactFixtureTvLogo = true
     nonisolated static let defaultShowCompactFixtureStarRating = true
+    nonisolated static let defaultHighlightEnglishEuropeanClubs = true
     nonisolated static let defaultShowCompactFixtureFantasyLogo = true
     nonisolated static let defaultShowKickoffTimeDividers = false
     nonisolated static let defaultShowFantasyFixtureLogos = false
@@ -788,6 +796,10 @@ final class PreferencesStore: ObservableObject {
         didSet { persist() }
     }
 
+    @Published var highlightEnglishEuropeanClubs: Bool {
+        didSet { persist() }
+    }
+
     @Published var showCompactFixtureFantasyLogo: Bool {
         didSet { persist() }
     }
@@ -927,6 +939,8 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultShowCompactFixtureTvLogo
         let showCompactFixtureStarRating = userDefaults.object(forKey: Keys.showCompactFixtureStarRating) as? Bool
             ?? Self.defaultShowCompactFixtureStarRating
+        let highlightEnglishEuropeanClubs = userDefaults.object(forKey: Keys.highlightEnglishEuropeanClubs) as? Bool
+            ?? Self.defaultHighlightEnglishEuropeanClubs
         let showCompactFixtureFantasyLogo = userDefaults.object(forKey: Keys.showCompactFixtureFantasyLogo) as? Bool
             ?? Self.defaultShowCompactFixtureFantasyLogo
         let showKickoffTimeDividers = userDefaults.object(forKey: Keys.showKickoffTimeDividers) as? Bool
@@ -981,6 +995,7 @@ final class PreferencesStore: ObservableObject {
         self.fixturesViewDensity = fixturesViewDensity
         self.showCompactFixtureTvLogo = showCompactFixtureTvLogo
         self.showCompactFixtureStarRating = showCompactFixtureStarRating
+        self.highlightEnglishEuropeanClubs = highlightEnglishEuropeanClubs
         self.showCompactFixtureFantasyLogo = showCompactFixtureFantasyLogo
         self.showKickoffTimeDividers = showKickoffTimeDividers
         self.showFantasyFixtureLogos = showFantasyFixtureLogos
@@ -1033,6 +1048,7 @@ final class PreferencesStore: ObservableObject {
             fixturesViewDensity: fixturesViewDensity,
             showCompactFixtureTvLogo: showCompactFixtureTvLogo,
             showCompactFixtureStarRating: showCompactFixtureStarRating,
+            highlightEnglishEuropeanClubs: highlightEnglishEuropeanClubs,
             showCompactFixtureFantasyLogo: showCompactFixtureFantasyLogo,
             showKickoffTimeDividers: showKickoffTimeDividers,
             showFantasyFixtureLogos: showFantasyFixtureLogos,
@@ -1102,6 +1118,7 @@ final class PreferencesStore: ObservableObject {
             fixturesViewDensity: fixturesViewDensity,
             showCompactFixtureTvLogo: showCompactFixtureTvLogo,
             showCompactFixtureStarRating: showCompactFixtureStarRating,
+            highlightEnglishEuropeanClubs: highlightEnglishEuropeanClubs,
             showCompactFixtureFantasyLogo: showCompactFixtureFantasyLogo,
             showKickoffTimeDividers: showKickoffTimeDividers,
             showFantasyFixtureLogos: showFantasyFixtureLogos,
@@ -1150,6 +1167,7 @@ final class PreferencesStore: ObservableObject {
         userDefaults.set(fixturesViewDensity.rawValue, forKey: Keys.fixturesViewDensity)
         userDefaults.set(showCompactFixtureTvLogo, forKey: Keys.showCompactFixtureTvLogo)
         userDefaults.set(showCompactFixtureStarRating, forKey: Keys.showCompactFixtureStarRating)
+        userDefaults.set(highlightEnglishEuropeanClubs, forKey: Keys.highlightEnglishEuropeanClubs)
         userDefaults.set(showCompactFixtureFantasyLogo, forKey: Keys.showCompactFixtureFantasyLogo)
         userDefaults.set(showKickoffTimeDividers, forKey: Keys.showKickoffTimeDividers)
         userDefaults.set(showFantasyFixtureLogos, forKey: Keys.showFantasyFixtureLogos)
@@ -1273,6 +1291,8 @@ final class PreferencesStore: ObservableObject {
             ?? Self.defaultShowCompactFixtureTvLogo
         let showCompactFixtureStarRating = userDefaults.object(forKey: Keys.showCompactFixtureStarRating) as? Bool
             ?? Self.defaultShowCompactFixtureStarRating
+        let highlightEnglishEuropeanClubs = userDefaults.object(forKey: Keys.highlightEnglishEuropeanClubs) as? Bool
+            ?? Self.defaultHighlightEnglishEuropeanClubs
         let showCompactFixtureFantasyLogo = userDefaults.object(forKey: Keys.showCompactFixtureFantasyLogo) as? Bool
             ?? Self.defaultShowCompactFixtureFantasyLogo
         let showKickoffTimeDividers = userDefaults.object(forKey: Keys.showKickoffTimeDividers) as? Bool
@@ -1327,6 +1347,7 @@ final class PreferencesStore: ObservableObject {
             fixturesViewDensity: fixturesViewDensity,
             showCompactFixtureTvLogo: showCompactFixtureTvLogo,
             showCompactFixtureStarRating: showCompactFixtureStarRating,
+            highlightEnglishEuropeanClubs: highlightEnglishEuropeanClubs,
             showCompactFixtureFantasyLogo: showCompactFixtureFantasyLogo,
             showKickoffTimeDividers: showKickoffTimeDividers,
             showFantasyFixtureLogos: showFantasyFixtureLogos,
@@ -1374,6 +1395,7 @@ final class PreferencesStore: ObservableObject {
         static let fixturesViewDensity = "preferences.fixturesViewDensity"
         static let showCompactFixtureTvLogo = "preferences.showCompactFixtureTvLogo"
         static let showCompactFixtureStarRating = "preferences.showCompactFixtureStarRating"
+        static let highlightEnglishEuropeanClubs = "preferences.highlightEnglishEuropeanClubs"
         static let showCompactFixtureFantasyLogo = "preferences.showCompactFixtureFantasyLogo"
         static let showKickoffTimeDividers = "preferences.showKickoffTimeDividers"
         static let showFantasyFixtureLogos = "preferences.showFantasyFixtureLogos"

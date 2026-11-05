@@ -68,7 +68,7 @@ test("match view choices survive dates, routes, and a new visit while URLs can o
       React.createElement(Route, { path: "/", element: React.createElement(MatchesScreen) }),
       React.createElement(Route, { path: "/tables", element: React.createElement("div", null, "Tables") }));
   }
-  const toggle = () => renderer.root.findAllByType("input").find(node => node.props.type === "checkbox");
+  const toggle = () => renderer.root.findAllByType("label").find(node => node.children.includes("Show details"))?.findByType("input");
   const scopeButton = name => renderer.root.findAllByType("button").find(node => node.props["aria-pressed"] !== undefined && node.findAllByType("span").some(span => span.children.includes(name)));
   try {
     await act(async () => {
@@ -83,7 +83,7 @@ test("match view choices survive dates, routes, and a new visit while URLs can o
     await act(async () => { scopeButton("Top teams").props.onClick(); });
     assert.equal(scopeButton("Top teams").props["aria-pressed"], true);
     assert.match(location.search, /scope=top/);
-    assert.deepEqual(JSON.parse(stored.get("top-scores.match-view.v1")), { scope: "top", showDetails: true, showStats: true });
+    assert.deepEqual(JSON.parse(stored.get("top-scores.match-view.v1")), { scope: "top", showDetails: true, showStats: true, highlightEnglishEuropean: true });
 
     await act(async () => { navigate("/?date=2026-10-26&scope=top&details=1"); });
     assert.equal(toggle(), undefined);
@@ -110,7 +110,93 @@ test("match view choices survive dates, routes, and a new visit while URLs can o
     await act(async () => { navigate("/?date=2026-10-25&scope=epl&details=0"); });
     assert.equal(toggle()?.props.checked, false);
     assert.equal(scopeButton("Premier League teams").props["aria-pressed"], true);
-    assert.deepEqual(JSON.parse(stored.get("top-scores.match-view.v1")), { scope: "epl", showDetails: false, showStats: true });
+    assert.deepEqual(JSON.parse(stored.get("top-scores.match-view.v1")), { scope: "epl", showDetails: false, showStats: true, highlightEnglishEuropean: true });
+  } finally {
+    if (renderer) await act(async () => { renderer.unmount(); });
+    globalThis.fetch = originalFetch;
+  }
+});
+
+
+test("English clubs in European competitions are highlighted until the URL toggle turns it off", async t => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-04T12:00:00Z") });
+  stored.clear();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async url => {
+    const parsed = new URL(String(url), "https://example.test");
+    if (parsed.pathname.endsWith("/teams/catalog")) {
+      assert.equal(parsed.searchParams.get("competition_id"), "premier-league");
+      return new Response(JSON.stringify({ teams: [{ name: "Arsenal", aliases: ["Arsenal FC"], source_team_ids: ["1"] }] }));
+    }
+    const fixture = (id, league, home, away) => ({ match_details_id: id, date: "2026-11-04", time: "20:00", league, score_status: "NS", home_team: home, away_team: away, tv_channels: [] });
+    return new Response(JSON.stringify([
+      fixture("ucl", "UEFA Champions League", "Bayern Munich", "Arsenal"),
+      fixture("ucl-other", "UEFA Champions League", "Inter", "Barcelona"),
+      fixture("epl", "Premier League", "Arsenal", "Chelsea"),
+    ]));
+  };
+  let renderer, location;
+  function Harness() {
+    location = useLocation();
+    return React.createElement(MatchesScreen);
+  }
+  const highlightToggle = () => renderer.root.findAllByType("label").find(node => node.children.includes("Highlight English clubs in Europe")).findByType("input");
+  const highlighted = () => renderer.root.findAll(node => typeof node.props.className === "string" && node.props.className.includes("is-highlighted"), { deep: false })
+    .map(node => node.props.className);
+  try {
+    await act(async () => {
+      renderer = create(React.createElement(MemoryRouter, { initialEntries: ["/?date=2026-11-04"] }, React.createElement(Harness)));
+    });
+    await act(async () => {});
+    assert.equal(highlightToggle().props.checked, true);
+    assert.match(location.search, /highlight=1/);
+    assert.equal(highlighted().length, 1);
+
+    await act(async () => { highlightToggle().props.onChange({ target: { checked: false } }); });
+    assert.equal(highlightToggle().props.checked, false);
+    assert.match(location.search, /highlight=0/);
+    assert.equal(highlighted().length, 0);
+    assert.equal(JSON.parse(stored.get("top-scores.match-view.v1")).highlightEnglishEuropean, false);
+
+    await act(async () => { highlightToggle().props.onChange({ target: { checked: true } }); });
+    assert.equal(highlighted().length, 1);
+  } finally {
+    if (renderer) await act(async () => { renderer.unmount(); });
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("the English clubs highlight is offered only when it separates some rows from others", async t => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-04T12:00:00Z") });
+  const originalFetch = globalThis.fetch;
+  const fixture = (date, league, home, away) => ({ match_details_id: `${date}-${home}`, date, time: "20:00", league, score_status: "NS", home_team: home, away_team: away, tv_channels: [] });
+  // Each case has its own date because the day cache outlives a frozen clock.
+  const cases = [
+    ["2026-11-10", "all English league", [["Premier League", "Arsenal", "Chelsea"]], false],
+    ["2026-11-11", "no English clubs", [["UEFA Champions League", "Inter", "Barcelona"]], false],
+    ["2026-11-12", "only English clubs in Europe", [["UEFA Champions League", "Bayern Munich", "Arsenal"]], false],
+    ["2026-11-13", "mixed", [["UEFA Champions League", "Bayern Munich", "Arsenal"], ["UEFA Champions League", "Inter", "Barcelona"]], true],
+  ];
+  let renderer;
+  globalThis.fetch = async url => {
+    const parsed = new URL(String(url), "https://example.test");
+    if (parsed.pathname.endsWith("/teams/catalog")) return new Response(JSON.stringify({ teams: [{ name: "Arsenal", aliases: [], source_team_ids: ["1"] }, { name: "Chelsea", aliases: [], source_team_ids: ["2"] }] }));
+    const date = parsed.searchParams.get("start");
+    return new Response(JSON.stringify((cases.find(item => item[0] === date)?.[2] || []).map(row => fixture(date, ...row))));
+  };
+  try {
+    for (const [date, name, , shown] of cases) {
+      await act(async () => {
+        renderer = create(React.createElement(MemoryRouter, { initialEntries: [`/?date=${date}&scope=all`] }, React.createElement(MatchesScreen)));
+      });
+      await act(async () => {});
+      const label = renderer.root.findAllByType("label").find(node => node.children.includes("Highlight English clubs in Europe"));
+      assert.equal(Boolean(label), shown, name);
+      const rowsHighlighted = renderer.root.findAll(node => typeof node.props.className === "string" && node.props.className.includes("is-highlighted"), { deep: false });
+      assert.equal(rowsHighlighted.length, shown ? 1 : 0, name);
+      await act(async () => { renderer.unmount(); });
+      renderer = null;
+    }
   } finally {
     if (renderer) await act(async () => { renderer.unmount(); });
     globalThis.fetch = originalFetch;

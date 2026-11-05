@@ -44,7 +44,7 @@
     "53": {"name":"Espanyol","asset_name":"Espanyol"},
     "54": {"name":"Atlético Madrid","canonical_name":"Atletico Madrid","asset_name":"Atlético Madrid"},
     "55": {"name":"Elche","asset_name":"Elche"},
-    "56": {"name":"Real Betis","canonical_name":"Betis C.F.","asset_name":"Betis"},
+    "56": {"name":"Real Betis","asset_name":"Betis"},
     "57": {"name":"Real Madrid","asset_name":"Real Madrid"},
     "58": {"name":"Osasuna","asset_name":"Osasuna"},
     "59": {"name":"Genoa","asset_name":"Genoa"},

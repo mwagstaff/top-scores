@@ -271,6 +271,23 @@ nonisolated struct PremierLeagueTeamMatcher: Equatable, Sendable {
             matches(teamName: match.awayTeam, sourceTeamID: match.awayTeamId)
     }
 
+    /// English clubs in UEFA club competitions are Premier League clubs, so this
+    /// catalogue identifies them for the Scores row highlight.
+    func isEnglishClubInEurope(_ match: Match) -> Bool {
+        Self.uefaClubCompetitionKeys.contains(Self.competitionKey(match.league)) && matches(match)
+    }
+
+    private static let uefaClubCompetitionKeys: Set<String> = [
+        "uefachampionsleague", "championsleague", "uefaeuropaleague", "europaleague",
+        "uefaconferenceleague", "uefaeuropaconferenceleague", "conferenceleague", "uefasupercup",
+    ]
+
+    private static func competitionKey(_ league: String) -> String {
+        league.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: nil)
+            .lowercased()
+            .filter { $0.isLetter || $0.isNumber }
+    }
+
     private func matches(teamName: String, sourceTeamID: String?) -> Bool {
         if let sourceTeamID, sourceTeamIDs.contains(sourceTeamID) {
             return true

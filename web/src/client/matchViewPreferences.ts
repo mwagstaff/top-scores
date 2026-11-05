@@ -5,10 +5,11 @@ export type MatchViewPreferences = {
   scope: MatchScope;
   showDetails: boolean;
   showStats: boolean;
+  highlightEnglishEuropean: boolean;
 };
 
 const storageKey = "top-scores.match-view.v1";
-const defaults: MatchViewPreferences = { scope: "all", showDetails: false, showStats: true };
+const defaults: MatchViewPreferences = { scope: "all", showDetails: false, showStats: true, highlightEnglishEuropean: true };
 let cachedRaw: string | null | undefined;
 let cached: MatchViewPreferences = defaults;
 let storageUnavailable = false;
@@ -22,6 +23,7 @@ function parse(raw: string | null): MatchViewPreferences {
       scope: value.scope === "top" || value.scope === "epl" ? value.scope : "all",
       showDetails: value.showDetails === true,
       showStats: value.showStats !== false,
+      highlightEnglishEuropean: value.highlightEnglishEuropean !== false,
     };
   } catch {
     return defaults;

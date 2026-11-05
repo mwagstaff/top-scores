@@ -1396,6 +1396,12 @@ button:disabled {
   gap: 12px;
   padding: 20px 14px;
 }
+.fixture-row.is-highlighted {
+  background: #2aa8ff1c;
+}
+.fixture-row.is-highlighted:hover {
+  background: #2aa8ff28;
+}
 /* Cover the row with its match link; only names and controls sit above it. */
 .fixture-details-link {
   position: absolute;

@@ -250,6 +250,12 @@ struct PreferencesView: View {
                             .font(.footnote)
                             .foregroundStyle(.secondary)
 
+                        Toggle("Highlight English clubs in Europe", isOn: $preferences.highlightEnglishEuropeanClubs)
+                            .accessibilityIdentifier("highlightEnglishEuropeanClubs")
+                        Text("Highlights Champions League, Europa League and Conference League matches involving English clubs on Scores.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+
                         Toggle("Fantasy Premier League indicator", isOn: showCompactFixtureFantasyLogoBinding)
                         Text("Shows a purple chevron on fixture rows when your squad has one or more players involved in the match.")
                             .font(.footnote)

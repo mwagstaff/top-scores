@@ -24,6 +24,7 @@ import { defaultPreferences, type Match, type MatchesMode } from "../types";
 import { useInitialSeed } from "../bootstrap";
 import { normalizeMatch } from "../api";
 import { fetchTeamRankings } from "../api";
+import { isEuropeanClubCompetition, useEnglishEuropeanMatcher } from "../englishClubs";
 import { readMatchViewPreferences, saveMatchViewPreferences, useMatchViewPreferences, type MatchScope } from "../matchViewPreferences";
 
 export function MatchesScreen({
@@ -108,9 +109,11 @@ export function MatchesScreen({
   const detailsAvailable = !tv && date <= today;
   const requestedDetails = params.get("details");
   const showDetails = detailsAvailable && (requestedDetails === "1" || (requestedDetails !== "0" && savedView.showDetails));
+  const requestedHighlight = params.get("highlight");
+  const highlightEnglish = requestedHighlight === "1" || (requestedHighlight !== "0" && savedView.highlightEnglishEuropean);
   useEffect(() => {
     const storedView = readMatchViewPreferences();
-    const changes: { scope?: MatchScope; showDetails?: boolean } = {};
+    const changes: { scope?: MatchScope; showDetails?: boolean; highlightEnglishEuropean?: boolean } = {};
     const next = new URLSearchParams(params);
     if (requestedScope === "all" || requestedScope === "top" || requestedScope === "epl") {
       if (storedView.scope !== requestedScope) changes.scope = requestedScope;
@@ -119,9 +122,12 @@ export function MatchesScreen({
     else if (requestedDetails === "1" || requestedDetails === "0") {
       if (storedView.showDetails !== (requestedDetails === "1")) changes.showDetails = requestedDetails === "1";
     } else next.set("details", storedView.showDetails ? "1" : "0");
+    if (requestedHighlight === "1" || requestedHighlight === "0") {
+      if (storedView.highlightEnglishEuropean !== (requestedHighlight === "1")) changes.highlightEnglishEuropean = requestedHighlight === "1";
+    } else next.set("highlight", storedView.highlightEnglishEuropean ? "1" : "0");
     if (Object.keys(changes).length) saveMatchViewPreferences(changes);
     if (next.toString() !== params.toString()) setParams(next, { replace: true });
-  }, [params, requestedScope, requestedDetails, savedView, detailsAvailable, setParams]);
+  }, [params, requestedScope, requestedDetails, requestedHighlight, savedView, detailsAvailable, setParams]);
   const payload = data.key === key ? data.value : cachedDay(date, dayScope);
   useEffect(() => {
     if (!preferences.matchGroupSortOrder.toLowerCase().includes("teamscore"))
@@ -275,6 +281,14 @@ export function MatchesScreen({
       }),
     [relevant, filter, query],
   );
+  const isEnglishEuropean = useEnglishEuropeanMatcher(useMemo(() => relevant.some(match => isEuropeanClubCompetition(match.league)), [relevant]));
+  // Ignores the search box so the toggle stays put while typing.
+  const highlightAvailable = useMemo(() => {
+    if (!isEnglishEuropean) return false;
+    const listed = filter === "tv" ? relevant.filter(match => ukChannels(match.tvChannels).length) : relevant;
+    const highlightedCount = listed.filter(isEnglishEuropean).length;
+    return highlightedCount > 0 && highlightedCount < listed.length;
+  }, [relevant, filter, isEnglishEuropean]);
   const [allCompetitionCount, setAllCompetitionCount] = useState<{ key: string; count: number } | null>(null);
   const emptyCountKey = `${date}:${mode}:${tv}`;
   useEffect(() => {
@@ -487,6 +501,7 @@ export function MatchesScreen({
                 {[["all", "All competitions"], ["top", "Top teams"], ["epl", "Premier League teams"]].map(([value, label]) => <button key={value} aria-pressed={scope === value} onClick={() => change({ scope: value, comps: "" })}>{value === 'top' && <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M7 3h10v5a5 5 0 0 1-10 0V3Zm0 2H3v3a4 4 0 0 0 5 4m9-7h4v3a4 4 0 0 1-5 4M12 13v6m-5 2h10m-8-2h6" /></svg>}{value === 'epl' && <img src="/competition-logos/FantasyPremierLeagueLion.webp" width="22" height="22" alt="" />}<span>{label}</span></button>)}
               </div>
             )}
+            {highlightAvailable && <label className="match-details-toggle"><input type="checkbox" checked={highlightEnglish} onChange={event => change({ highlight: event.target.checked ? "1" : "0" })} />Highlight English clubs in Europe</label>}
             {detailsAvailable && <label className="match-details-toggle"><input type="checkbox" checked={showDetails} onChange={event => change({ details: event.target.checked ? "1" : "0" })} />Show details</label>}
           </div>
           <div className="fixture-date-heading">
@@ -550,6 +565,7 @@ export function MatchesScreen({
                       showRating={tv}
                       compactTV={mode === "fixtures" && !tv}
                       showDetails={showDetails}
+                      highlighted={highlightAvailable && highlightEnglish && isEnglishEuropean?.(match)}
                     />
                   ))}
                 </section>

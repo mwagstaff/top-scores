@@ -54,12 +54,14 @@ export const FixtureRow = memo(function FixtureRow({
   showRating = false,
   compactTV = false,
   showDetails = false,
+  highlighted = false,
 }: {
   match: Match;
   showBroadcast?: boolean;
   showRating?: boolean;
   compactTV?: boolean;
   showDetails?: boolean;
+  highlighted?: boolean;
 }) {
   const live = isMatchLive(match);
   const abandoned = isMatchAbandoned(match);
@@ -115,7 +117,7 @@ export const FixtureRow = memo(function FixtureRow({
     if (!showDetails) setDetailsError(false);
   }, [showDetails]);
   return (
-    <div className={`fixture-row app-fixture${live ? " is-live" : ""}${abandoned ? " is-abandoned" : ""}`}>
+    <div className={`fixture-row app-fixture${live ? " is-live" : ""}${abandoned ? " is-abandoned" : ""}${highlighted ? " is-highlighted" : ""}`}>
       <Link to={matchPath(match)} state={{ match }} className="fixture-details-link" aria-label={`Match details: ${match.homeTeam} v ${match.awayTeam}`} />
       <div className="fixture-match-line">
         <TeamCrest name={match.homeTeam} shortName={match.homeShortName} />
