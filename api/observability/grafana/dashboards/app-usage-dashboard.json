@@ -46,7 +46,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max(top_scores_audience_active_installations{build_type=\"$build\",job=\"top-scores\",window=\"today\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "expr": "max(top_scores_audience_active_installations{build_type=\"$build\",job=~\"app-top-scores(|-.*)\",window=\"today\"} and on(job,instance) (top_scores_audience_ready{job=~\"app-top-scores(|-.*)\"} == 1))",
           "legendFormat": "__auto",
           "instant": true,
           "range": false
@@ -89,7 +89,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max(top_scores_audience_active_installations{build_type=\"$build\",job=\"top-scores\",window=\"7d\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "expr": "max(top_scores_audience_active_installations{build_type=\"$build\",job=~\"app-top-scores(|-.*)\",window=\"7d\"} and on(job,instance) (top_scores_audience_ready{job=~\"app-top-scores(|-.*)\"} == 1))",
           "legendFormat": "__auto",
           "instant": true,
           "range": false
@@ -132,7 +132,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max(top_scores_audience_active_installations{build_type=\"$build\",job=\"top-scores\",window=\"30d\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "expr": "max(top_scores_audience_active_installations{build_type=\"$build\",job=~\"app-top-scores(|-.*)\",window=\"30d\"} and on(job,instance) (top_scores_audience_ready{job=~\"app-top-scores(|-.*)\"} == 1))",
           "legendFormat": "__auto",
           "instant": true,
           "range": false
@@ -175,7 +175,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max(top_scores_audience_ready{job=\"top-scores\"})",
+          "expr": "max(top_scores_audience_ready{job=~\"app-top-scores(|-.*)\"})",
           "legendFormat": "__auto",
           "instant": true,
           "range": false
@@ -218,7 +218,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (window)(top_scores_audience_active_installations{build_type=\"$build\",job=\"top-scores\",window=~\"7d|30d\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "expr": "max by (window)(top_scores_audience_active_installations{build_type=\"$build\",job=~\"app-top-scores(|-.*)\",window=~\"7d|30d\"} and on(job,instance) (top_scores_audience_ready{job=~\"app-top-scores(|-.*)\"} == 1))",
           "legendFormat": "{{window}}",
           "instant": false,
           "range": true
@@ -258,7 +258,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max(top_scores_audience_active_installations{build_type=\"$build\",job=\"top-scores\",window=\"yesterday\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "expr": "max(top_scores_audience_active_installations{build_type=\"$build\",job=~\"app-top-scores(|-.*)\",window=\"yesterday\"} and on(job,instance) (top_scores_audience_ready{job=~\"app-top-scores(|-.*)\"} == 1))",
           "legendFormat": "Previous day",
           "instant": false,
           "range": true
@@ -298,7 +298,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max(top_scores_audience_events{build_type=\"$build\",job=\"top-scores\",window=\"$window\",event=\"app_open\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "expr": "max(top_scores_audience_events{build_type=\"$build\",job=~\"app-top-scores(|-.*)\",window=\"$window\",event=\"app_open\"} and on(job,instance) (top_scores_audience_ready{job=~\"app-top-scores(|-.*)\"} == 1))",
           "legendFormat": "__auto",
           "instant": true,
           "range": false
@@ -341,7 +341,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max(top_scores_audience_events{build_type=\"$build\",job=\"top-scores\",window=\"$window\",event=\"app_open\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1)) / clamp_min(max(top_scores_audience_active_installations{build_type=\"$build\",job=\"top-scores\",window=\"$window\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1)), 1)",
+          "expr": "max(top_scores_audience_events{build_type=\"$build\",job=~\"app-top-scores(|-.*)\",window=\"$window\",event=\"app_open\"} and on(job,instance) (top_scores_audience_ready{job=~\"app-top-scores(|-.*)\"} == 1)) / clamp_min(max(top_scores_audience_active_installations{build_type=\"$build\",job=~\"app-top-scores(|-.*)\",window=\"$window\"} and on(job,instance) (top_scores_audience_ready{job=~\"app-top-scores(|-.*)\"} == 1)), 1)",
           "legendFormat": "__auto",
           "instant": true,
           "range": false
@@ -384,7 +384,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "(max(top_scores_audience_active_installations{build_type=\"$build\",job=\"top-scores\",window=\"7d\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1)) / clamp_min(max(top_scores_audience_active_installations{build_type=\"$build\",job=\"top-scores\",window=\"7d\"} offset 7d), 1) - 1) * 100",
+          "expr": "(max(top_scores_audience_active_installations{build_type=\"$build\",job=~\"app-top-scores(|-.*)\",window=\"7d\"} and on(job,instance) (top_scores_audience_ready{job=~\"app-top-scores(|-.*)\"} == 1)) / clamp_min(max(top_scores_audience_active_installations{build_type=\"$build\",job=~\"app-top-scores(|-.*)\",window=\"7d\"} offset 7d), 1) - 1) * 100",
           "legendFormat": "__auto",
           "instant": true,
           "range": false
@@ -426,7 +426,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "time() - max(top_scores_audience_snapshot_timestamp_seconds{job=\"top-scores\"} > 0)",
+          "expr": "time() - max(top_scores_audience_snapshot_timestamp_seconds{job=~\"app-top-scores(|-.*)\"} > 0)",
           "legendFormat": "__auto",
           "instant": true,
           "range": false
@@ -469,7 +469,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (screen)(top_scores_audience_feature_installations{build_type=\"$build\",job=\"top-scores\",window=\"$window\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "expr": "max by (screen)(top_scores_audience_feature_installations{build_type=\"$build\",job=~\"app-top-scores(|-.*)\",window=\"$window\"} and on(job,instance) (top_scores_audience_ready{job=~\"app-top-scores(|-.*)\"} == 1))",
           "legendFormat": "{{screen}}",
           "instant": true,
           "range": false
@@ -511,7 +511,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (screen)(top_scores_audience_feature_visits{build_type=\"$build\",job=\"top-scores\",window=\"$window\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "expr": "max by (screen)(top_scores_audience_feature_visits{build_type=\"$build\",job=~\"app-top-scores(|-.*)\",window=\"$window\"} and on(job,instance) (top_scores_audience_ready{job=~\"app-top-scores(|-.*)\"} == 1))",
           "legendFormat": "{{screen}}",
           "instant": true,
           "range": false
@@ -553,7 +553,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (event)(top_scores_audience_events{build_type=\"$build\",job=\"top-scores\",window=\"$window\",event!~\"app_open|screen_view|match_details_loaded\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "expr": "max by (event)(top_scores_audience_events{build_type=\"$build\",job=~\"app-top-scores(|-.*)\",window=\"$window\",event!~\"app_open|screen_view|match_details_loaded\"} and on(job,instance) (top_scores_audience_ready{job=~\"app-top-scores(|-.*)\"} == 1))",
           "legendFormat": "{{event}}",
           "instant": true,
           "range": false
@@ -595,7 +595,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (screen) (rate(top_scores_audience_events_total{build_type=\"$build\",job=\"top-scores\",event=\"screen_view\"}[$__rate_interval])) * 60",
+          "expr": "sum by (screen) (rate(top_scores_audience_events_total{build_type=\"$build\",job=~\"app-top-scores(|-.*)\",event=\"screen_view\"}[$__rate_interval])) * 60",
           "legendFormat": "{{screen}}",
           "instant": false,
           "range": true
@@ -635,7 +635,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (hour) (max by (weekday,hour)(top_scores_audience_sessions_by_hour{build_type=\"$build\",job=\"top-scores\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1)))",
+          "expr": "sum by (hour) (max by (weekday,hour)(top_scores_audience_sessions_by_hour{build_type=\"$build\",job=~\"app-top-scores(|-.*)\"} and on(job,instance) (top_scores_audience_ready{job=~\"app-top-scores(|-.*)\"} == 1)))",
           "legendFormat": "{{hour}}:00",
           "instant": true,
           "range": false
@@ -677,7 +677,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (weekday) (max by (weekday,hour)(top_scores_audience_sessions_by_hour{build_type=\"$build\",job=\"top-scores\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1)))",
+          "expr": "sum by (weekday) (max by (weekday,hour)(top_scores_audience_sessions_by_hour{build_type=\"$build\",job=~\"app-top-scores(|-.*)\"} and on(job,instance) (top_scores_audience_ready{job=~\"app-top-scores(|-.*)\"} == 1)))",
           "legendFormat": "Day {{weekday}}",
           "instant": true,
           "range": false
@@ -719,7 +719,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (value)(top_scores_audience_installations_by_dimension{build_type=\"$build\",job=\"top-scores\",window=\"$window\",dimension=\"app_version\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "expr": "max by (value)(top_scores_audience_installations_by_dimension{build_type=\"$build\",job=~\"app-top-scores(|-.*)\",window=\"$window\",dimension=\"app_version\"} and on(job,instance) (top_scores_audience_ready{job=~\"app-top-scores(|-.*)\"} == 1))",
           "legendFormat": "{{value}}",
           "instant": true,
           "range": false
@@ -761,7 +761,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (value)(top_scores_audience_installations_by_dimension{build_type=\"$build\",job=\"top-scores\",window=\"$window\",dimension=\"device_type\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "expr": "max by (value)(top_scores_audience_installations_by_dimension{build_type=\"$build\",job=~\"app-top-scores(|-.*)\",window=\"$window\",dimension=\"device_type\"} and on(job,instance) (top_scores_audience_ready{job=~\"app-top-scores(|-.*)\"} == 1))",
           "legendFormat": "{{value}}",
           "instant": true,
           "range": false
@@ -803,7 +803,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (value)(top_scores_audience_installations_by_dimension{build_type=\"$build\",job=\"top-scores\",window=\"$window\",dimension=\"os_major\"} and on(job,instance) (top_scores_audience_ready{job=\"top-scores\"} == 1))",
+          "expr": "max by (value)(top_scores_audience_installations_by_dimension{build_type=\"$build\",job=~\"app-top-scores(|-.*)\",window=\"$window\",dimension=\"os_major\"} and on(job,instance) (top_scores_audience_ready{job=~\"app-top-scores(|-.*)\"} == 1))",
           "legendFormat": "{{value}}",
           "instant": true,
           "range": false
@@ -845,7 +845,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (surface,state) (rate(top_scores_audience_request_duration_seconds_count{job=\"top-scores\",build_type=\"$build\"}[$__rate_interval])) * 60",
+          "expr": "sum by (surface,state) (rate(top_scores_audience_request_duration_seconds_count{job=~\"app-top-scores(|-.*)\",build_type=\"$build\"}[$__rate_interval])) * 60",
           "legendFormat": "{{surface}} \u00b7 {{state}}",
           "instant": false,
           "range": true
@@ -885,7 +885,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sort_desc(sum by (route) (increase(top_scores_audience_request_duration_seconds_count{job=\"top-scores\",build_type=\"$build\"}[$__range])))",
+          "expr": "sort_desc(sum by (route) (increase(top_scores_audience_request_duration_seconds_count{job=~\"app-top-scores(|-.*)\",build_type=\"$build\"}[$__range])))",
           "legendFormat": "{{route}}",
           "instant": true,
           "range": false
@@ -927,7 +927,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "100 * sum(rate(top_scores_audience_request_duration_seconds_count{job=\"top-scores\",build_type=\"$build\",status=~\"4xx|5xx\"}[$__rate_interval])) / clamp_min(sum(rate(top_scores_audience_request_duration_seconds_count{job=\"top-scores\",build_type=\"$build\"}[$__rate_interval])), 0.000001)",
+          "expr": "100 * sum(rate(top_scores_audience_request_duration_seconds_count{job=~\"app-top-scores(|-.*)\",build_type=\"$build\",status=~\"4xx|5xx\"}[$__rate_interval])) / clamp_min(sum(rate(top_scores_audience_request_duration_seconds_count{job=~\"app-top-scores(|-.*)\",build_type=\"$build\"}[$__rate_interval])), 0.000001)",
           "legendFormat": "Errors",
           "instant": false,
           "range": true
@@ -967,7 +967,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (route,le) (rate(top_scores_audience_request_duration_seconds_bucket{job=\"top-scores\",build_type=\"$build\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (route,le) (rate(top_scores_audience_request_duration_seconds_bucket{job=~\"app-top-scores(|-.*)\",build_type=\"$build\"}[$__rate_interval])))",
           "legendFormat": "{{route}}",
           "instant": false,
           "range": true
@@ -1007,14 +1007,14 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.95, sum by (screen,le) (rate(top_scores_audience_event_duration_seconds_bucket{build_type=\"$build\",job=\"top-scores\",event=~\"screen_view|match_details_loaded\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (screen,le) (rate(top_scores_audience_event_duration_seconds_bucket{build_type=\"$build\",job=~\"app-top-scores(|-.*)\",event=~\"screen_view|match_details_loaded\"}[$__rate_interval])))",
           "legendFormat": "{{screen}} p95",
           "instant": false,
           "range": true
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.50, sum by (screen,le) (rate(top_scores_audience_event_duration_seconds_bucket{build_type=\"$build\",job=\"top-scores\",event=~\"screen_view|match_details_loaded\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.50, sum by (screen,le) (rate(top_scores_audience_event_duration_seconds_bucket{build_type=\"$build\",job=~\"app-top-scores(|-.*)\",event=~\"screen_view|match_details_loaded\"}[$__rate_interval])))",
           "legendFormat": "{{screen}} p50"
         }
       ],
@@ -1052,7 +1052,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (result) (increase(top_scores_audience_deliveries_total{job=\"top-scores\"}[$__range]))",
+          "expr": "sum by (result) (increase(top_scores_audience_deliveries_total{job=~\"app-top-scores(|-.*)\"}[$__range]))",
           "legendFormat": "{{result}}",
           "instant": true,
           "range": false
@@ -1094,7 +1094,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (surface,build_type) (rate(top_scores_audience_request_duration_seconds_count{job=\"top-scores\",build_type=\"unknown\"}[$__rate_interval])) * 60",
+          "expr": "sum by (surface,build_type) (rate(top_scores_audience_request_duration_seconds_count{job=~\"app-top-scores(|-.*)\",build_type=\"unknown\"}[$__rate_interval])) * 60",
           "legendFormat": "{{surface}} / {{build_type}}",
           "instant": false,
           "range": true
@@ -1134,7 +1134,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "100 * sum(rate(top_scores_audience_request_duration_seconds_count{job=\"top-scores\",surface=\"ios_app\",build_type=\"$build\",identified=\"yes\"}[$__rate_interval])) / clamp_min(sum(rate(top_scores_audience_request_duration_seconds_count{job=\"top-scores\",surface=\"ios_app\",build_type=\"$build\"}[$__rate_interval])), 0.000001)",
+          "expr": "100 * sum(rate(top_scores_audience_request_duration_seconds_count{job=~\"app-top-scores(|-.*)\",surface=\"ios_app\",build_type=\"$build\",identified=\"yes\"}[$__rate_interval])) / clamp_min(sum(rate(top_scores_audience_request_duration_seconds_count{job=~\"app-top-scores(|-.*)\",surface=\"ios_app\",build_type=\"$build\"}[$__rate_interval])), 0.000001)",
           "legendFormat": "Identified",
           "instant": false,
           "range": true

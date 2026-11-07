@@ -55,7 +55,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(increase(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\"}[30m]))",
+          "expr": "sum(increase(top_scores_bsd_http_requests_total{job=~\"app-top-scores(|-.*)\",source=~\"bsd_.*\"}[30m]))",
           "legendFormat": "BSD API calls",
           "instant": false,
           "range": true,
@@ -151,7 +151,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\",status_code=~\"^[1-3][0-9][0-9]$\"}[$__rate_interval]))",
+          "expr": "sum(rate(top_scores_bsd_http_requests_total{job=~\"app-top-scores(|-.*)\",source=~\"bsd_.*\",status_code=~\"^[1-3][0-9][0-9]$\"}[$__rate_interval]))",
           "legendFormat": "good req/sec"
         }
       ]
@@ -184,7 +184,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\",status_code=~\"^(0|[4-5][0-9][0-9])$\"}[$__rate_interval]))",
+          "expr": "sum(rate(top_scores_bsd_http_requests_total{job=~\"app-top-scores(|-.*)\",source=~\"bsd_.*\",status_code=~\"^(0|[4-5][0-9][0-9])$\"}[$__rate_interval]))",
           "legendFormat": "bad req/sec"
         }
       ]
@@ -217,7 +217,7 @@
       },
       "targets": [
         {
-          "expr": "100 * sum(rate(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\",status_code=~\"^(0|[4-5][0-9][0-9])$\"}[$__rate_interval])) / clamp_min(sum(rate(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\"}[$__rate_interval])), 1e-9)",
+          "expr": "100 * sum(rate(top_scores_bsd_http_requests_total{job=~\"app-top-scores(|-.*)\",source=~\"bsd_.*\",status_code=~\"^(0|[4-5][0-9][0-9])$\"}[$__rate_interval])) / clamp_min(sum(rate(top_scores_bsd_http_requests_total{job=~\"app-top-scores(|-.*)\",source=~\"bsd_.*\"}[$__rate_interval])), 1e-9)",
           "legendFormat": "error %"
         }
       ]
@@ -250,7 +250,7 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(top_scores_bsd_http_request_duration_seconds_bucket{job=\"top-scores\",source=~\"bsd_.*\"}[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(top_scores_bsd_http_request_duration_seconds_bucket{job=~\"app-top-scores(|-.*)\",source=~\"bsd_.*\"}[$__rate_interval])) by (le))",
           "legendFormat": "p95"
         }
       ]
@@ -284,7 +284,7 @@
       },
       "targets": [
         {
-          "expr": "sum(top_scores_bsd_rate_limiter_queue_depth{job=\"top-scores\"}) + sum(top_scores_bsd_request_queue_depth{job=\"top-scores\"})",
+          "expr": "sum(top_scores_bsd_rate_limiter_queue_depth{job=~\"app-top-scores(|-.*)\"}) + sum(top_scores_bsd_request_queue_depth{job=~\"app-top-scores(|-.*)\"})",
           "legendFormat": "queued"
         }
       ]
@@ -318,7 +318,7 @@
       },
       "targets": [
         {
-          "expr": "time() - min(top_scores_bsd_poll_last_success_timestamp_seconds{job=\"top-scores\",poll=~\"live_events|incidents\"})",
+          "expr": "time() - min(top_scores_bsd_poll_last_success_timestamp_seconds{job=~\"app-top-scores(|-.*)\",poll=~\"live_events|incidents\"})",
           "legendFormat": "poll age"
         }
       ]
@@ -340,7 +340,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\",status_code=~\"^[1-3][0-9][0-9]$\"}[$__rate_interval])) by (source)",
+          "expr": "sum(rate(top_scores_bsd_http_requests_total{job=~\"app-top-scores(|-.*)\",source=~\"bsd_.*\",status_code=~\"^[1-3][0-9][0-9]$\"}[$__rate_interval])) by (source)",
           "legendFormat": "{{source}}"
         }
       ]
@@ -362,7 +362,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\",status_code=~\"^[1-3][0-9][0-9]$\"}[$__rate_interval])) by (status_code)",
+          "expr": "sum(rate(top_scores_bsd_http_requests_total{job=~\"app-top-scores(|-.*)\",source=~\"bsd_.*\",status_code=~\"^[1-3][0-9][0-9]$\"}[$__rate_interval])) by (status_code)",
           "legendFormat": "{{status_code}}"
         }
       ]
@@ -384,7 +384,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\",status_code=~\"^(0|[4-5][0-9][0-9])$\"}[$__rate_interval])) by (source)",
+          "expr": "sum(rate(top_scores_bsd_http_requests_total{job=~\"app-top-scores(|-.*)\",source=~\"bsd_.*\",status_code=~\"^(0|[4-5][0-9][0-9])$\"}[$__rate_interval])) by (source)",
           "legendFormat": "{{source}}"
         }
       ]
@@ -406,7 +406,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\",status_code=~\"^(0|[4-5][0-9][0-9])$\"}[$__rate_interval])) by (status_code)",
+          "expr": "sum(rate(top_scores_bsd_http_requests_total{job=~\"app-top-scores(|-.*)\",source=~\"bsd_.*\",status_code=~\"^(0|[4-5][0-9][0-9])$\"}[$__rate_interval])) by (status_code)",
           "legendFormat": "{{status_code}}"
         }
       ]
@@ -436,7 +436,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(top_scores_bsd_http_timeouts_total{job=\"top-scores\",source=~\"bsd_.*\"}[$__rate_interval])) by (source)",
+          "expr": "sum(rate(top_scores_bsd_http_timeouts_total{job=~\"app-top-scores(|-.*)\",source=~\"bsd_.*\"}[$__rate_interval])) by (source)",
           "legendFormat": "{{source}}"
         }
       ],
@@ -467,7 +467,7 @@
       },
       "targets": [
         {
-          "expr": "100 * sum(rate(top_scores_bsd_http_timeouts_total{job=\"top-scores\",source=~\"bsd_.*\"}[$__rate_interval])) / clamp_min(sum(rate(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\"}[$__rate_interval])), 1e-9)",
+          "expr": "100 * sum(rate(top_scores_bsd_http_timeouts_total{job=~\"app-top-scores(|-.*)\",source=~\"bsd_.*\"}[$__rate_interval])) / clamp_min(sum(rate(top_scores_bsd_http_requests_total{job=~\"app-top-scores(|-.*)\",source=~\"bsd_.*\"}[$__rate_interval])), 1e-9)",
           "legendFormat": "timeout %"
         }
       ]
@@ -478,7 +478,7 @@
       "gridPos": { "x": 0, "y": 35, "w": 24, "h": 8 },
       "targets": [
         {
-          "expr": "sort_desc(top_scores_bsd_http_timeout_url_requests{job=\"top-scores\",source=~\"bsd_.*\"})",
+          "expr": "sort_desc(top_scores_bsd_http_timeout_url_requests{job=~\"app-top-scores(|-.*)\",source=~\"bsd_.*\"})",
           "instant": true,
           "format": "table"
         }
@@ -497,11 +497,97 @@
     },
     {
       "type": "table",
-      "title": "Top URLs by Query String and Status",
-      "gridPos": { "x": 0, "y": 43, "w": 24, "h": 10 },
+      "title": "Top Bad URLs by Query String and Status",
+      "gridPos": {
+        "x": 0,
+        "y": 43,
+        "w": 24,
+        "h": 10
+      },
       "targets": [
         {
-          "expr": "sort_desc(top_scores_bsd_http_top_url_requests{job=\"top-scores\",source=~\"bsd_.*\"})",
+          "refId": "A",
+          "expr": "sort_desc(sum by (url, source, status_code) (top_scores_bsd_http_bad_url_requests{job=~\"app-top-scores(|-.*)\",source=~\"bsd_.*\"}))",
+          "instant": true,
+          "format": "table"
+        },
+        {
+          "refId": "B",
+          "expr": "1000 * max by (url, source, status_code) (top_scores_bsd_http_bad_url_last_timestamp_seconds{job=~\"app-top-scores(|-.*)\",source=~\"bsd_.*\"})",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge",
+          "options": {}
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true,
+              "__name__": true,
+              "job": true,
+              "instance": true,
+              "Metric": true,
+              "metric": true
+            },
+            "indexByName": {
+              "url": 0,
+              "source": 1,
+              "status_code": 2,
+              "Value": 3,
+              "Value #A": 3,
+              "Value #B": 4
+            },
+            "renameByName": {
+              "url": "URL",
+              "source": "Source",
+              "status_code": "Status Code",
+              "Value": "Count",
+              "Value #A": "Count",
+              "Value #B": "Last seen (UTC)"
+            }
+          }
+        }
+      ],
+      "description": "HTTP 4xx/5xx and transport failures (status 0), ranked independently of successful requests. Counts cover the preceding six-hour process rolling window at the selected dashboard end time, not the selected range. Up to 100 bad URL/status rows per process; reset on process restart. Last seen is UTC. Includes 404s even though upstream alerts exclude them. No rows means no retained failures. Use Inspect \u2192 Data to download CSV evidence; URLs retain query strings.",
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Last seen (UTC)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Count",
+            "desc": true
+          }
+        ]
+      }
+    },
+    {
+      "type": "table",
+      "title": "Top URLs by Query String and Status",
+      "gridPos": { "x": 0, "y": 53, "w": 24, "h": 10 },
+      "targets": [
+        {
+          "expr": "sort_desc(top_scores_bsd_http_top_url_requests{job=~\"app-top-scores(|-.*)\",source=~\"bsd_.*\"})",
           "instant": true,
           "format": "table"
         }
@@ -521,7 +607,7 @@
     {
       "type": "timeseries",
       "title": "P95 Latency (All BSD Requests)",
-      "gridPos": { "x": 0, "y": 53, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 63, "w": 12, "h": 8 },
       "fieldConfig": {
         "defaults": {
           "unit": "s",
@@ -535,7 +621,7 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum(rate(top_scores_bsd_http_request_duration_seconds_bucket{job=\"top-scores\",source=~\"bsd_.*\"}[$__rate_interval])) by (source, le))",
+          "expr": "histogram_quantile(0.95, sum(rate(top_scores_bsd_http_request_duration_seconds_bucket{job=~\"app-top-scores(|-.*)\",source=~\"bsd_.*\"}[$__rate_interval])) by (source, le))",
           "legendFormat": "{{source}} p95"
         }
       ]
@@ -543,7 +629,7 @@
     {
       "type": "timeseries",
       "title": "Error Rate (% of BSD Requests)",
-      "gridPos": { "x": 12, "y": 53, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 63, "w": 12, "h": 8 },
       "fieldConfig": {
         "defaults": {
           "unit": "percent",
@@ -565,7 +651,7 @@
       },
       "targets": [
         {
-          "expr": "100 * sum(rate(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\",status_code=~\"^(0|[4-5][0-9][0-9])$\"}[$__rate_interval])) / clamp_min(sum(rate(top_scores_bsd_http_requests_total{job=\"top-scores\",source=~\"bsd_.*\"}[$__rate_interval])), 1e-9)",
+          "expr": "100 * sum(rate(top_scores_bsd_http_requests_total{job=~\"app-top-scores(|-.*)\",source=~\"bsd_.*\",status_code=~\"^(0|[4-5][0-9][0-9])$\"}[$__rate_interval])) / clamp_min(sum(rate(top_scores_bsd_http_requests_total{job=~\"app-top-scores(|-.*)\",source=~\"bsd_.*\"}[$__rate_interval])), 1e-9)",
           "legendFormat": "error %"
         }
       ]
@@ -573,7 +659,7 @@
     {
       "type": "table",
       "title": "Slow BSD URLs by p95 Latency",
-      "gridPos": { "x": 0, "y": 61, "w": 12, "h": 10 },
+      "gridPos": { "x": 0, "y": 71, "w": 12, "h": 10 },
       "fieldConfig": {
         "defaults": { "unit": "none" },
         "overrides": [
@@ -585,7 +671,7 @@
       },
       "targets": [
         {
-          "expr": "sort_desc(top_scores_bsd_http_slow_url_p95_seconds{job=\"top-scores\",source=~\"bsd_.*\"})",
+          "expr": "sort_desc(top_scores_bsd_http_slow_url_p95_seconds{job=~\"app-top-scores(|-.*)\",source=~\"bsd_.*\"})",
           "instant": true,
           "format": "table"
         }
@@ -604,7 +690,7 @@
     {
       "type": "table",
       "title": "Slow BSD URLs by Max Latency",
-      "gridPos": { "x": 12, "y": 61, "w": 12, "h": 10 },
+      "gridPos": { "x": 12, "y": 71, "w": 12, "h": 10 },
       "fieldConfig": {
         "defaults": { "unit": "none" },
         "overrides": [
@@ -621,13 +707,13 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sort_desc(top_scores_bsd_http_slow_url_max_seconds{job=\"top-scores\",source=~\"bsd_.*\"})",
+          "expr": "sort_desc(top_scores_bsd_http_slow_url_max_seconds{job=~\"app-top-scores(|-.*)\",source=~\"bsd_.*\"})",
           "instant": true,
           "format": "table"
         },
         {
           "refId": "B",
-          "expr": "1000 * top_scores_bsd_http_slow_url_max_timestamp_seconds{job=\"top-scores\",source=~\"bsd_.*\"}",
+          "expr": "1000 * top_scores_bsd_http_slow_url_max_timestamp_seconds{job=~\"app-top-scores(|-.*)\",source=~\"bsd_.*\"}",
           "instant": true,
           "format": "table"
         }

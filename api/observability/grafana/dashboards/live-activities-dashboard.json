@@ -43,7 +43,7 @@
       },
       "targets": [
         {
-          "expr": "top_scores_live_activity_active{job=\"top-scores\",build_type=\"production\"}",
+          "expr": "top_scores_live_activity_active{job=~\"app-top-scores(|-.*)\",build_type=\"production\"}",
           "legendFormat": "production"
         }
       ]
@@ -80,7 +80,7 @@
       },
       "targets": [
         {
-          "expr": "top_scores_live_activity_active{job=\"top-scores\",build_type=\"development\"}",
+          "expr": "top_scores_live_activity_active{job=~\"app-top-scores(|-.*)\",build_type=\"development\"}",
           "legendFormat": "development"
         }
       ]
@@ -99,7 +99,7 @@
       },
       "targets": [
         {
-          "expr": "sum(top_scores_live_activity_active{job=\"top-scores\"}) by (build_type)",
+          "expr": "sum(top_scores_live_activity_active{job=~\"app-top-scores(|-.*)\"}) by (build_type)",
           "legendFormat": "{{build_type}}"
         }
       ]
@@ -118,7 +118,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(top_scores_live_activity_starts_total{job=\"top-scores\"}[$__rate_interval])) by (build_type)",
+          "expr": "sum(rate(top_scores_live_activity_starts_total{job=~\"app-top-scores(|-.*)\"}[$__rate_interval])) by (build_type)",
           "legendFormat": "{{build_type}}"
         }
       ]
@@ -137,7 +137,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(top_scores_live_activity_ends_total{job=\"top-scores\"}[$__rate_interval])) by (reason)",
+          "expr": "sum(rate(top_scores_live_activity_ends_total{job=~\"app-top-scores(|-.*)\"}[$__rate_interval])) by (reason)",
           "legendFormat": "{{reason}}"
         }
       ]
@@ -156,7 +156,7 @@
       },
       "targets": [
         {
-          "expr": "sum(rate(top_scores_live_activity_pushes_total{job=\"top-scores\"}[$__rate_interval])) by (event, status)",
+          "expr": "sum(rate(top_scores_live_activity_pushes_total{job=~\"app-top-scores(|-.*)\"}[$__rate_interval])) by (event, status)",
           "legendFormat": "{{event}} / {{status}}"
         }
       ]
@@ -175,11 +175,11 @@
       },
       "targets": [
         {
-          "expr": "sum(top_scores_live_activity_starts_total{job=\"top-scores\"})",
+          "expr": "sum(top_scores_live_activity_starts_total{job=~\"app-top-scores(|-.*)\"})",
           "legendFormat": "Started"
         },
         {
-          "expr": "sum(top_scores_live_activity_ends_total{job=\"top-scores\"})",
+          "expr": "sum(top_scores_live_activity_ends_total{job=~\"app-top-scores(|-.*)\"})",
           "legendFormat": "Ended"
         }
       ]
@@ -199,15 +199,15 @@
       },
       "targets": [
         {
-          "expr": "max by (event) (top_scores_live_activity_payload_size_bytes_min{job=\"top-scores\",kind=\"archive_estimate\",event=~\"start|update\"})",
+          "expr": "max by (event) (top_scores_live_activity_payload_size_bytes_min{job=~\"app-top-scores(|-.*)\",kind=\"archive_estimate\",event=~\"start|update\"})",
           "legendFormat": "{{event}} min"
         },
         {
-          "expr": "max by (event) (top_scores_live_activity_payload_size_bytes_avg{job=\"top-scores\",kind=\"archive_estimate\",event=~\"start|update\"})",
+          "expr": "max by (event) (top_scores_live_activity_payload_size_bytes_avg{job=~\"app-top-scores(|-.*)\",kind=\"archive_estimate\",event=~\"start|update\"})",
           "legendFormat": "{{event}} avg"
         },
         {
-          "expr": "max by (event) (top_scores_live_activity_payload_size_bytes_max{job=\"top-scores\",kind=\"archive_estimate\",event=~\"start|update\"})",
+          "expr": "max by (event) (top_scores_live_activity_payload_size_bytes_max{job=~\"app-top-scores(|-.*)\",kind=\"archive_estimate\",event=~\"start|update\"})",
           "legendFormat": "{{event}} max"
         }
       ]

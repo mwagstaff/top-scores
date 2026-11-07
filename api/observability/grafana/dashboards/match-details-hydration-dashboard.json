@@ -38,7 +38,7 @@
       },
       "targets": [
         {
-          "expr": "top_scores_startup_backfill_candidates{job=\"top-scores\"}",
+          "expr": "top_scores_startup_backfill_candidates{job=~\"app-top-scores(|-.*)\"}",
           "legendFormat": "candidates"
         }
       ]
@@ -72,7 +72,7 @@
       },
       "targets": [
         {
-          "expr": "top_scores_startup_backfill_remaining{job=\"top-scores\"}",
+          "expr": "top_scores_startup_backfill_remaining{job=~\"app-top-scores(|-.*)\"}",
           "legendFormat": "remaining"
         }
       ]
@@ -105,7 +105,7 @@
       },
       "targets": [
         {
-          "expr": "top_scores_startup_backfill_succeeded_total{job=\"top-scores\"}",
+          "expr": "top_scores_startup_backfill_succeeded_total{job=~\"app-top-scores(|-.*)\"}",
           "legendFormat": "succeeded"
         }
       ]
@@ -139,7 +139,7 @@
       },
       "targets": [
         {
-          "expr": "top_scores_startup_backfill_failed_total{job=\"top-scores\"}",
+          "expr": "top_scores_startup_backfill_failed_total{job=~\"app-top-scores(|-.*)\"}",
           "legendFormat": "failed"
         }
       ]
@@ -172,7 +172,7 @@
       },
       "targets": [
         {
-          "expr": "top_scores_startup_backfill_running{job=\"top-scores\"}",
+          "expr": "top_scores_startup_backfill_running{job=~\"app-top-scores(|-.*)\"}",
           "legendFormat": "running"
         }
       ]
@@ -198,19 +198,19 @@
       },
       "targets": [
         {
-          "expr": "top_scores_startup_backfill_candidates{job=\"top-scores\"}",
+          "expr": "top_scores_startup_backfill_candidates{job=~\"app-top-scores(|-.*)\"}",
           "legendFormat": "candidates (total)"
         },
         {
-          "expr": "top_scores_startup_backfill_remaining{job=\"top-scores\"}",
+          "expr": "top_scores_startup_backfill_remaining{job=~\"app-top-scores(|-.*)\"}",
           "legendFormat": "remaining"
         },
         {
-          "expr": "top_scores_startup_backfill_succeeded_total{job=\"top-scores\"}",
+          "expr": "top_scores_startup_backfill_succeeded_total{job=~\"app-top-scores(|-.*)\"}",
           "legendFormat": "succeeded"
         },
         {
-          "expr": "top_scores_startup_backfill_failed_total{job=\"top-scores\"}",
+          "expr": "top_scores_startup_backfill_failed_total{job=~\"app-top-scores(|-.*)\"}",
           "legendFormat": "failed"
         }
       ]
@@ -243,7 +243,7 @@
       },
       "targets": [
         {
-          "expr": "top_scores_match_details_active_refresh_targets{job=\"top-scores\"}",
+          "expr": "top_scores_match_details_active_refresh_targets{job=~\"app-top-scores(|-.*)\"}",
           "legendFormat": "active targets"
         }
       ]
@@ -277,7 +277,7 @@
       },
       "targets": [
         {
-          "expr": "top_scores_match_details_backfill_tasks{job=\"top-scores\"}",
+          "expr": "top_scores_match_details_backfill_tasks{job=~\"app-top-scores(|-.*)\"}",
           "legendFormat": "backfill tasks"
         }
       ]
@@ -311,7 +311,7 @@
       },
       "targets": [
         {
-          "expr": "top_scores_match_details_warm_tasks{job=\"top-scores\"}",
+          "expr": "top_scores_match_details_warm_tasks{job=~\"app-top-scores(|-.*)\"}",
           "legendFormat": "warm tasks"
         }
       ]
@@ -337,15 +337,15 @@
       },
       "targets": [
         {
-          "expr": "top_scores_match_details_active_refresh_targets{job=\"top-scores\"}",
+          "expr": "top_scores_match_details_active_refresh_targets{job=~\"app-top-scores(|-.*)\"}",
           "legendFormat": "active refresh targets"
         },
         {
-          "expr": "top_scores_match_details_backfill_tasks{job=\"top-scores\"}",
+          "expr": "top_scores_match_details_backfill_tasks{job=~\"app-top-scores(|-.*)\"}",
           "legendFormat": "backfill tasks"
         },
         {
-          "expr": "top_scores_match_details_warm_tasks{job=\"top-scores\"}",
+          "expr": "top_scores_match_details_warm_tasks{job=~\"app-top-scores(|-.*)\"}",
           "legendFormat": "warm tasks"
         }
       ]
@@ -372,15 +372,15 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{job=\"top-scores\",route=\"/api/v1/matches/:matchId\"}[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket{job=~\"app-top-scores(|-.*)\",route=\"/api/v1/matches/:matchId\"}[$__rate_interval])) by (le))",
           "legendFormat": "p50"
         },
         {
-          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=\"top-scores\",route=\"/api/v1/matches/:matchId\"}[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{job=~\"app-top-scores(|-.*)\",route=\"/api/v1/matches/:matchId\"}[$__rate_interval])) by (le))",
           "legendFormat": "p95"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job=\"top-scores\",route=\"/api/v1/matches/:matchId\"}[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{job=~\"app-top-scores(|-.*)\",route=\"/api/v1/matches/:matchId\"}[$__rate_interval])) by (le))",
           "legendFormat": "p99"
         }
       ]

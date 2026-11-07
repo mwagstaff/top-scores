@@ -769,8 +769,10 @@ struct MatchRow: View {
             .fixedSize(horizontal: true, vertical: false)
     }
 
-    private var compactWatchabilityIndex: MatchWatchabilityIndex? {
-        showWatchabilityRating ? match.watchabilityIndex : nil
+    var compactWatchabilityIndex: MatchWatchabilityIndex? {
+        // Compact ratings accompany the broadcast row and share its lifecycle.
+        guard showWatchabilityRating, Self.shouldShowCompactBroadcastLogo(for: match) else { return nil }
+        return match.watchabilityIndex
     }
 
     @ViewBuilder

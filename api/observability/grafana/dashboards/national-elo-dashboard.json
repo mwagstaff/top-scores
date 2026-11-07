@@ -25,7 +25,7 @@
       },
       "targets": [
         {
-          "expr": "national_elo_last_success_duration_seconds{job=\"top-scores\"}",
+          "expr": "national_elo_last_success_duration_seconds{job=~\"app-top-scores(|-.*)\"}",
           "legendFormat": "success duration"
         }
       ]
@@ -54,7 +54,7 @@
       },
       "targets": [
         {
-          "expr": "national_elo_last_failure_duration_seconds{job=\"top-scores\"}",
+          "expr": "national_elo_last_failure_duration_seconds{job=~\"app-top-scores(|-.*)\"}",
           "legendFormat": "failure duration"
         }
       ]
@@ -79,7 +79,7 @@
       },
       "targets": [
         {
-          "expr": "time() - (max_over_time(national_elo_latest_data_timestamp_seconds{job=\"top-scores\"}[30m]) > 0)",
+          "expr": "time() - (max_over_time(national_elo_latest_data_timestamp_seconds{job=~\"app-top-scores(|-.*)\"}[30m]) > 0)",
           "legendFormat": "data age"
         }
       ]
@@ -107,7 +107,7 @@
       },
       "targets": [
         {
-          "expr": "max_over_time(national_elo_latest_pull_team_count{job=\"top-scores\"}[30m])",
+          "expr": "max_over_time(national_elo_latest_pull_team_count{job=~\"app-top-scores(|-.*)\"}[30m])",
           "legendFormat": "team count"
         }
       ]
@@ -135,7 +135,7 @@
       },
       "targets": [
         {
-          "expr": "max_over_time(national_elo_unmatched_team_count{job=\"top-scores\"}[30m])",
+          "expr": "max_over_time(national_elo_unmatched_team_count{job=~\"app-top-scores(|-.*)\"}[30m])",
           "legendFormat": "unmatched teams"
         }
       ]
@@ -151,7 +151,7 @@
       },
       "targets": [
         {
-          "expr": "sort_desc(national_elo_team_ranking_score{job=\"top-scores\"})",
+          "expr": "sort_desc(national_elo_team_ranking_score{job=~\"app-top-scores(|-.*)\"})",
           "instant": true,
           "format": "table"
         }

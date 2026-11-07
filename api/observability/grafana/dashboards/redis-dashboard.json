@@ -24,7 +24,7 @@
         "overrides": []
       },
       "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" }, "orientation": "auto", "textMode": "value_and_name", "colorMode": "background", "graphMode": "none", "justifyMode": "center" },
-      "targets": [{ "expr": "sum(top_scores_redis_operations_total{job=\"top-scores\"})", "legendFormat": "Total Operations" }]
+      "targets": [{ "expr": "sum(top_scores_redis_operations_total{job=~\"app-top-scores(|-.*)\"})", "legendFormat": "Total Operations" }]
     },
     {
       "type": "stat",
@@ -39,7 +39,7 @@
         "overrides": []
       },
       "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" }, "orientation": "auto", "textMode": "value_and_name", "colorMode": "background", "graphMode": "none", "justifyMode": "center" },
-      "targets": [{ "expr": "sum(top_scores_redis_operation_errors_total{job=\"top-scores\"})", "legendFormat": "Total Errors" }]
+      "targets": [{ "expr": "sum(top_scores_redis_operation_errors_total{job=~\"app-top-scores(|-.*)\"})", "legendFormat": "Total Errors" }]
     },
     {
       "type": "stat",
@@ -51,7 +51,7 @@
         "overrides": []
       },
       "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" }, "orientation": "auto", "textMode": "value_and_name", "colorMode": "background", "graphMode": "area", "justifyMode": "center" },
-      "targets": [{ "expr": "sum(rate(top_scores_redis_operations_total{job=\"top-scores\"}[5m]))", "legendFormat": "Ops/sec" }]
+      "targets": [{ "expr": "sum(rate(top_scores_redis_operations_total{job=~\"app-top-scores(|-.*)\"}[5m]))", "legendFormat": "Ops/sec" }]
     },
     {
       "type": "stat",
@@ -63,7 +63,7 @@
         "overrides": []
       },
       "options": { "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" }, "orientation": "auto", "textMode": "value_and_name", "colorMode": "background", "graphMode": "none", "justifyMode": "center" },
-      "targets": [{ "expr": "histogram_quantile(0.90, sum by (le) (top_scores_redis_operation_duration_seconds_bucket{job=\"top-scores\"})) * 1000", "legendFormat": "p90 ms" }]
+      "targets": [{ "expr": "histogram_quantile(0.90, sum by (le) (top_scores_redis_operation_duration_seconds_bucket{job=~\"app-top-scores(|-.*)\"})) * 1000", "legendFormat": "p90 ms" }]
     },
 
     {
@@ -73,7 +73,7 @@
       "gridPos": { "x": 0, "y": 4, "w": 24, "h": 8 },
       "fieldConfig": { "defaults": { "unit": "ops", "custom": { "spanNulls": true } }, "overrides": [] },
       "options": { "tooltip": { "mode": "multi" } },
-      "targets": [{ "expr": "sum by (operation) (rate(top_scores_redis_operations_total{job=\"top-scores\"}[5m]))", "legendFormat": "{{operation}}" }]
+      "targets": [{ "expr": "sum by (operation) (rate(top_scores_redis_operations_total{job=~\"app-top-scores(|-.*)\"}[5m]))", "legendFormat": "{{operation}}" }]
     },
     {
       "type": "table",
@@ -91,7 +91,7 @@
       "transformations": [
         { "id": "filterFieldsByName", "options": { "include": { "names": ["operation", "Value"] } } }
       ],
-      "targets": [{ "expr": "sum by (operation) (top_scores_redis_operations_total{job=\"top-scores\"})", "legendFormat": "{{operation}}", "instant": true, "format": "table" }]
+      "targets": [{ "expr": "sum by (operation) (top_scores_redis_operations_total{job=~\"app-top-scores(|-.*)\"})", "legendFormat": "{{operation}}", "instant": true, "format": "table" }]
     },
 
     {
@@ -101,7 +101,7 @@
       "gridPos": { "x": 0, "y": 20, "w": 12, "h": 8 },
       "fieldConfig": { "defaults": { "unit": "ms", "custom": { "spanNulls": true } }, "overrides": [] },
       "options": { "tooltip": { "mode": "multi" } },
-      "targets": [{ "expr": "histogram_quantile(0.90, sum by (operation, le) (increase(top_scores_redis_operation_duration_seconds_bucket{job=\"top-scores\"}[1h]))) * 1000", "legendFormat": "p90 {{operation}}" }]
+      "targets": [{ "expr": "histogram_quantile(0.90, sum by (operation, le) (increase(top_scores_redis_operation_duration_seconds_bucket{job=~\"app-top-scores(|-.*)\"}[1h]))) * 1000", "legendFormat": "p90 {{operation}}" }]
     },
     {
       "type": "timeseries",
@@ -110,7 +110,7 @@
       "gridPos": { "x": 12, "y": 20, "w": 12, "h": 8 },
       "fieldConfig": { "defaults": { "unit": "ms", "custom": { "spanNulls": true } }, "overrides": [] },
       "options": { "tooltip": { "mode": "multi" } },
-      "targets": [{ "expr": "histogram_quantile(0.95, sum by (operation, le) (increase(top_scores_redis_operation_duration_seconds_bucket{job=\"top-scores\"}[1h]))) * 1000", "legendFormat": "p95 {{operation}}" }]
+      "targets": [{ "expr": "histogram_quantile(0.95, sum by (operation, le) (increase(top_scores_redis_operation_duration_seconds_bucket{job=~\"app-top-scores(|-.*)\"}[1h]))) * 1000", "legendFormat": "p95 {{operation}}" }]
     },
     {
       "type": "table",
@@ -144,8 +144,8 @@
         { "id": "filterFieldsByName", "options": { "include": { "names": ["operation", "Value #p90", "Value #p95"] } } }
       ],
       "targets": [
-        { "expr": "histogram_quantile(0.90, sum by (operation, le) (top_scores_redis_operation_duration_seconds_bucket{job=\"top-scores\"})) * 1000", "legendFormat": "{{operation}}", "refId": "p90", "instant": true, "format": "table" },
-        { "expr": "histogram_quantile(0.95, sum by (operation, le) (top_scores_redis_operation_duration_seconds_bucket{job=\"top-scores\"})) * 1000", "legendFormat": "{{operation}}", "refId": "p95", "instant": true, "format": "table" }
+        { "expr": "histogram_quantile(0.90, sum by (operation, le) (top_scores_redis_operation_duration_seconds_bucket{job=~\"app-top-scores(|-.*)\"})) * 1000", "legendFormat": "{{operation}}", "refId": "p90", "instant": true, "format": "table" },
+        { "expr": "histogram_quantile(0.95, sum by (operation, le) (top_scores_redis_operation_duration_seconds_bucket{job=~\"app-top-scores(|-.*)\"})) * 1000", "legendFormat": "{{operation}}", "refId": "p95", "instant": true, "format": "table" }
       ]
     },
 
@@ -156,7 +156,7 @@
       "gridPos": { "x": 0, "y": 38, "w": 12, "h": 8 },
       "fieldConfig": { "defaults": { "unit": "ms", "custom": { "spanNulls": true } }, "overrides": [] },
       "options": { "tooltip": { "mode": "multi" } },
-      "targets": [{ "expr": "sum by (operation) (rate(top_scores_redis_operation_duration_seconds_sum{job=\"top-scores\"}[5m])) / sum by (operation) (rate(top_scores_redis_operation_duration_seconds_count{job=\"top-scores\"}[5m])) * 1000", "legendFormat": "avg {{operation}}" }]
+      "targets": [{ "expr": "sum by (operation) (rate(top_scores_redis_operation_duration_seconds_sum{job=~\"app-top-scores(|-.*)\"}[5m])) / sum by (operation) (rate(top_scores_redis_operation_duration_seconds_count{job=~\"app-top-scores(|-.*)\"}[5m])) * 1000", "legendFormat": "avg {{operation}}" }]
     },
     {
       "type": "timeseries",
@@ -165,7 +165,7 @@
       "gridPos": { "x": 12, "y": 38, "w": 12, "h": 8 },
       "fieldConfig": { "defaults": { "unit": "short", "custom": { "spanNulls": true } }, "overrides": [] },
       "options": { "tooltip": { "mode": "multi" } },
-      "targets": [{ "expr": "sum by (operation) (rate(top_scores_redis_results_returned_total{job=\"top-scores\"}[5m]))", "legendFormat": "{{operation}}" }]
+      "targets": [{ "expr": "sum by (operation) (rate(top_scores_redis_results_returned_total{job=~\"app-top-scores(|-.*)\"}[5m]))", "legendFormat": "{{operation}}" }]
     },
     {
       "type": "table",
@@ -190,7 +190,7 @@
       "transformations": [
         { "id": "filterFieldsByName", "options": { "include": { "names": ["operation", "Value"] } } }
       ],
-      "targets": [{ "expr": "sum by (operation) (top_scores_redis_operation_duration_seconds_sum{job=\"top-scores\"}) / sum by (operation) (top_scores_redis_operation_duration_seconds_count{job=\"top-scores\"}) * 1000", "legendFormat": "{{operation}}", "instant": true, "format": "table" }]
+      "targets": [{ "expr": "sum by (operation) (top_scores_redis_operation_duration_seconds_sum{job=~\"app-top-scores(|-.*)\"}) / sum by (operation) (top_scores_redis_operation_duration_seconds_count{job=~\"app-top-scores(|-.*)\"}) * 1000", "legendFormat": "{{operation}}", "instant": true, "format": "table" }]
     },
     {
       "type": "table",
@@ -208,7 +208,7 @@
       "transformations": [
         { "id": "filterFieldsByName", "options": { "include": { "names": ["operation", "Value"] } } }
       ],
-      "targets": [{ "expr": "sum by (operation) (top_scores_redis_results_returned_total{job=\"top-scores\"})", "legendFormat": "{{operation}}", "instant": true, "format": "table" }]
+      "targets": [{ "expr": "sum by (operation) (top_scores_redis_results_returned_total{job=~\"app-top-scores(|-.*)\"})", "legendFormat": "{{operation}}", "instant": true, "format": "table" }]
     },
 
     {
@@ -218,7 +218,7 @@
       "gridPos": { "x": 0, "y": 56, "w": 24, "h": 8 },
       "fieldConfig": { "defaults": { "unit": "ops", "custom": { "spanNulls": true } }, "overrides": [] },
       "options": { "tooltip": { "mode": "multi" } },
-      "targets": [{ "expr": "sum by (operation) (rate(top_scores_redis_operation_errors_total{job=\"top-scores\"}[5m]))", "legendFormat": "{{operation}}" }]
+      "targets": [{ "expr": "sum by (operation) (rate(top_scores_redis_operation_errors_total{job=~\"app-top-scores(|-.*)\"}[5m]))", "legendFormat": "{{operation}}" }]
     },
     {
       "type": "table",
@@ -243,7 +243,7 @@
       "transformations": [
         { "id": "filterFieldsByName", "options": { "include": { "names": ["operation", "Value"] } } }
       ],
-      "targets": [{ "expr": "sum by (operation) (top_scores_redis_operation_errors_total{job=\"top-scores\"})", "legendFormat": "{{operation}}", "instant": true, "format": "table" }]
+      "targets": [{ "expr": "sum by (operation) (top_scores_redis_operation_errors_total{job=~\"app-top-scores(|-.*)\"})", "legendFormat": "{{operation}}", "instant": true, "format": "table" }]
     },
 
     {

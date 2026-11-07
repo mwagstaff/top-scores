@@ -3688,6 +3688,30 @@ struct Top_ScoresTests {
         )
     }
 
+    @Test func compactFixtureRating_followsMatchLifecycleAndPreference() {
+        let index = MatchWatchabilityIndex(
+            score: 58, tier: "good_watch", stars: 3, confidence: 0.94,
+            modelVersion: "v6", components: []
+        )
+        for status in [nil, "80'", "FT", "AET", "ABANDONED"] as [String?] {
+            let match = Match(
+                date: formattedDate(offsetDays: 0), time: "17:45",
+                homeTeam: "FC Thun", awayTeam: "Hearts", league: "UEFA Conference League",
+                watchabilityIndex: index,
+                tvChannels: [TvChannel(name: "TNT Sports 3")],
+                scoreStatus: status
+            )
+            let row = MatchRow(match: match, showWatchabilityRating: true)
+            let shouldShow = status == nil || status == "80'"
+            #expect((row.compactWatchabilityIndex != nil) == shouldShow)
+            #expect(MatchRow.shouldShowCompactBroadcastLogo(for: match) == shouldShow)
+            #expect(MatchRow(match: match, showWatchabilityRating: false).compactWatchabilityIndex == nil)
+            // Hiding the compact row must not remove the detail-screen rating or channels.
+            #expect(match.watchabilityIndex == index)
+            #expect(match.tvChannels.count == 1)
+        }
+    }
+
     @Test func compactFixtureBroadcast_hidesLogoForFullTimeFixtures() async throws {
         let match = Match(
             date: formattedDate(offsetDays: 0),

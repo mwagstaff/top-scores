@@ -25,7 +25,7 @@
       },
       "targets": [
         {
-          "expr": "club_elo_last_success_duration_seconds{job=\"top-scores\"}",
+          "expr": "club_elo_last_success_duration_seconds{job=~\"app-top-scores(|-.*)\"}",
           "legendFormat": "success duration"
         }
       ]
@@ -54,7 +54,7 @@
       },
       "targets": [
         {
-          "expr": "club_elo_last_failure_duration_seconds{job=\"top-scores\"}",
+          "expr": "club_elo_last_failure_duration_seconds{job=~\"app-top-scores(|-.*)\"}",
           "legendFormat": "failure duration"
         }
       ]
@@ -79,7 +79,7 @@
       },
       "targets": [
         {
-          "expr": "time() - (max_over_time(club_elo_oldest_from_timestamp_seconds{job=\"top-scores\"}[30m]) > 0)",
+          "expr": "time() - (max_over_time(club_elo_oldest_from_timestamp_seconds{job=~\"app-top-scores(|-.*)\"}[30m]) > 0)",
           "legendFormat": "oldest age"
         }
       ]
@@ -104,7 +104,7 @@
       },
       "targets": [
         {
-          "expr": "time() - (max_over_time(club_elo_latest_from_timestamp_seconds{job=\"top-scores\"}[30m]) > 0)",
+          "expr": "time() - (max_over_time(club_elo_latest_from_timestamp_seconds{job=~\"app-top-scores(|-.*)\"}[30m]) > 0)",
           "legendFormat": "newest age"
         }
       ]
@@ -132,7 +132,7 @@
       },
       "targets": [
         {
-          "expr": "max_over_time(club_elo_latest_pull_team_count{job=\"top-scores\"}[30m])",
+          "expr": "max_over_time(club_elo_latest_pull_team_count{job=~\"app-top-scores(|-.*)\"}[30m])",
           "legendFormat": "team count"
         }
       ]
@@ -160,7 +160,7 @@
       },
       "targets": [
         {
-          "expr": "max_over_time(club_elo_unmatched_team_count{job=\"top-scores\"}[30m])",
+          "expr": "max_over_time(club_elo_unmatched_team_count{job=~\"app-top-scores(|-.*)\"}[30m])",
           "legendFormat": "unmatched teams"
         }
       ]
@@ -176,7 +176,7 @@
       },
       "targets": [
         {
-          "expr": "sort_desc(club_elo_team_ranking_score{job=\"top-scores\"})",
+          "expr": "sort_desc(club_elo_team_ranking_score{job=~\"app-top-scores(|-.*)\"})",
           "instant": true,
           "format": "table"
         }
@@ -254,7 +254,7 @@
       },
       "targets": [
         {
-          "expr": "sort_desc(club_elo_country_average_ranking_score{job=\"top-scores\"})",
+          "expr": "sort_desc(club_elo_country_average_ranking_score{job=~\"app-top-scores(|-.*)\"})",
           "instant": true,
           "format": "table"
         }

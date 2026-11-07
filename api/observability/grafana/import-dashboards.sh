@@ -18,7 +18,7 @@ FOLDER_UID="${FOLDER_UID:-top-scores-folder}"
 FOLDER_TITLE="${FOLDER_TITLE:-top-scores API}"
 PROM_DS_NAME="${PROM_DS_NAME:-Prometheus}"
 PROM_DS_UID="${PROM_DS_UID:-top-scores-prometheus}"
-PROM_DS_URL="${PROM_DS_URL:-http://prometheus:9090}"
+PROM_DS_URL="${PROM_DS_URL:-}"
 
 PROM_CONFIG_HOST="${PROM_CONFIG_HOST:-${DEPLOY_HOST:-}}"
 PROM_CONFIG_FILE="${PROM_CONFIG_FILE:-/etc/prometheus/prometheus.yml}"
@@ -106,6 +106,13 @@ ensure_prometheus_datasource() {
       PROM_DS_UID="$existing_uid"
     fi
 
+    # Retain the active cross-host proxy and its secure headers on normal imports.
+    # Reconnection is managed by reconnect.py, not the retired Docker defaults.
+    if [[ -z "$PROM_DS_URL" ]]; then
+      echo "Using existing Prometheus datasource \"$existing_name\" (uid=$PROM_DS_UID)"
+      return
+    fi
+
     if [[ "$existing_name" == "$PROM_DS_NAME" && "$existing_url" == "$PROM_DS_URL" ]]; then
       echo "Using existing Prometheus datasource \"$PROM_DS_NAME\" (uid=$PROM_DS_UID)"
       return
@@ -135,6 +142,11 @@ ensure_prometheus_datasource() {
 
     echo "Updated Prometheus datasource \"$PROM_DS_NAME\""
     return
+  fi
+
+  if [[ -z "$PROM_DS_URL" ]]; then
+    echo "No existing Prometheus datasource. Set PROM_DS_URL explicitly to create one." >&2
+    exit 1
   fi
 
   create_payload="$(

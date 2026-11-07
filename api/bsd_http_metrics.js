@@ -143,10 +143,12 @@ function buildTopUrlRows(nowMs = Date.now()) {
         timeoutCount: 0,
         maxSeconds: 0,
         maxTimestampSeconds: 0,
+        lastTimestampSeconds: 0,
       });
     }
     const row = grouped.get(key);
     row.count += 1;
+    row.lastTimestampSeconds = Math.max(row.lastTimestampSeconds, entry.timestampMs / 1000);
     if (entry.errorCode === "ETIMEDOUT") row.timeoutCount += 1;
     row.durations.push(entry.durationSeconds);
     if (entry.durationSeconds >= row.maxSeconds) {
@@ -164,6 +166,7 @@ function buildTopUrlRows(nowMs = Date.now()) {
       p95Seconds: percentileFromSorted(row.durations, 0.95),
       maxSeconds: row.maxSeconds,
       maxTimestampSeconds: row.maxTimestampSeconds,
+      lastTimestampSeconds: row.lastTimestampSeconds,
     };
   });
 
@@ -172,6 +175,10 @@ function buildTopUrlRows(nowMs = Date.now()) {
   const p95Limit = Math.max(1, Number(BSD_HTTP_SLOW_URL_P95_LIMIT) || 100);
   const maxLimit = Math.max(1, Number(BSD_HTTP_SLOW_URL_MAX_LIMIT) || 20);
   return {
+    badRows: rows
+      .filter((row) => /^(0|[45][0-9]{2})$/.test(row.labels.status_code))
+      .sort((lhs, rhs) => rhs.count - lhs.count)
+      .slice(0, countLimit),
     countRows: rows
       .slice()
       .sort((lhs, rhs) => rhs.count - lhs.count)
@@ -290,6 +297,14 @@ function appendPrometheusMetrics(lines, nowMs = Date.now()) {
   );
 
   const topUrlRows = buildTopUrlRows(nowMs);
+  lines.push("# HELP top_scores_bsd_http_bad_url_requests Failed requests by URL and status over the process rolling window, ranked independently of successful requests.");
+  lines.push("# TYPE top_scores_bsd_http_bad_url_requests gauge");
+  lines.push("# HELP top_scores_bsd_http_bad_url_last_timestamp_seconds Last failed request timestamp by URL and status in the process rolling window.");
+  lines.push("# TYPE top_scores_bsd_http_bad_url_last_timestamp_seconds gauge");
+  topUrlRows.badRows.forEach((entry) => {
+    pushPrometheusSample(lines, "top_scores_bsd_http_bad_url_requests", entry.count, entry.labels);
+    pushPrometheusSample(lines, "top_scores_bsd_http_bad_url_last_timestamp_seconds", entry.lastTimestampSeconds, entry.labels);
+  });
   lines.push("# HELP top_scores_bsd_http_top_url_requests Requests observed for top recent BSD HTTP URL rows over the process rolling window.");
   lines.push("# TYPE top_scores_bsd_http_top_url_requests gauge");
   topUrlRows.countRows.forEach((entry) => {
