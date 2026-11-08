@@ -7,7 +7,6 @@ import ImageIO
 
 struct FantasyView: View {
     private static let currentInitialSetupVersion = 1
-    private static let teamManagementURL = URL(string: "https://fantasy.premierleague.com/my-team")
 
     private struct PendingFantasyRefreshRequest: Equatable {
         let force: Bool
@@ -33,9 +32,11 @@ struct FantasyView: View {
     @AppStorage(StorageKeys.managerEntryID) private var managerEntryID = ""
     @AppStorage(StorageKeys.rivalManagersJSON) private var rivalManagersJSON = "[]"
     @AppStorage(StorageKeys.trackedLeaguesJSON) private var trackedLeaguesJSON = "[]"
+    @AppStorage("fantasy.leagueOrderByManagerJSON") private var leagueOrderJSON = "{}"
     @AppStorage(StorageKeys.initialSetupVersion) private var initialSetupVersion = 0
     @Environment(\.openURL) private var openURL
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceLeagueOrderMotion
 
     @State private var managerCaptureStatusMessage = "Waiting for shared Fantasy entry URL. Open your Points page in Safari/Chrome and share it to Top Scores."
     @State private var shareImportStatusMessage: String?
@@ -52,6 +53,7 @@ struct FantasyView: View {
     @State private var setupRivalCandidates: [FantasySetupRivalCandidate] = []
     @State private var selectedSetupRivalEntryIDs: Set<Int> = []
     @State private var setupRivalSearchText = ""
+    @State private var leagueRowHeights: [Int: CGFloat] = [:]
     @State private var leagueIDLoadingDetails: Set<Int> = []
     @State private var showAddRivalSheet = false
     @State private var addSheetMode: FantasyIDAddMode = .rival
@@ -88,7 +90,8 @@ struct FantasyView: View {
     @State private var rivalEntryIDPendingDeletion: Int?
     @State private var rivalTeamNamePendingDeletion = ""
     @State private var rivalsScoreMode: RivalsScoreMode = .currentGameweek
-    @State private var teamViewMode: FantasyTeamViewMode = .current
+    @ScaledMetric(relativeTo: .caption) private var playerLabelHeight = 20.0
+    @State private var selectedManagerEntryID: Int?
     @State private var rivalToastMessage: String?
     @State private var rivalToastTask: Task<Void, Never>?
     @State private var currentRivalRanks: [Int: Int] = [:]
@@ -132,8 +135,7 @@ struct FantasyView: View {
                         if !usesInitialSetupNavigation {
                             FootballHeroHeader(
                                 title: "FPL",
-                                subtitle: fplHeaderSubtitle,
-                                subtitleLink: currentManagerEntryID == nil ? nil : Self.teamManagementURL
+                                subtitle: nil
                             )
                         }
 
@@ -160,15 +162,6 @@ struct FantasyView: View {
 
     private var usesInitialSetupNavigation: Bool {
         !managerEntryID.isEmpty && initialSetupVersion < Self.currentInitialSetupVersion
-    }
-
-    private var fplHeaderSubtitle: String? {
-        guard let teamName = fantasyViewModel.myProfile?.name
-            .trimmingCharacters(in: .whitespacesAndNewlines),
-              !teamName.isEmpty else {
-            return "Fantasy Premier League"
-        }
-        return teamName
     }
 
     private var modalPresentationView: some View {
@@ -374,6 +367,7 @@ struct FantasyView: View {
             }
             .onChange(of: managerEntryID) { previousValue, newValue in
                 syncManagerEntryIDToSharedDefaults()
+                selectedManagerEntryID = nil
                 if newValue.isEmpty {
                     cancelFantasyAutomaticRetry(resetAttempt: true)
                     pendingFantasyRefreshRequest = nil
@@ -617,7 +611,9 @@ struct FantasyView: View {
                 }
 
                 if fantasyViewModel.data != nil || fantasyViewModel.previousTeamData != nil {
-                    teamModePicker
+                    managerSwitcher
+                    selectedManagerHeader
+                    scoringGameweekCaption
 
                     if let shareImportStatusMessage {
                         shareImportStatusCard(
@@ -626,51 +622,12 @@ struct FantasyView: View {
                         )
                     }
 
-                    switch teamViewMode {
-                    case .current:
-                        if let data = fantasyViewModel.data {
-                            let displayData = data
-                            FantasyTransferDeadlineLabel(
-                                gameweekID: data.deadlineGameweekID,
-                                deadlineTime: data.deadlineTime
-                            )
-                            pitchSection(
-                                displayData,
-                                playerSelectionEnabled: true,
-                                detailMode: $fantasyPitchDetailMode,
-                                expectedPoints: fantasyViewModel.currentSquadProjectedGameweekPoints,
-                                teamValue: data.currentTeamValueMillions,
-                                isExpectedPointsLoading: fantasyViewModel.currentSquadProjectedGameweekPoints == nil,
-                                showsPoints: false
-                            )
-                            benchSection(
-                                displayData,
-                                playerSelectionEnabled: true,
-                                detailMode: fantasyPitchDetailMode,
-                                showsPoints: false
-                            )
-                        }
-                    case .previous:
-                        if let data = fantasyViewModel.previousTeamData {
-                            pitchSection(
-                                data,
-                                playerSelectionEnabled: true,
-                                detailMode: $fantasyPitchDetailMode,
-                                teamValue: data.currentTeamValueMillions,
-                                finalPointsMetricTitle: "Final score"
-                            )
-                            benchSection(
-                                data,
-                                playerSelectionEnabled: true,
-                                detailMode: fantasyPitchDetailMode
-                            )
-                            eventLegendSection(data)
-                            if data.isEstimatedScore {
-                                scoreCalculationSection(data)
-                            }
-                            summaryStatsSection(data)
-                        } else {
-                            noPreviousTeamCard
+                    if let selectedManagerEntryID, selectedManagerEntryID != currentManagerEntryID {
+                        selectedRivalTeam(entryID: selectedManagerEntryID)
+                    } else {
+                        if let data = rivalsStandingsSquad ?? fantasyViewModel.data {
+                            scoringTeamContent(data, expectedPoints: data.gameweekID == fantasyViewModel.data?.gameweekID
+                                ? fantasyViewModel.currentSquadProjectedGameweekPoints : nil)
                         }
                     }
 
@@ -713,58 +670,142 @@ struct FantasyView: View {
         }
     }
 
-    private var teamModePicker: some View {
-        FootballPitchSegmentedControl(
-            selection: $teamViewMode,
-            options: [
-                FootballPitchSegmentOption(
-                    value: .current,
-                    title: "Current team",
-                    subtitle: "Active squad"
-                ),
-                FootballPitchSegmentOption(
-                    value: .previous,
-                    title: previousTeamPickerTitle,
-                    subtitle: "Last gameweek"
-                ),
-            ],
-            accessibilityLabel: "Team view",
-            minimumHeight: 72
+    private var managerSwitcherEntries: [FantasyLeagueTableEntry] {
+        fantasyManagerSwitcherEntries(leagueTableEntries, rivalEntryIDs: rivalManagers.map(\.entryID))
+    }
+
+    private var selectedManagerEntry: FantasyLeagueTableEntry? {
+        managerSwitcherEntries.first { $0.entryID == (selectedManagerEntryID ?? currentManagerEntryID) }
+            ?? managerSwitcherEntries.first
+    }
+
+    private var managerSwitcher: some View {
+        FantasyManagerSwitcher(
+            entries: managerSwitcherEntries,
+            selectedEntryID: selectedManagerEntryID ?? currentManagerEntryID,
+            gameweekID: (rivalsStandingsSquad ?? fantasyViewModel.data)?.gameweekID,
+            staleEntryIDs: fantasyViewModel.staleRivalEntryIDs,
+            select: { entryID in
+                selectedManagerEntryID = entryID
+                expectedPointsMetricGameweekID = nil
+            },
+            addRival: prepareRivalEntrySheet
         )
-    }
-
-    private var previousTeamPickerTitle: String {
-        guard let data = fantasyViewModel.previousTeamData,
-              data.scorePhase == .final else {
-            return fantasyPreviousTeamPickerTitle(finalScore: nil)
+        .onChange(of: rivalManagers.map(\.entryID)) { _, ids in
+            if let selectedManagerEntryID,
+               selectedManagerEntryID != currentManagerEntryID,
+               !ids.contains(selectedManagerEntryID) {
+                self.selectedManagerEntryID = nil
+            }
         }
-        return fantasyPreviousTeamPickerTitle(finalScore: data.resolvedCurrentScore)
     }
 
-    private var noPreviousTeamCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label("No previous team yet", systemImage: "clock.arrow.circlepath")
-                .font(.headline)
-            Text("Your previous team and points will appear after the first gameweek of the season is complete.")
-                .font(.footnote)
-                .foregroundStyle(.secondary)
+    private var selectedManagerHeader: some View {
+        Group {
+            if let entry = selectedManagerEntry {
+                (Text(entry.managerName).fontWeight(.semibold)
+                    + Text(" · \(entry.teamName)").foregroundColor(.secondary))
+                    .font(.subheadline)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .accessibilityLabel("\(entry.managerName), \(entry.teamName)\(entry.isUser ? ", your team" : "")")
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(14)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(.secondarySystemGroupedBackground))
-        )
+    }
+
+    private var scoringGameweekCaption: some View {
+        Group {
+            if let data = rivalsStandingsSquad ?? fantasyViewModel.data {
+                Text("GW\(data.gameweekID) · \(data.hasActiveFixtures ? "Live points" : data.scorePhase == .expected ? "Expected points" : "Points")")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func selectedRivalTeam(entryID: Int) -> some View {
+        if let rival = fantasyViewModel.rivalSquads.first(where: {
+            $0.entryID == entryID && $0.squad.gameweekID == rivalsStandingsSquad?.gameweekID
+        }) {
+            if fantasyViewModel.staleRivalEntryIDs.contains(entryID) {
+                Label("Showing saved points. Refreshing this rival…", systemImage: "clock.arrow.circlepath")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            scoringTeamContent(
+                rival.squad.applyingExpectedPoints(rival.expectedPointsSection),
+                expectedPoints: rival.projectedGameweekPoints,
+                isExpectedPointsLoading: rival.isExpectedPointsLoading
+            )
+        } else {
+            VStack(spacing: 10) {
+                if fantasyViewModel.isRefreshing {
+                    ProgressView()
+                }
+                Text("This rival’s team hasn’t loaded yet.")
+                Text("We’ll keep retrying while you’re here.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Button("Retry") {
+                    triggerFantasyRefresh(force: true)
+                }
+                .frame(minHeight: 44)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 24)
+        }
+    }
+
+    private func scoringTeamContent(
+        _ data: FantasySquadDisplayData,
+        expectedPoints: Double?,
+        isExpectedPointsLoading: Bool = false
+    ) -> some View {
+        VStack(spacing: 12) {
+            if let chip = data.activeBadgeChip {
+                FantasyChipBadgeImage(chip: chip, width: 92)
+            }
+            pitchSection(
+                data,
+                playerSelectionEnabled: true,
+                detailMode: $fantasyPitchDetailMode,
+                expectedPoints: expectedPoints,
+                teamValue: data.currentTeamValueMillions,
+                isExpectedPointsLoading: isExpectedPointsLoading
+            )
+            benchSection(data, playerSelectionEnabled: true, detailMode: fantasyPitchDetailMode)
+            eventLegendSection(data)
+            if data.isEstimatedScore {
+                scoreCalculationSection(data)
+            }
+        }
     }
 
     private var playerCreatedLeagues: [FantasyEntryClassicLeague] {
-        (fantasyViewModel.myProfile?.leagues?.classic ?? [])
+        let leagues = (fantasyViewModel.myProfile?.leagues?.classic ?? [])
             .filter(\.isPlayerCreated)
+        let ids = FantasyLeagueOrder(json: leagueOrderJSON).orderedIDs(
+            leagues.map(\.id), managerID: fantasyViewModel.myProfile?.id ?? 0
+        )
+        let byID = Dictionary(uniqueKeysWithValues: leagues.map { ($0.id, $0) })
+        return ids.compactMap { byID[$0] }
+    }
+
+    private func movePlayerLeague(_ leagueID: Int, to targetID: Int) {
+        guard let managerID = fantasyViewModel.myProfile?.id else { return }
+        var order = FantasyLeagueOrder(json: leagueOrderJSON)
+        guard order.move(leagueID, to: targetID, availableIDs: playerCreatedLeagues.map(\.id), managerID: managerID) else { return }
+        withAnimation(reduceLeagueOrderMotion ? nil : .easeInOut(duration: 0.2)) {
+            leagueOrderJSON = order.json
+        }
     }
 
     private var isShowingProvisionalPointsMetric: Bool {
-        guard teamViewMode == .current,
-              let data = fantasyViewModel.data,
+        let selectedData = selectedManagerEntry?.squad ?? rivalsStandingsSquad ?? fantasyViewModel.data
+        guard let data = selectedData,
               data.scorePhase == .provisional else {
             return false
         }
@@ -814,6 +855,10 @@ struct FantasyView: View {
                 .accessibilityHint("Opens your leagues in Fantasy Premier League")
             }
 
+            Text("Touch and hold a league, then drag to reorder.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
             HStack {
                 Text("League")
                 Spacer()
@@ -823,23 +868,64 @@ struct FantasyView: View {
             .foregroundStyle(.secondary)
             .padding(.horizontal, 2)
 
-            VStack(spacing: 0) {
+            List {
                 ForEach(Array(playerCreatedLeagues.enumerated()), id: \.element.id) { index, league in
-                    Button {
-                        openPlayerLeague(league)
-                    } label: {
-                        playerLeagueRow(league)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(leagueIDLoadingDetails.contains(league.id))
-                    .accessibilityHint("Opens the league table")
+                    VStack(spacing: 0) {
+                        Button {
+                            openPlayerLeague(league)
+                        } label: {
+                            playerLeagueRow(league)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(leagueIDLoadingDetails.contains(league.id))
+                        .accessibilityHint("Opens the league table. Touch and hold to reorder.")
+                        .accessibilityActions {
+                            if index > 0 {
+                                Button("Move up") {
+                                    movePlayerLeague(league.id, to: playerCreatedLeagues[index - 1].id)
+                                }
+                            }
+                            if index < playerCreatedLeagues.count - 1 {
+                                Button("Move down") {
+                                    movePlayerLeague(league.id, to: playerCreatedLeagues[index + 1].id)
+                                }
+                            }
+                        }
 
-                    if index < playerCreatedLeagues.count - 1 {
-                        Divider()
-                            .padding(.leading, 52)
+                        if index < playerCreatedLeagues.count - 1 {
+                            Divider()
+                                .padding(.leading, 52)
+                        }
                     }
+                    .onGeometryChange(for: CGFloat.self) { geometry in
+                        geometry.size.height
+                    } action: { height in
+                        leagueRowHeights[league.id] = height
+                    }
+                    .listRowInsets(EdgeInsets())
+                    .listRowSeparator(.hidden)
+                    .listRowBackground(Color.clear)
+                }
+                .onMove { source, destination in
+                    guard let managerID = fantasyViewModel.myProfile?.id else { return }
+                    var order = FantasyLeagueOrder(json: leagueOrderJSON)
+                    order.move(fromOffsets: source, toOffset: destination,
+                               availableIDs: playerCreatedLeagues.map(\.id), managerID: managerID)
+                    leagueOrderJSON = order.json
                 }
             }
+            .listStyle(.plain)
+            .listRowSpacing(0)
+            .environment(\.defaultMinListRowHeight, 0)
+            .scrollContentBackground(.hidden)
+            .contentMargins(.all, 0, for: .scrollContent)
+            .scrollDisabled(true)
+            // Expand the native list inside the screen's existing ScrollView.
+            // Measured row heights preserve wrapping and Dynamic Type sizing.
+            .frame(height: playerCreatedLeagues.reduce(CGFloat.zero) {
+                $0 + (leagueRowHeights[$1.id] ?? 72)
+            })
+
         }
         .padding(16)
         .fantasyPurpleSurface(cornerRadius: 20)
@@ -1615,22 +1701,8 @@ struct FantasyView: View {
         return components
     }
 
-    private func summaryStatsSection(_ data: FantasySquadDisplayData) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Gameweek stats")
-                .font(.headline)
-
-            HStack(spacing: 8) {
-                summaryPill(title: "GW Rank", value: formatNumber(data.rank))
-                summaryPill(title: "Overall", value: formatNumber(data.overallRank))
-                summaryPill(title: "Bench", value: formatNumber(data.pointsOnBench))
-                summaryPill(title: "Transfers", value: formatTransfersValue(data.transfersCost))
-            }
-        }
-    }
-
     private var leagueTableEntries: [FantasyLeagueTableEntry] {
-        guard let mySquad = rivalsStandingsSquad else { return [] }
+        guard let mySquad = rivalsStandingsSquad ?? fantasyViewModel.data else { return [] }
 
         let entryID = Int(managerEntryID.trimmingCharacters(in: .whitespacesAndNewlines)) ?? -1
         let profile = fantasyViewModel.myProfile
@@ -3007,7 +3079,7 @@ struct FantasyView: View {
                         .padding(.trailing, 12)
                 }
             }
-            .frame(height: 576)
+            .frame(height: 4 * (78 + 2 * playerLabelHeight) + 64 + 24)
             .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
@@ -3140,7 +3212,7 @@ struct FantasyView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(height: 122)
+        .frame(height: 78 + (showsPoints ? 2 : 1) * playerLabelHeight)
     }
 
     private func benchSection(
@@ -3182,7 +3254,7 @@ struct FantasyView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(height: 128)
+            .frame(height: 78 + (showsPoints ? 2 : 1) * playerLabelHeight)
             .padding(10)
             .background(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -3390,22 +3462,6 @@ struct FantasyView: View {
         players
             .filter { $0[keyPath: value] > 0 }
             .map { "\($0.displayName) x\($0[keyPath: value])" }
-    }
-
-    private func summaryPill(title: String, value: String) -> some View {
-        VStack(spacing: 2) {
-            Text(value)
-                .font(.headline.monospacedDigit())
-            Text(title)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 8)
-        .background(
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Color(.tertiarySystemGroupedBackground))
-        )
     }
 
     private func errorCard(_ message: String) -> some View {
@@ -4798,14 +4854,6 @@ struct FantasyView: View {
         return Self.integerFormatter.string(from: NSNumber(value: value)) ?? String(value)
     }
 
-    private func formatTransfersValue(_ value: Int?) -> String {
-        guard let value else { return "-" }
-        if value > 0 {
-            return "-\(value)"
-        }
-        return "\(value)"
-    }
-
     private enum StorageKeys {
         static let managerEntryID = "fantasy.managerEntryID"
         static let rivalManagersJSON = "fantasy.rivalManagersJSON"
@@ -4927,7 +4975,7 @@ private struct FantasyPitchBackground: View {
     }
 }
 
-private enum FantasyPitchPlayerDetailMode {
+enum FantasyPitchPlayerDetailMode {
     case opponent
     case price
     case difficulty
@@ -5057,106 +5105,20 @@ private struct FantasyPitchDetailToggleButton: View {
 
 private struct FantasyPitchLivePill: View {
     var body: some View {
-        livePill(pulse: 0)
-    }
-
-    private func livePill(pulse: Double) -> some View {
-        HStack(spacing: 6) {
-            Circle()
-                .fill(Color.white)
-                .frame(width: 7, height: 7)
-                .opacity(1 - (0.7 * pulse))
-
-            Text("Live")
-                .font(.system(size: 12, weight: .bold, design: .rounded))
-        }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 11)
-        .padding(.vertical, 7)
-        .background(
-            ZStack {
-                Capsule(style: .continuous)
-                    .fill(Color.red.opacity(0.92))
-                Capsule(style: .continuous)
-                    .fill(Color.white.opacity(0.13 * pulse))
-            }
-        )
-        .overlay {
-            Capsule(style: .continuous)
-                .stroke(Color.white.opacity(0.68 - (0.46 * pulse)), lineWidth: 1)
-        }
-        .shadow(color: Color.red.opacity(0.38), radius: 10)
-        .accessibilityLabel("Live Fantasy matches")
+        Text("LIVE")
+            .font(.caption.weight(.bold))
+            .foregroundStyle(Color.mint)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background(Color(red: 0.02, green: 0.16, blue: 0.10), in: Capsule())
+            .overlay(Capsule().strokeBorder(Color.mint.opacity(0.6), lineWidth: 1))
+            .accessibilityLabel("Live Fantasy matches")
     }
 }
 
-private struct FantasyPlayerLiveScorePill: View {
-    let points: Int
-
-    var body: some View {
-        liveScorePill(pulse: 0)
-    }
-
-    private func liveScorePill(pulse: Double) -> some View {
-        HStack(spacing: 5) {
-            Circle()
-                .fill(Color.white)
-                .frame(width: 5, height: 5)
-                .opacity(1 - (0.7 * pulse))
-
-            Text("\(points)")
-                .font(.system(size: 9.5, weight: .bold, design: .rounded))
-                .monospacedDigit()
-                .lineLimit(1)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 2.5)
-        .foregroundStyle(.white)
-        .background(
-            ZStack {
-                Capsule(style: .continuous)
-                    .fill(Color.red.opacity(0.92))
-                Capsule(style: .continuous)
-                    .fill(Color.white.opacity(0.13 * pulse))
-            }
-        )
-        .overlay {
-            Capsule(style: .continuous)
-                .stroke(Color.white.opacity(0.68 - (0.44 * pulse)), lineWidth: 0.85)
-        }
-        .shadow(color: Color.red.opacity(0.34), radius: 6)
-        .accessibilityLabel("Live, \(points) points")
-    }
-}
-
-private struct FantasyPlayerLiveOutline: View {
-    let cornerRadius: CGFloat
-
-    var body: some View {
-        outline(pulse: 0)
-    }
-
-    private func outline(pulse: Double) -> some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .strokeBorder(Color.red.opacity(0.96 - (0.28 * pulse)), lineWidth: 3.5)
-
-            RoundedRectangle(
-                cornerRadius: max(5, cornerRadius - 2.25),
-                style: .continuous
-            )
-            .strokeBorder(Color.white.opacity(0.94 - (0.56 * pulse)), lineWidth: 1.1)
-            .padding(2.25)
-
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .stroke(Color.red, lineWidth: 1.5)
-                .scaleEffect(1 + (0.035 * pulse))
-                .opacity(0.42 * (1 - pulse))
-        }
-    }
-}
-
-private struct FantasyPlayerCard: View {
+struct FantasyPlayerCard: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .caption) private var labelHeight = 20.0
     let player: FantasyDisplayPlayer
     let width: CGFloat
     let detailMode: FantasyPitchPlayerDetailMode
@@ -5262,10 +5224,6 @@ private struct FantasyPlayerCard: View {
         player.isUnavailable ? Color.white.opacity(0.48) : Color.white.opacity(0.96)
     }
 
-    private var secondaryTextColor: Color {
-        player.isUnavailable ? Color.white.opacity(0.36) : Color.white.opacity(0.66)
-    }
-
     private var accessibilityLabelText: String {
         let fixtureDifficultyText = player.fixtureDifficulty.map { ", fixture difficulty \($0)" } ?? ""
         let substitutionText = isSubstitutedOff ? ", substituted off" : ""
@@ -5328,6 +5286,22 @@ private struct FantasyPlayerCard: View {
 
                 playerPortrait(size: profileImageSize)
 
+                portraitDetail
+                    .padding(4)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+                if isInPlay {
+                    Text("LIVE")
+                        .font(.system(size: 8, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.mint)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                        .background(Color(red: 0.02, green: 0.16, blue: 0.10), in: Capsule())
+                        .overlay(Capsule().strokeBorder(Color.mint.opacity(0.6), lineWidth: 0.7))
+                        .padding(3)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                }
+
                 if player.isUnavailable || player.hasFutureAvailabilityIssue {
                     VStack(alignment: .leading, spacing: 3) {
                         if player.isUnavailable {
@@ -5340,11 +5314,12 @@ private struct FantasyPlayerCard: View {
                         }
                     }
                     .padding(4)
+                    .padding(.top, 17)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
 
                 if hasEventStats {
-                    HStack(spacing: 3) {
+                    VStack(alignment: .leading, spacing: 2) {
                         if player.goalsScored > 0 {
                             eventStatBadge(symbol: "soccerball", color: .white, count: player.goalsScored)
                         }
@@ -5381,69 +5356,41 @@ private struct FantasyPlayerCard: View {
                 .padding(4)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
             }
-            .frame(width: width, height: 64)
-            .overlay(alignment: .bottom) {
-                Rectangle()
-                    .fill(clubAccentColor.opacity(player.isUnavailable ? 0.22 : 0.82))
-                    .frame(height: 2)
-            }
+            .frame(width: width, height: 78)
 
-            VStack(spacing: 2) {
-                Text(player.displayName)
-                    .font(.system(size: 13, weight: .bold, design: .rounded))
+            Text(player.displayName)
+                .font(.caption.weight(.bold))
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1)
+                .multilineTextAlignment(.center)
+                .minimumScaleFactor(0.5)
+                .foregroundStyle(primaryTextColor)
+                .padding(.horizontal, 3)
+                .frame(width: width, height: labelHeight)
+                .background(Color(red: 0.02, green: 0.12, blue: 0.08))
+
+            if showsPoints {
+                Text(scoreLabel)
+                    .font(.caption.weight(.medium))
+                    .monospacedDigit()
                     .lineLimit(1)
-                    .minimumScaleFactor(0.72)
-                    .foregroundStyle(primaryTextColor)
-
-                if detailMode == .opponent {
-                    Text(opponentDisplayText)
-                        .font(.system(size: 11, weight: .bold, design: .rounded))
-                        .monospacedDigit()
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.82)
-                        .foregroundStyle(opponentDifficultyTextColor)
-                        .padding(.vertical, 2.5)
-                        .frame(width: max(0, width - 12))
-                        .background(
-                            Capsule(style: .continuous)
-                                .fill(opponentDifficultyColor)
-                        )
-                } else if detailMode == .difficulty {
-                    difficultyDots
-                } else {
-                    Text(secondaryDisplayText)
-                        .font(.system(size: 11, weight: .semibold, design: .rounded))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.76)
-                        .foregroundStyle(secondaryTextColor)
-                }
+                    .minimumScaleFactor(0.65)
+                    .foregroundStyle(Color(red: 0.06, green: 0.22, blue: 0.15))
+                    .frame(width: width, height: labelHeight)
+                    .background(Color(red: 0.82, green: 0.90, blue: 0.84))
             }
-            .padding(.horizontal, 5)
-            .padding(.vertical, 5)
-            .frame(width: width)
-            .background(Color(red: 0.02, green: 0.035, blue: 0.031).opacity(0.96))
 
-            scoreStatusPill(scorePresentation)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
-                .frame(width: width)
-                .background(Color(red: 0.02, green: 0.035, blue: 0.031).opacity(0.96))
         }
         .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
         .overlay {
             ZStack {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(
-                        LinearGradient(
-                            colors: [clubAccentColor.opacity(0.82), Color.white.opacity(0.18), clubAccentColor.opacity(0.36)],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
+                        Color.white.opacity(0.22),
                         lineWidth: 1.15
                     )
 
                 if isInPlay {
-                    FantasyPlayerLiveOutline(cornerRadius: cornerRadius)
+                    RoundedRectangle(cornerRadius: cornerRadius).strokeBorder(Color.mint.opacity(0.9), lineWidth: 1.3)
                 }
 
                 if isTripleCaptain {
@@ -5467,12 +5414,6 @@ private struct FantasyPlayerCard: View {
             }
         }
         .opacity(player.isUnavailable ? 0.72 : 1)
-        .shadow(
-            color: isInPlay ? Color.red.opacity(0.28) : Color.clear,
-            radius: 4,
-            x: 0,
-            y: 0
-        )
         .shadow(
             color: Color.black.opacity(0.36),
             radius: 5,
@@ -5544,106 +5485,34 @@ private struct FantasyPlayerCard: View {
         return String(count)
     }
 
+    private var scoreLabel: String {
+        switch scorePresentation {
+        case .expected(let points): return "\(fantasyExpectedPointsText(points)) xP"
+        case .live(let points), .provisional(let points), .confirmed(let points):
+            return "\(points) \(points == 1 ? "pt" : "pts")"
+        case .pending: return "—"
+        case .expectedUnavailable: return "… xP"
+        case .noFixture: return "No game"
+        }
+    }
+
     @ViewBuilder
-    private func scoreStatusPill(_ presentation: ScorePresentation) -> some View {
-        switch presentation {
-        case .expected(let expectedPoints):
-            statusPill(
-                score: "\(fantasyExpectedPointsText(expectedPoints)) xP",
-                label: nil,
-                primaryColor: Color(red: 0.75, green: 0.30, blue: 0.96),
-                fillColor: Color(red: 0.27, green: 0.055, blue: 0.37)
-            )
-        case .live(let points):
-            FantasyPlayerLiveScorePill(points: points)
-        case .provisional(let points):
-            statusPill(
-                score: "\(points)",
-                label: nil,
-                primaryColor: fantasyProvisionalPointsTint(points),
-                fillColor: fantasyProvisionalPointsTint(points).opacity(0.31)
-            )
-        case .confirmed(let points):
-            statusPill(
-                score: "\(points)",
-                label: "confirmed",
-                primaryColor: Color(red: 0.20, green: 0.55, blue: 1.0),
-                fillColor: Color(red: 0.035, green: 0.17, blue: 0.34)
-            )
-        case .pending:
-            statusPill(
-                score: "–",
-                label: nil,
-                primaryColor: Color.white.opacity(0.48),
-                fillColor: Color.white.opacity(0.07)
-            )
-        case .expectedUnavailable:
-            loadingExpectedPointsPill
-        case .noFixture:
-            statusPill(
-                score: "No game",
-                label: nil,
-                primaryColor: Color.white.opacity(0.35),
-                fillColor: Color.white.opacity(0.06)
-            )
-        }
-    }
-
-    private func statusPill(
-        score: String,
-        label: String?,
-        primaryColor: Color,
-        fillColor: Color
-    ) -> some View {
-        HStack(spacing: 0) {
-            Text(score)
-                .font(.system(size: 9.5, weight: .bold, design: .rounded))
-                .monospacedDigit()
+    private var portraitDetail: some View {
+        if detailMode == .difficulty {
+            difficultyDots
+                .padding(3)
+                .background(.black.opacity(0.65), in: Capsule())
+        } else {
+            Text(secondaryDisplayText)
+                .font(.system(size: 9, weight: .bold, design: .rounded))
                 .lineLimit(1)
-                .minimumScaleFactor(0.78)
-                .foregroundStyle(Color.white.opacity(0.96))
-                .frame(maxWidth: .infinity)
-                .padding(.leading, label == nil ? 0 : 5)
-
-            if let label {
-                Text(label)
-                    .font(.system(size: label == "confirmed" ? 7.5 : 8.5, weight: .heavy, design: .rounded))
-                    .lineLimit(1)
-                    .foregroundStyle(Color.white.opacity(0.96))
-                    .padding(.horizontal, 5)
-                    .padding(.vertical, 2)
-                    .background(primaryColor.opacity(0.88), in: Capsule(style: .continuous))
-                    .padding(.trailing, 2)
-            }
+                .minimumScaleFactor(0.7)
+                .foregroundStyle(detailMode == .opponent ? opponentDifficultyTextColor : .white)
+                .padding(.horizontal, 4)
+                .padding(.vertical, 2)
+                .background(detailMode == .opponent ? opponentDifficultyColor : .black.opacity(0.65), in: Capsule())
+                .frame(maxWidth: max(0, width - (player.isCaptain || player.isViceCaptain || isSubstitutedOff ? 25 : 8)), alignment: .leading)
         }
-        .padding(.vertical, 2.5)
-        .background(fillColor, in: Capsule(style: .continuous))
-        .overlay(
-            Capsule(style: .continuous)
-                .stroke(primaryColor.opacity(0.92), lineWidth: 0.85)
-        )
-    }
-
-    private var loadingExpectedPointsPill: some View {
-        let purple = Color(red: 0.75, green: 0.30, blue: 0.96)
-
-        return HStack(spacing: 4) {
-            ProgressView()
-                .controlSize(.mini)
-                .tint(.white.opacity(0.92))
-
-            Text("xP")
-                .font(.system(size: 9.5, weight: .bold, design: .rounded))
-                .foregroundStyle(Color.white.opacity(0.96))
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 2.5)
-        .background(Color(red: 0.27, green: 0.055, blue: 0.37).opacity(0.48), in: Capsule(style: .continuous))
-        .overlay(
-            Capsule(style: .continuous)
-                .stroke(purple.opacity(0.85), lineWidth: 0.85)
-        )
-        .accessibilityLabel("Calculating expected points")
     }
 
     private func fixtureDifficultyColor(_ difficulty: Int) -> Color {
@@ -5761,16 +5630,6 @@ private struct FantasyPlayerCard: View {
         )
         .foregroundStyle(textColor)
     }
-}
-
-func fantasyPreviousTeamPickerTitle(finalScore: Int?) -> String {
-    guard let finalScore else { return "Previous team" }
-    return "Previous team (\(finalScore))"
-}
-
-private enum FantasyTeamViewMode: Hashable {
-    case current
-    case previous
 }
 
 private struct FantasyRivalRankSnapshot: Equatable {
@@ -6254,145 +6113,6 @@ private struct FantasyTeamSummaryRing: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(centerText ?? "Calculating value")
     }
-}
-
-private struct FantasyTransferDeadlineLabel: View {
-    let gameweekID: Int?
-    let deadlineTime: String?
-
-    var body: some View {
-        if let deadline = Self.parseDeadline(deadlineTime) {
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                let text = Self.displayText(deadline: deadline, gameweekID: gameweekID, now: context.date)
-                let isUrgent = Self.isUrgent(deadline: deadline, now: context.date)
-
-                Group {
-                    if isUrgent {
-                        HStack(spacing: 6) {
-                            Image(systemName: "exclamationmark.triangle.fill")
-                                .foregroundStyle(Color.orange)
-                            Text(text)
-                        }
-                        .font(.caption.monospacedDigit().weight(.semibold))
-                        .foregroundStyle(.primary)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(
-                            Capsule(style: .continuous)
-                                .fill(Color.orange.opacity(0.16))
-                        )
-                        .overlay(
-                            Capsule(style: .continuous)
-                                .stroke(Color.orange.opacity(0.35), lineWidth: 1)
-                        )
-                    } else {
-                        Text(text)
-                            .font(.caption2.monospacedDigit().weight(.medium))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-                .lineLimit(3)
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity)
-            }
-        }
-    }
-
-    private static func displayText(deadline: Date, gameweekID: Int?, now: Date) -> String {
-        let calendar = Calendar.autoupdatingCurrent
-        let weekday = weekdayFormatter.string(from: deadline)
-        let day = calendar.component(.day, from: deadline)
-        let time = timeFormatter.string(from: deadline)
-        let prefix = prefixText(
-            gameweekID: gameweekID,
-            weekday: weekday,
-            day: day,
-            time: time
-        )
-
-        let remainingInterval = deadline.timeIntervalSince(now)
-        guard remainingInterval > 0 else {
-            return prefix
-        }
-
-        if remainingInterval >= 24 * 60 * 60 {
-            let remainingDays = max(1, Int(floor(remainingInterval / (24 * 60 * 60))))
-            let dayLabel = remainingDays == 1 ? "day" : "days"
-            return "\(prefix) (\(remainingDays) \(dayLabel))"
-        }
-
-        let remainingSeconds = Int(remainingInterval)
-        let hours = remainingSeconds / 3600
-        let minutes = (remainingSeconds % 3600) / 60
-        let seconds = remainingSeconds % 60
-        return "\(prefix) (\(String(format: "%02d:%02d:%02d", hours, minutes, seconds)))"
-    }
-
-    private static func prefixText(gameweekID: Int?, weekday: String, day: Int, time: String) -> String {
-        if let gameweekID {
-            return "GW \(gameweekID) deadline: \(weekday) \(day)\(ordinalSuffix(for: day)), \(time)"
-        }
-        return "Deadline: \(weekday) \(day)\(ordinalSuffix(for: day)), \(time)"
-    }
-
-    private static func isUrgent(deadline: Date, now: Date) -> Bool {
-        let remainingSeconds = deadline.timeIntervalSince(now)
-        return remainingSeconds > 0 && remainingSeconds < 24 * 60 * 60
-    }
-
-    private static func parseDeadline(_ rawValue: String?) -> Date? {
-        let trimmed = (rawValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        if let date = deadlineFormatterWithFractionalSeconds.date(from: trimmed) {
-            return date
-        }
-        return deadlineFormatter.date(from: trimmed)
-    }
-
-    private static func ordinalSuffix(for day: Int) -> String {
-        let remainder100 = day % 100
-        if remainder100 >= 11 && remainder100 <= 13 {
-            return "th"
-        }
-
-        switch day % 10 {
-        case 1:
-            return "st"
-        case 2:
-            return "nd"
-        case 3:
-            return "rd"
-        default:
-            return "th"
-        }
-    }
-
-    private static let deadlineFormatterWithFractionalSeconds: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }()
-
-    private static let deadlineFormatter: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter
-    }()
-
-    private static let weekdayFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_GB")
-        formatter.setLocalizedDateFormatFromTemplate("EEEE")
-        return formatter
-    }()
-
-    private static let timeFormatter: DateFormatter = {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_GB_POSIX")
-        formatter.dateFormat = "HH:mm"
-        return formatter
-    }()
 }
 
 struct FantasySelectedPlayerSelection: Identifiable {
@@ -6930,6 +6650,7 @@ private struct FantasyLeagueShareSnapshotView: View {
 }
 
 private struct FantasyAssistantManagerSheet: View {
+    @ScaledMetric(relativeTo: .caption) private var playerLabelHeight = 20.0
     let entryID: Int
     let apiBaseURL: String
     let currentUserScore: Int
@@ -7468,7 +7189,7 @@ private struct FantasyAssistantManagerSheet: View {
                 .padding(.top, 10)
                 .padding(.trailing, 10)
         }
-        .frame(height: 540)
+        .frame(height: 4 * (78 + 2 * playerLabelHeight) + 68)
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 20, style: .continuous)
@@ -7505,7 +7226,7 @@ private struct FantasyAssistantManagerSheet: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        .frame(height: 122)
+        .frame(height: 78 + 2 * playerLabelHeight)
     }
 
     private func assistantIdealBenchSection(_ data: FantasySquadDisplayData) -> some View {
@@ -7537,7 +7258,7 @@ private struct FantasyAssistantManagerSheet: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(height: 128)
+            .frame(height: 78 + 2 * playerLabelHeight)
             .padding(10)
             .background(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)

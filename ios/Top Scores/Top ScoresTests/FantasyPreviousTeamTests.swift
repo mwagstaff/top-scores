@@ -3,14 +3,6 @@ import Testing
 @testable import Top_Scores
 
 struct FantasyPreviousTeamTests {
-    @Test func pickerTitleOmitsUnavailableScore() {
-        #expect(fantasyPreviousTeamPickerTitle(finalScore: nil) == "Previous team")
-    }
-
-    @Test func pickerTitleIncludesFinalScore() {
-        #expect(fantasyPreviousTeamPickerTitle(finalScore: 51) == "Previous team (51)")
-    }
-
     @Test func reauthenticationIndicatorRequiresPriorSuccessfulSignIn() {
         #expect(!fantasyShouldShowReauthenticationIndicator(
             hasAuthenticatedBefore: false,
