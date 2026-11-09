@@ -15,6 +15,11 @@ struct ContentView: View {
 
     @AppStorage("fantasy.managerEntryID") private var fantasyManagerEntryID = ""
     @State private var selectedTab = 0
+    private struct BrowserPairingTarget: Identifiable { let id: String }
+    @State private var browserPairingTarget: BrowserPairingTarget?
+    @State private var invalidBrowserPairingLink = false
+    @ObservedObject private var pairingInbox = FantasyPairingInbox.shared
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var notificationManager = NotificationManager.shared
     @State private var fantasyTabBadge: String?
     @State private var fantasyTabShouldPulse = false
@@ -80,6 +85,17 @@ struct ContentView: View {
         .sheet(item: $notificationManager.pendingTVReminder) { target in
             TVReminderMatchesView(target: target)
         }
+        .sheet(item: $browserPairingTarget) { target in
+            FantasyConnectionView(pairingSecret: target.id)
+                .onAppear { CrashBreadcrumbs.record("pairing prompt presented") }
+        }
+        .onChange(of: pairingInbox.pendingURL, initial: true) { _, _ in presentPendingPairing() }
+        .onChange(of: scenePhase) { _, _ in presentPendingPairing() }
+        .alert("Pairing link incomplete", isPresented: $invalidBrowserPairingLink) {
+            Button("OK", role: .cancel) { }
+        } message: {
+            Text("Top Scores opened, but the link did not contain a valid pairing request. Generate a new QR code on the website and scan it again.")
+        }
         .onChange(of: selectedTab) { _, tab in CrashBreadcrumbs.record("tab \(tab)") }
         .background(FootballVisualStyle.pageBackground)
         .tint(Color.accentColor)
@@ -107,6 +123,16 @@ struct ContentView: View {
             .frame(width: 0, height: 0)
             .allowsHitTesting(false)
         }
+    }
+    private func presentPendingPairing() {
+        guard scenePhase == .active, let url = pairingInbox.pendingURL else { return }
+        pairingInbox.pendingURL = nil
+        selectedTab = 2
+        guard let secret = FantasyPairingURL.secret(from: url) else {
+            invalidBrowserPairingLink = true
+            return
+        }
+        browserPairingTarget = BrowserPairingTarget(id: secret)
     }
 }
 

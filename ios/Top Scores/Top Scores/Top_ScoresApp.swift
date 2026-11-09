@@ -34,6 +34,7 @@ struct Top_ScoresApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(matchesStore: matchesStore)
+                .onOpenURL { FantasyPairingInbox.shared.receive($0, source: "swiftui") }
                 .onAppear {
                     performanceDiagnosticSetSceneState(String(describing: scenePhase))
                 }
@@ -188,6 +189,15 @@ struct Top_ScoresApp: App {
 class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
     private let notificationAuthorizationDelayNanos: UInt64 = 12_000_000_000
 
+    func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession, options: UIScene.ConnectionOptions) -> UISceneConfiguration {
+        let configuration = UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
+        if connectingSceneSession.role == .windowApplication {
+            configuration.delegateClass = PairingSceneDelegate.self
+            PairingSceneDelegate.receive(options)
+        }
+        return configuration
+    }
+
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil) -> Bool {
         PerformanceSignposter.startup.emitEvent("AppDidFinishLaunching")
         UNUserNotificationCenter.current().delegate = self
@@ -243,6 +253,38 @@ class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDele
             NotificationManager.shared.pendingTVReminder = target
         }
         completionHandler()
+    }
+}
+
+@MainActor
+final class PairingSceneDelegate: NSObject, UIWindowSceneDelegate {
+    static func receive(_ options: UIScene.ConnectionOptions) {
+        for context in options.urlContexts {
+            FantasyPairingInbox.shared.receive(context.url, source: "scene-launch-url")
+        }
+        for activity in options.userActivities {
+            receive(activity, source: "scene-launch-activity")
+        }
+    }
+
+    static func receive(_ activity: NSUserActivity, source: String) {
+        guard activity.activityType == NSUserActivityTypeBrowsingWeb,
+              let url = activity.webpageURL else { return }
+        FantasyPairingInbox.shared.receive(url, source: source)
+    }
+
+    func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
+        Self.receive(connectionOptions)
+    }
+
+    func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
+        Self.receive(userActivity, source: "scene-activity")
+    }
+
+    func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+        for context in URLContexts {
+            FantasyPairingInbox.shared.receive(context.url, source: "scene-url")
+        }
     }
 }
 

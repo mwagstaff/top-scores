@@ -7,18 +7,21 @@ const TablesScreen = lazy(() =>
     default: module.TablesScreen,
   })),
 );
+const FantasyScreen = lazy(() => import("./components/FantasyScreen"));
 const MatchPage = lazy(() => import("./components/MatchPage"));
 const CompetitionPage = lazy(() => import("./components/CompetitionPage"));
 
 const TeamPage = lazy(() => import("./components/TeamPage"));
 
 interface Pages {
+  FantasyScreen: ComponentType;
   TeamPage: ComponentType;
   MatchPage: ComponentType;
   CompetitionPage: ComponentType;
   TablesScreen: ComponentType;
 }
 const defaultPages = {
+  FantasyScreen,
   TeamPage,
   MatchPage,
   CompetitionPage,
@@ -30,7 +33,7 @@ function FixturesRedirect() {
 }
 
 export default function App({ pages = defaultPages }: { pages?: Pages }) {
-  const { MatchPage, CompetitionPage, TablesScreen, TeamPage } = pages;
+  const { MatchPage, CompetitionPage, TablesScreen, TeamPage, FantasyScreen } = pages;
   return (
     <AppShell>
       <Suspense
@@ -48,6 +51,7 @@ export default function App({ pages = defaultPages }: { pages?: Pages }) {
           <Route path="/teams/:name" element={<TeamPage />} />
           <Route path="/matches/:id" element={<MatchPage />} />
           <Route path="/competitions/:name" element={<CompetitionPage />} />
+          <Route path="/fpl" element={<FantasyScreen />} />
           <Route path="/tables" element={<TablesScreen />} />
           <Route
             path="*"

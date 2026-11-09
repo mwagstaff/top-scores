@@ -1,6 +1,8 @@
 import { createContext, useContext } from "react";
 
 export interface Seed {
+  fantasy?: import("./fantasyData").Squad;
+  fantasyPath?: string;
   rendered?: boolean;
   locale?: string;
   date?: string;

@@ -1,6 +1,7 @@
 import { renderToString } from "react-dom/server";
 import { StaticRouter } from "react-router-dom";
 import App from "./client/App";
+import FantasyScreen from "./client/components/FantasyScreen";
 import { SeedContext, type Seed } from "./client/bootstrap";
 import TeamPage from "./client/components/TeamPage";
 import MatchPage from "./client/components/MatchPage";
@@ -11,6 +12,7 @@ const ServerCompetitionPage = () => (
   <CompetitionPage TablesComponent={TablesScreen} />
 );
 const pages = {
+  FantasyScreen,
   TeamPage,
   MatchPage,
   CompetitionPage: ServerCompetitionPage,

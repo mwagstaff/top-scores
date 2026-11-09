@@ -972,7 +972,7 @@ button:disabled {
     background: #0a131d;
     border-top: 1px solid #b2c7e030;
     display: grid;
-    grid-template-columns: 1.25fr 1fr 1fr 1fr;
+    grid-template-columns: 1.25fr 1fr 1fr 1fr 1fr;
     gap: 0;
     padding: 4px 8px max(8px, env(safe-area-inset-bottom));
   }
@@ -2062,3 +2062,5 @@ img[src*="/CompetitionLogo6.webp"] {
 .date-shortcuts button { flex: 0 0 90px; scroll-snap-align: center; }
 .date-shortcuts .date-offset-3, .date-shortcuts .date-offset-2 { display: flex; }
 @media (max-width: 600px) { .date-shortcuts button { flex-basis: 64px; } .scope-toggles button { flex-direction: column; } }
+
+.nav-fpl-icon { width: 20px; height: 22px; object-fit: contain; vertical-align: middle; }

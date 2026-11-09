@@ -12,9 +12,10 @@ import { ScrollPosition } from "./ScrollPosition";
 
 export function AppShell({ children }: PropsWithChildren) {
   const location = useLocation();
+  const isFantasy = location.pathname === "/fpl";
   const [competitions, setCompetitions] = useState<Competition[]>([]);
   const [catalogError, setCatalogError] = useState(false);
-  useEffect(() => { let active = true; loadCompetitions().then(items => { if (active) setCompetitions(items); }).catch(() => { if (active) setCatalogError(true); }); return () => { active = false; }; }, []);
+  useEffect(() => { if (isFantasy) return; let active = true; loadCompetitions().then(items => { if (active) setCompetitions(items); }).catch(() => { if (active) setCatalogError(true); }); return () => { active = false; }; }, [isFantasy]);
   const seed = useInitialSeed();
   const requestedDate = new URLSearchParams(location.search).get("date");
   const selectedDate = validDate(requestedDate) ? requestedDate : null;
@@ -32,6 +33,7 @@ export function AppShell({ children }: PropsWithChildren) {
     };
   });
   useEffect(() => {
+    if (isFantasy) return;
     let cancelled = false,
       running = false;
     const update = async () => {
@@ -63,7 +65,7 @@ export function AppShell({ children }: PropsWithChildren) {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", update);
     };
-  }, [selectedDate]);
+  }, [selectedDate, isFantasy]);
   useEffect(() => {
     document.documentElement.dataset.theme = "dark";
   }, []);
@@ -72,12 +74,13 @@ export function AppShell({ children }: PropsWithChildren) {
     { to: "/tv", label: "On TV", mark: "▣" },
     { to: "/results", label: "Results", mark: "↙" },
     { to: "/tables", label: "Tables", mark: "≡" },
+    { to: "/fpl", label: "FPL", mark: "♜" },
   ];
   return (
     <div className="football-app" onMouseOver={prefetchTeam} onFocus={prefetchTeam}>
       <ScrollPosition />
       <a className="skip-link" href="#main-content">
-        Skip to matches
+        Skip to content
       </a>
       <header className="site-header">
         <div className="site-header-inner">
@@ -97,15 +100,15 @@ export function AppShell({ children }: PropsWithChildren) {
           <nav className="main-nav" aria-label="Primary">
             {nav.map((item) => (
               <NavLink key={item.to} to={item.to}>
-                <span aria-hidden="true">{item.mark}</span>
+                <span aria-hidden="true">{item.to === "/fpl" ? <img className="nav-fpl-icon" src="/generated-assets/fpl-lion.png" width="20" height="22" alt="" /> : item.mark}</span>
                 <span>{item.label}</span>
               </NavLink>
             ))}
           </nav>
         </div>
       </header>
-      <div className="site-layout">
-        <aside className="league-rail" aria-label="Competitions">
+      <div className={`site-layout${isFantasy ? " site-layout-fantasy" : ""}`}>
+        {!isFantasy && <aside className="league-rail" aria-label="Competitions">
           <span className="eyebrow">Competitions</span>
           {catalogError && <p>Competitions unavailable. Reload to retry.</p>}
           {competitions.map(({ id, name, aliases }, index) => {
@@ -139,7 +142,7 @@ export function AppShell({ children }: PropsWithChildren) {
               </Link>
             );
           })}
-        </aside>
+        </aside>}
         <main id="main-content" className="site-main" tabIndex={-1}>
           {children}
         </main>

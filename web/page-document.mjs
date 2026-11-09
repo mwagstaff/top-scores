@@ -52,6 +52,7 @@ export function createPageRenderer(
   apiBaseUrl,
   renderContent,
   present = (value) => value,
+  fantasyService = null,
 ) {
   const cache = new Map();
   const pending = new Map();
@@ -203,6 +204,22 @@ export function createPageRenderer(
       title = `${decodeURIComponent(url.pathname.slice(7))} · Team details`;
       description = `${title}: season statistics, fixtures, results, squad and manager.`;
       content = `<h1>${escape(title)}</h1><p>Loading team details…</p>`;
+    } else if (url.pathname === "/fpl") {
+      title = "Fantasy Premier League";
+      const entry = url.searchParams.get("entry");
+      const event = url.searchParams.get("event");
+      if (fantasyService && /^[1-9]\d{0,8}$/.test(entry || "") && (!event || /^[1-9]\d{0,8}$/.test(event))) {
+        try {
+          let timer;
+          const fantasy = await Promise.race([
+            fantasyService.squad(Number(entry), Number(event) || undefined),
+            new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('SSR timeout')), 1500); }),
+          ]).finally(() => clearTimeout(timer));
+          seed = { fantasy, fantasyPath: `/api/fpl/entry/${entry}${event ? `?event=${event}` : ""}` };
+        } catch { /* Render the usable shell; the client provides retry and errors. */ }
+      }
+      description = "Your published FPL squad, live points, rivals, leagues and player analysis on Top Scores.";
+      content = "<h1>Fantasy Premier League</h1><p>Follow your team using your public manager ID.</p>";
     } else if (url.pathname === "/tables") {
       title = "League tables";
       content = "<h1>League tables</h1><p>Standings and live positions.</p>";

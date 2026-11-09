@@ -12,6 +12,7 @@ const sharedRoot = path.join(webRoot, "server-shared");
 fs.mkdirSync(sharedRoot, { recursive: true });
 for (const [source, destination] of [
   ["broadcast_priorities.js", "broadcast_priorities.cjs"],
+  ["fantasy_public_score.js", "fantasy_public_score.cjs"],
   ["tv_provider_priorities.json", "tv_provider_priorities.json"],
 ]) {
   const sourcePath = path.join(repoRoot, "api", source);

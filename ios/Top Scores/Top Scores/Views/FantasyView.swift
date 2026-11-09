@@ -56,6 +56,8 @@ struct FantasyView: View {
     @State private var leagueRowHeights: [Int: CGFloat] = [:]
     @State private var leagueIDLoadingDetails: Set<Int> = []
     @State private var showAddRivalSheet = false
+    @State private var showWebsiteConnection = false
+    @ObservedObject private var preferenceSync = FantasyPreferenceSync.shared
     @State private var addSheetMode: FantasyIDAddMode = .rival
     @State private var rivalEntryInput = ""
     @State private var managerEntryInput = ""
@@ -120,6 +122,14 @@ struct FantasyView: View {
     private let fantasyRefreshTimer = Timer.publish(every: 30.0, on: .main, in: .common).autoconnect()
     var body: some View {
         lifecycleBoundView
+            .sheet(isPresented: $showWebsiteConnection) { FantasyConnectionView() }
+            .task(id: isSelected && scenePhase == .active) {
+                guard isSelected, scenePhase == .active else { return }
+                while !Task.isCancelled {
+                    await preferenceSync.synchronize()
+                    do { try await Task.sleep(for: .seconds(15)) } catch { break }
+                }
+            }
     }
 
     private var baseNavigationView: some View {
@@ -597,6 +607,17 @@ struct FantasyView: View {
     private var linkedFantasyView: some View {
         FantasyContributionScrollView {
             VStack(spacing: 12) {
+                HStack {
+                    if preferenceSync.conflict != nil {
+                        Text("Sync needs your attention").font(.caption).foregroundStyle(.orange)
+                    }
+                    Spacer()
+                    Button { showWebsiteConnection = true } label: {
+                        Label(preferenceSync.connected ? "Manage website sync" : "Use on website", systemImage: "link")
+                            .font(.subheadline)
+                    }
+                    .frame(minHeight: 44)
+                }
                 if fantasyViewModel.isRefreshing {
                     HStack(spacing: 8) {
                         ProgressView()

@@ -9,6 +9,32 @@ import XCTest
 
 final class Top_ScoresUITests: XCTestCase {
 
+    @MainActor
+    func testIncompleteBrowserPairingLinkShowsAnExplanation() throws {
+        let app = XCUIApplication()
+        app.open(URL(string: "https://top-scores.skynolimit.dev/fpl/connect")!)
+        XCTAssertTrue(app.alerts["Pairing link incomplete"].waitForExistence(timeout: 30))
+    }
+
+    @MainActor
+    func testBrowserPairingLinkOpensFromColdLaunch() throws {
+        let app = XCUIApplication()
+        app.terminate()
+        let secret = String(repeating: "a", count: 43)
+        app.open(URL(string: "https://top-scores.skynolimit.dev/fpl/connect#pair=\(secret)")!)
+        XCTAssertTrue(app.navigationBars["Connect browser"].waitForExistence(timeout: 30))
+    }
+
+    @MainActor
+    func testBrowserPairingLinkOpensWhileRunning() throws {
+        let app = XCUIApplication()
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons["Scores"].waitForExistence(timeout: 30))
+        let secret = String(repeating: "a", count: 43)
+        app.open(URL(string: "topscores://fpl-connect#pair=\(secret)")!)
+        XCTAssertTrue(app.navigationBars["Connect browser"].waitForExistence(timeout: 30))
+    }
+
     override func setUpWithError() throws {
         // Put setup code here. This method is called before the invocation of each test method in the class.
 

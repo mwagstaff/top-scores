@@ -2,6 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
+import { registerFantasy } from "./fantasy.mjs";
+import { registerFantasySync } from "./fpl-sync.mjs";
+import { registerFantasyAppLinks } from "./fpl-app-links.mjs";
 import { registerArtwork } from "./artwork.mjs";
 import { createTeamLogoResolver } from "./team-logos.mjs";
 import { createPageRenderer } from "./page-document.mjs";
@@ -81,6 +84,9 @@ const app = express();
 app.get("/fixtures", (req, res) => res.redirect(308, `/${req.originalUrl.includes("?") ? req.originalUrl.slice(req.originalUrl.indexOf("?")) : ""}`));
 
 app.disable("x-powered-by");
+const fantasyService = registerFantasy(app);
+registerFantasySync(app);
+registerFantasyAppLinks(app);
 registerArtwork(app, apiBaseUrl);
 
 const canonicalOrigin = (process.env.TOP_SCORES_WEB_ORIGIN || "https://top-scores.skynolimit.dev").replace(/\/+$/, "");
@@ -253,11 +259,11 @@ async function start() {
     });
 
     const { render } = await import("./dist-server/server-entry.js");
-    const renderPage = createPageRenderer(apiBaseUrl, render, broadcastPriorities.apply);
+    const renderPage = createPageRenderer(apiBaseUrl, render, broadcastPriorities.apply, fantasyService);
     const manifest = JSON.parse(await fs.promises.readFile(path.join(productionClientRoot, ".vite/manifest.json"), "utf8"));
     const routeAssets = url => {
       const route = new URL(url, canonicalOrigin).pathname;
-      const component = route.startsWith("/matches/") ? "MatchPage" : route.startsWith("/competitions/") ? "CompetitionPage" : route === "/tables" ? "TablesScreen" : null;
+      const component = route.startsWith("/matches/") ? "MatchPage" : route.startsWith("/competitions/") ? "CompetitionPage" : route === "/tables" ? "TablesScreen" : route === "/fpl" ? "FantasyScreen" : null;
       const visited = new Set(), css = new Set(), scripts = new Set();
       const visit = key => {
         if (visited.has(key) || !manifest[key]) return;
@@ -292,7 +298,7 @@ async function start() {
     const renderDevelopmentPage = createPageRenderer(apiBaseUrl, async (url, seed) => {
       const { render } = await vite.ssrLoadModule("/src/server-entry.tsx");
       return render(url, seed);
-    }, broadcastPriorities.apply);
+    }, broadcastPriorities.apply, fantasyService);
 
     app.get("*", async (req, res, next) => {
       try {
