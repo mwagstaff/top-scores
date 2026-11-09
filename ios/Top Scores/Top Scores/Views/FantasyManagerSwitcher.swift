@@ -65,12 +65,7 @@ struct FantasyManagerSwitcher: View {
         let stale = staleEntryIDs.contains(entry.entryID) && displayedScore(entry) != nil
         return Button { select(entry.entryID) } label: {
             VStack(spacing: 10) {
-                ZStack {
-                    Circle().fill(Color(.secondarySystemGroupedBackground))
-                    badge(entry)
-                }
-                .frame(width: badgeSize, height: badgeSize)
-                .overlay(Circle().strokeBorder(.white.opacity(0.15), lineWidth: 1))
+                FantasyManagerBadge(entryID: entry.entryID, source: entry.clubBadgeSrc, size: badgeSize)
                 .overlay {
                     if selected {
                         Circle().stroke(Color.accentColor, lineWidth: 2)
@@ -104,34 +99,6 @@ struct FantasyManagerSwitcher: View {
         .accessibilityHint("Shows this manager’s team")
     }
 
-    @ViewBuilder
-    private func badge(_ entry: FantasyLeagueTableEntry) -> some View {
-        if let source = entry.clubBadgeSrc, let url = URL(string: source) {
-            AsyncImage(url: url) { phase in
-                if let image = phase.image {
-                    image.resizable().scaledToFill()
-                        .frame(width: badgeSize, height: badgeSize)
-                        .clipShape(Circle())
-                } else {
-                    fallbackBadge(entry.entryID)
-                }
-            }
-        } else {
-            fallbackBadge(entry.entryID)
-        }
-    }
-
-    private func fallbackBadge(_ entryID: Int) -> some View {
-        let hue = Double((entryID.magnitude &* 137) % 360) / 360
-        return Circle()
-            .fill(Color(hue: hue, saturation: 0.4, brightness: 0.45))
-            .overlay {
-                Image(systemName: "tshirt.fill")
-                    .font(.system(size: badgeSize * 0.42))
-                    .foregroundStyle(Color(hue: hue, saturation: 0.22, brightness: 0.95))
-            }
-    }
-
     private func displayedScore(_ entry: FantasyLeagueTableEntry) -> Int? {
         entry.squad?.scorePhase == .expected ? nil : entry.currentGameweekScore
     }
@@ -141,6 +108,50 @@ struct FantasyManagerSwitcher: View {
         let score = displayedScore(entry).map { "\($0) points" } ?? "Score unavailable"
         return week + score + (stale ? ", saved score, refreshing" : "")
     }
+}
+
+struct FantasyManagerBadge: View {
+    let entryID: Int
+    let source: String?
+    let size: CGFloat
+
+    var body: some View {
+        ZStack {
+            Circle().fill(Color(.secondarySystemGroupedBackground))
+            badge
+        }
+        .frame(width: size, height: size)
+        .overlay(Circle().strokeBorder(.white.opacity(0.15), lineWidth: 1))
+    }
+
+    @ViewBuilder
+    private var badge: some View {
+        if let source, let url = URL(string: source) {
+            AsyncImage(url: url) { phase in
+                if let image = phase.image {
+                    image.resizable().scaledToFill()
+                        .frame(width: size, height: size)
+                        .clipShape(Circle())
+                } else {
+                    fallbackBadge(entryID)
+                }
+            }
+        } else {
+            fallbackBadge(entryID)
+        }
+    }
+
+    private func fallbackBadge(_ entryID: Int) -> some View {
+        let hue = Double((entryID.magnitude &* 137) % 360) / 360
+        return Circle()
+            .fill(Color(hue: hue, saturation: 0.4, brightness: 0.45))
+            .overlay {
+                Image(systemName: "tshirt.fill")
+                    .font(.system(size: size * 0.42))
+                    .foregroundStyle(Color(hue: hue, saturation: 0.22, brightness: 0.95))
+            }
+    }
+
 }
 
 private struct FantasyManagerPillButtonStyle: ButtonStyle {

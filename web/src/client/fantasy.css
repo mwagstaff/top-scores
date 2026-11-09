@@ -145,3 +145,66 @@
 .fpl-pair-layout label { flex-wrap: wrap; }
 .fpl-pair-layout select { width: 100%; max-width: 100%; min-width: 0; }
 @media (max-width: 700px) { .fpl-pair-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; } .fpl-pair-qr { width: min(280px, 100%); min-height: 0; aspect-ratio: 1; } }
+/* FPL: compact app-style selectors and a pitch-led desktop layout. */
+.fpl-heading { margin: 0 0 16px; }
+.fpl-heading h1 { font-size: clamp(28px, 3vw, 38px); }
+.fpl-deadline { font-size: 13px; color: #91a3b8; margin: 8px 0 0; }
+.fpl-deadline.is-close { color: #ffce70; }
+.fpl-team-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; }
+.fpl-team-actions button { color: #91a3b8; white-space: nowrap; }
+.fpl-sync-dialog { width: min(800px, calc(100vw - 32px)); max-height: 90dvh; overflow: auto; color: #f2f5fa; background: #0a131d; border: 1px solid #304457; border-radius: 16px; padding: 24px; }
+.fpl-sync-dialog::backdrop { background: #04080ccc; }
+.fpl-tabs { overflow: visible; flex-wrap: wrap; }
+.fpl-context { font-size: 11px; margin: 6px 0 12px; }
+.fpl-context span { display: inline; margin-left: 8px; }
+.fpl-manager-strip { display: flex; gap: 18px; overflow-x: auto; padding: 10px 4px 18px; margin: 8px 0 16px; }
+.fpl-page .fpl-manager-pill { border: 0; background: transparent; padding: 0; flex-shrink: 0; display: flex; flex-direction: column; align-items: center; gap: 8px; color: #91a3b8; font-weight: 700; font-size: 12px; }
+.fpl-manager-circle { position: relative; padding: 4px; border: 2px solid transparent; border-radius: 50%; }
+.fpl-manager-pill[aria-pressed=true] .fpl-manager-circle { border-color: #2aa8ff; }
+.fpl-manager-pill.is-you { color: #2aa8ff; }
+.fpl-manager-circle > b { position: absolute; right: -5px; top: -4px; border: 2px solid #04080c; background: #f2f5fa; border-radius: 18px; padding: 2px 7px; color: #0a131d; font-size: 15px; }
+.fpl-manager-badge { display: grid; place-items: center; width: 64px; height: 64px; border-radius: 50%; overflow: hidden; flex-shrink: 0; color: #f2f5fa; background: #007ec5; }
+.fpl-manager-badge img { width: 100%; height: 100%; object-fit: cover; }
+.fpl-manager-badge.colour-1 { background: #72517a; }.fpl-manager-badge.colour-2 { background: #236c62; }.fpl-manager-badge.colour-3 { background: #975735; }.fpl-manager-badge.colour-4 { background: #465da1; }.fpl-manager-badge.colour-5 { background: #8d4357; }
+.fpl-page .fpl-manager-add { flex-shrink: 0; border: 0; border-left: 1px solid #91a3b830; border-radius: 0; padding: 0 18px; background: transparent; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; font-size: 12px; color: #2aa8ff; }
+.fpl-manager-add > span { width: 64px; height: 64px; border: 1px dashed #2aa8ff88; border-radius: 50%; display: grid; place-items: center; font-size: 36px; background: #0e1b2a; }
+.fpl-dashboard { grid-template-columns: minmax(0, 1.8fr) minmax(330px, 1fr); gap: 26px; }
+.fpl-pitch { padding: 24px 14px 14px; border-radius: 28px; border: 2px solid #54776188; background: repeating-linear-gradient(90deg,#0c3324 0%,#0c3324 12.5%,#103b2b 12.5%,#103b2b 25%); }
+.fpl-pitch::before, .fpl-pitch::after { display: none; }
+.fpl-pitch-markings { position: absolute; inset: 12px; width: calc(100% - 24px); height: calc(100% - 24px); pointer-events: none; fill: none; stroke: #b1d2b66b; stroke-width: 2; z-index: -1; }
+.fpl-position { gap: clamp(3px, 1vw, 14px); padding: 10px 0; position: relative; }
+.fpl-page .fpl-player { width: 116px; padding: 0; border: 1px solid #a1c2b05c; border-radius: 16px; overflow: hidden; background: linear-gradient(155deg,#31533a,#0a211c); gap: 0; }
+.fpl-page .fpl-player:hover { background: #26503a; border-color: #c7e7cb; transform: translateY(-2px); }
+.fpl-player-photo, .fpl-player-photo img { width: 88px; height: 112px; }
+.fpl-player > strong { padding: 5px 2px; font-size: 13px; }
+.fpl-player-detail { align-self: flex-start; background: #54ad50; border-radius: 12px; color: #062312; padding: 4px 7px; margin: 5px; font-size: 10px; font-weight: 750; }
+.fpl-player-detail.difficulty-3 { background: #e9ab2e; color: #342505; }.fpl-player-detail.difficulty-4 { background: #dc643b; color: #fff5ef; }.fpl-player-detail.difficulty-5 { background: #a32247; color: #fff5ef; }
+.fpl-player-score { font-size: 14px; padding: 4px; }
+.fpl-player-events { min-height: 0; background: #dbece1; color: #071b1d; width: 100%; }
+.fpl-player-photo b { background: #ffe12d; right: 0; top: 0; }
+.fpl-pitch-stat { position: absolute; top: 18px; width: 20%; max-width: 125px; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 7px; font-size: 11px; color: #d5e5d9; z-index: 1; }
+.fpl-points-stat { left: 20px; }.fpl-value-stat { right: 20px; }
+.fpl-pitch-stat strong { width: 80px; height: 80px; display: grid; place-items: center; border: 6px solid #2aa8ff; border-radius: 50%; font-size: 20px; background: #0b231ede; }
+.fpl-value-stat strong { border-color: #20bd62; font-size: 14px; }
+.fpl-pitch-stat small { font-size: 10px; }
+.fpl-bench { margin-top: 16px; border-radius: 22px; background: #0c1921; }
+.fpl-rivals { border: 1px solid #91a3b825; border-radius: 20px; padding: 18px; align-self: start; background: #0a131d80; }
+.fpl-rivals-labels { display: grid; grid-template-columns: 1fr 40px 60px; gap: 8px; padding: 18px 22px 6px 0; color: #91a3b8; font-size: 11px; text-align: right; }
+.fpl-rivals-labels > :first-child { text-align: left; }
+.fpl-page .fpl-rival > button:first-child { grid-template-columns: 36px minmax(0, 1fr) 32px 52px; align-items: center; gap: 8px; padding: 12px 2px; }
+.fpl-rival .fpl-manager-badge { width: 36px; height: 36px; display: grid; font-size: 11px; }
+.fpl-rival button > strong { text-align: right; }
+.fpl-rival button > span:nth-child(2) { text-align: left; }
+.fpl-rival.is-you { background: #2aa8ff16; box-shadow: inset 2px 0 #2aa8ff; }
+.fpl-rival.is-you strong { color: #75caff; }
+.fpl-rival small { font-size: 10px; }
+.fpl-page .fpl-remove { padding: 2px 4px; }
+.fpl-page .fpl-add-rival { width: 100%; margin: 12px 0 0; color: #2aa8ff; background: #0d3047; border: 0; border-radius: 24px; }
+.fpl-page .fpl-league-link { align-items: center; padding: 12px 0; }
+.fpl-league-link > span:nth-child(2) { flex: 1; }
+.fpl-league-initial { width: 32px; height: 32px; border-radius: 10px; background: #087ebc; display: grid; place-items: center; color: #f2f5fa; font-weight: 700; }
+@media(max-width: 1000px) { .fpl-dashboard { grid-template-columns: minmax(0,1fr); }.fpl-rivals { padding: 18px; }.fpl-pitch { max-width: 800px; margin: auto; }.fpl-bench { max-width: 800px; margin: 16px auto 0; } }
+@media(max-width: 600px) { .fpl-team-actions { gap: 0; }.fpl-manager-strip { gap: 10px; }.fpl-manager-badge { width: 54px; height: 54px; }.fpl-manager-add > span { width: 54px; height: 54px; }.fpl-context span { display: none; }.fpl-pitch { padding: 14px 6px 8px; border-radius: 22px; }.fpl-player-photo,.fpl-player-photo img { width: 58px; height: 74px; }.fpl-player > strong { font-size: 10px; }.fpl-player-detail { font-size: 9px; margin: 3px; padding: 3px; }.fpl-player-score { font-size: 12px; }.fpl-pitch-stat { top: 16px; font-size: 9px; gap: 4px; }.fpl-points-stat { left: 8px; }.fpl-value-stat { right: 8px; }.fpl-pitch-stat strong { width: 52px; height: 52px; border-width: 4px; font-size: 15px; }.fpl-value-stat strong { font-size: 10px; }.fpl-pitch-stat small { font-size: 8px; }.fpl-sync-dialog { padding: 16px; }.fpl-page .fpl-player { width: 20%; }.fpl-position { gap: 4px; } }
+
+.fpl-portrait-fallback { display: grid; place-items: center; width: 88px; height: 112px; margin: auto; border-radius: 50% 50% 0 0; background: #174a3d; color: #b7dbcd; font-weight: 800; }
+@media (max-width: 600px) { .fpl-portrait-fallback { width: 58px; height: 74px; } }

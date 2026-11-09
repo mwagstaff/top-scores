@@ -44,9 +44,10 @@ export function createFantasyService(fetcher = fetch) {
       ]);
       // A failed component never publishes a partial score/status snapshot.
       const compactEvent = ({ id, name, deadline_time, data_checked, average_entry_score, highest_score }) => ({ id, name, deadline_time, data_checked, average_entry_score, highest_score });
-      const { id, name, player_first_name, player_last_name, summary_overall_points, summary_overall_rank } = profile;
-      return { profile: { id, name, player_first_name, player_last_name, summary_overall_points, summary_overall_rank,
-          leagues: { classic: (profile.leagues?.classic || []).map(({ id, name, entry_rank, entry_last_rank }) => ({ id, name, entry_rank, entry_last_rank })) } },
+      const { id, name, player_first_name, player_last_name, summary_overall_points, summary_overall_rank, club_badge_src } = profile;
+      return { profile: { id, name, player_first_name, player_last_name, summary_overall_points, summary_overall_rank, club_badge_src,
+          leagues: { classic: (profile.leagues?.classic || []).map(({ id, name, entry_rank, entry_last_rank, league_type }) => ({ id, name, entry_rank, entry_last_rank, league_type })) } },
+        nextDeadline: bootstrap.events.find(e => Date.parse(e.deadline_time) > Date.now())?.deadline_time || null,
         event: compactEvent(event), events: published.map(compactEvent), teams: bootstrap.teams.map(({ id, name, short_name }) => ({ id, name, short_name })), totalPlayers: bootstrap.total_players,
         ...scoring.scorePublicSquad({ bootstrap, picks, live, fixtures, event }),
         nextExpectedPoints: event.id === published.at(-1)?.id ? picks.picks.filter(p => p.position <= 11).reduce((sum, pick) => {

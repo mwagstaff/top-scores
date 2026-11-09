@@ -35,6 +35,13 @@ struct Top_ScoresApp: App {
         WindowGroup {
             ContentView(matchesStore: matchesStore)
                 .onOpenURL { FantasyPairingInbox.shared.receive($0, source: "swiftui") }
+                .task(id: scenePhase) {
+                    guard scenePhase == .active else { return }
+                    while !Task.isCancelled {
+                        await FantasyPreferenceSync.shared.synchronize()
+                        do { try await Task.sleep(for: .seconds(15)) } catch { break }
+                    }
+                }
                 .onAppear {
                     performanceDiagnosticSetSceneState(String(describing: scenePhase))
                 }

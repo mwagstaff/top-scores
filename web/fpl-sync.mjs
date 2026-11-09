@@ -15,12 +15,14 @@ export function validatePreferences(value) {
   const validID = n => Number.isSafeInteger(n) && n > 0 && n < 1e9;
   if (!value || (value.manager !== null && !validID(value.manager)) ||
       !Array.isArray(value.rivals) || value.rivals.length > 100 || !value.rivals.every(validID) ||
+      (value.leagueOrder !== undefined && (!Array.isArray(value.leagueOrder) || value.leagueOrder.length > 100 || !value.leagueOrder.every(validID))) ||
       !Array.isArray(value.leagues) || value.leagues.length > 100 ||
       !value.leagues.every(l => l && validID(l.id) && typeof l.name === 'string' && l.name.length <= 200)) {
     fail(400, 'Invalid FPL preferences. Use up to 100 rivals and 100 leagues.');
   }
   return { manager: value.manager, rivals: [...new Set(value.rivals)].filter(id => id !== value.manager),
-    leagues: [...new Map(value.leagues.map(l => [l.id, { id: l.id, name: l.name }])).values()] };
+    leagues: [...new Map(value.leagues.map(l => [l.id, { id: l.id, name: l.name }])).values()],
+    ...(value.leagueOrder !== undefined ? { leagueOrder: [...new Set(value.leagueOrder)] } : {}) };
 }
 
 // Three-way merge: independent additions/removals combine; competing edits and
@@ -42,7 +44,8 @@ export function mergePreferences(base, local, remote) {
   const rivals = merge('rivals', base.rivals, local.rivals, remote.rivals).filter(id => id !== manager);
   const leagueIDs = merge('leagues', base.leagues.map(l => l.id), local.leagues.map(l => l.id), remote.leagues.map(l => l.id));
   const names = new Map([...local.leagues, ...remote.leagues].map(l => [l.id, l]));
-  return { preferences: { manager, rivals, leagues: leagueIDs.map(id => names.get(id)) }, conflicts };
+  const order = [base, local, remote].some(p => p.leagueOrder !== undefined) ? { leagueOrder: merge('leagueOrder', base.leagueOrder || [], local.leagueOrder ?? base.leagueOrder ?? [], remote.leagueOrder ?? base.leagueOrder ?? []) } : {};
+  return { preferences: { manager, rivals, leagues: leagueIDs.map(id => names.get(id)), ...order }, conflicts };
 }
 
 export function createSyncStore(filename = ':memory:', now = Date.now) {
@@ -152,6 +155,7 @@ export function createSyncStore(filename = ':memory:', now = Date.now) {
         manager: remote.preferences.manager,
         rivals: [...new Set([...remote.preferences.rivals, ...local.rivals])],
         leagues: [...new Map([...local.leagues, ...remote.preferences.leagues].map(l => [l.id, l])).values()],
+        ...(remote.preferences.leagueOrder !== undefined ? { leagueOrder: remote.preferences.leagueOrder } : {}),
       });
       if (p.once_only) {
         const result = { preferences, revision: remote.revision };
@@ -197,6 +201,7 @@ export function createSyncStore(filename = ':memory:', now = Date.now) {
         manager: input.manager === 'local' ? local.manager : remote.preferences.manager || local.manager,
         rivals: [...new Set([...remote.preferences.rivals, ...local.rivals])],
         leagues: [...new Map([...local.leagues, ...remote.preferences.leagues].map(l => [l.id, l])).values()],
+        ...(remote.preferences.leagueOrder !== undefined ? { leagueOrder: remote.preferences.leagueOrder } : {}),
       });
       db.prepare('DELETE FROM pairs WHERE token = ?').run(p.token);
       if (input.once === true) {

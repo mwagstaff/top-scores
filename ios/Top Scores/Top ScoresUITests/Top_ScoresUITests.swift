@@ -23,6 +23,8 @@ final class Top_ScoresUITests: XCTestCase {
         let secret = String(repeating: "a", count: 43)
         app.open(URL(string: "https://top-scores.skynolimit.dev/fpl/connect#pair=\(secret)")!)
         XCTAssertTrue(app.navigationBars["Connect browser"].waitForExistence(timeout: 30))
+        XCTAssertTrue(app.navigationBars["Connect browser"].buttons["Cancel"].exists)
+        XCTAssertFalse(app.navigationBars["Connect browser"].buttons["Done"].exists, "Done must not imply approval before connecting")
     }
 
     @MainActor

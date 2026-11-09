@@ -42,3 +42,13 @@ test('SSR seeds the same explicit public squad without browser preferences',asyn
 });
 test('a zero-minute booking counts as participation, matching the app',()=>{const d=fixture();d.live.elements[4].stats={minutes:0,total_points:-1,yellow_cards:1};const score=scoring.scorePublicSquad(d);assert.equal(score.players[4].multiplier,2);assert.equal(score.players[5].multiplier,1);assert.equal(score.substitutions.length,0);});
 test('missing participation data never triggers a speculative substitution',()=>{const d=fixture();d.live.elements=d.live.elements.filter(p=>p.id!==5);assert.equal(scoring.scorePublicSquad(d).substitutions.length,0);});
+
+test('squad exposes badges, league types and the next deadline',async()=>{
+ const d=fixture();d.bootstrap.events.push({id:2,deadline_time:'2099-01-01T11:00:00Z'});
+ const profile={id:1,name:'Example',club_badge_src:'https://example.test/badge.png',leagues:{classic:[{id:10,name:'Friends',league_type:'x'},{id:1,name:'Overall',league_type:'s'}]}};
+ const service=createFantasyService(async url=>new Response(JSON.stringify(url.includes('bootstrap-static')?d.bootstrap:url.includes('/picks/')?d.picks:url.includes('/live/')?d.live:url.includes('fixtures/')?d.fixtures:profile)));
+ const result=await service.squad(1,1);
+ assert.equal(result.profile.club_badge_src,profile.club_badge_src);
+ assert.equal(result.profile.leagues.classic[0].league_type,'x');
+ assert.equal(result.nextDeadline,'2099-01-01T11:00:00Z');
+});

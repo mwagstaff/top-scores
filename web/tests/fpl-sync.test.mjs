@@ -283,3 +283,22 @@ test('both public website origins can create and complete QR pairing, while untr
     assert.equal((await request('browser-pair', {}, { Origin: origin, 'Sec-Fetch-Site': 'cross-site' })).status, 403);
   } finally { server.closeAllConnections(); await new Promise(resolve => server.close(resolve)); service.close(); }
 });
+
+test('league order syncs both ways and older clients preserve it', () => {
+ const s=createSyncStore();
+ try {
+  const app=s.create({...prefs(),leagueOrder:[10,11,12]},'ios');
+  const web=redeem(s,s.issue(app.token));
+  assert.deepEqual(web.preferences.leagueOrder,[10,11,12]);
+  const base=s.read(web.token);
+  s.update(web.token,{base,preferences:{...base.preferences,leagueOrder:[12,10,11]}});
+  const phone=s.read(app.token);
+  assert.deepEqual(phone.preferences.leagueOrder,[12,10,11]);
+  const updated=s.update(app.token,{base:phone,preferences:{...phone.preferences,leagueOrder:[11,12,10]}});
+  assert.deepEqual(s.read(web.token).preferences.leagueOrder,[11,12,10]);
+  s.update(web.token,{base:updated,preferences:prefs(1,[2,3])});
+  assert.deepEqual(s.read(app.token).preferences.leagueOrder,[11,12,10]);
+  assert.deepEqual(s.read(app.token).preferences.rivals,[2,3]);
+ } finally {s.close();}
+ assert.throws(()=>validatePreferences({...prefs(),leagueOrder:[-1]}),{status:400});
+});

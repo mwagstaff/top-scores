@@ -91,7 +91,7 @@ struct FantasyView: View {
     @State private var showDeleteRivalConfirmation = false
     @State private var rivalEntryIDPendingDeletion: Int?
     @State private var rivalTeamNamePendingDeletion = ""
-    @State private var rivalsScoreMode: RivalsScoreMode = .currentGameweek
+    @State private var rivalsScoreMode: RivalsScoreMode = .allGameweeks
     @ScaledMetric(relativeTo: .caption) private var playerLabelHeight = 20.0
     @State private var selectedManagerEntryID: Int?
     @State private var rivalToastMessage: String?
@@ -123,13 +123,7 @@ struct FantasyView: View {
     var body: some View {
         lifecycleBoundView
             .sheet(isPresented: $showWebsiteConnection) { FantasyConnectionView() }
-            .task(id: isSelected && scenePhase == .active) {
-                guard isSelected, scenePhase == .active else { return }
-                while !Task.isCancelled {
-                    await preferenceSync.synchronize()
-                    do { try await Task.sleep(for: .seconds(15)) } catch { break }
-                }
-            }
+
     }
 
     private var baseNavigationView: some View {
@@ -607,17 +601,6 @@ struct FantasyView: View {
     private var linkedFantasyView: some View {
         FantasyContributionScrollView {
             VStack(spacing: 12) {
-                HStack {
-                    if preferenceSync.conflict != nil {
-                        Text("Sync needs your attention").font(.caption).foregroundStyle(.orange)
-                    }
-                    Spacer()
-                    Button { showWebsiteConnection = true } label: {
-                        Label(preferenceSync.connected ? "Manage website sync" : "Use on website", systemImage: "link")
-                            .font(.subheadline)
-                    }
-                    .frame(minHeight: 44)
-                }
                 if fantasyViewModel.isRefreshing {
                     HStack(spacing: 8) {
                         ProgressView()
@@ -675,6 +658,18 @@ struct FantasyView: View {
 
                 if let errorMessage = fantasyViewModel.errorMessage {
                     errorCard(errorMessage)
+                }
+
+                HStack {
+                    if preferenceSync.conflict != nil {
+                        Text("Sync needs your attention").font(.caption).foregroundStyle(.orange)
+                    }
+                    Spacer()
+                    Button { showWebsiteConnection = true } label: {
+                        Label(preferenceSync.connected ? "Manage website sync" : "Use on website", systemImage: "link")
+                            .font(.subheadline)
+                    }
+                    .frame(minHeight: 44)
                 }
             }
             .padding(.horizontal, 14)
@@ -1827,7 +1822,6 @@ struct FantasyView: View {
     }
 
     private var rivalsStandingsStatus: String {
-        guard rivalsScoreMode == .currentGameweek else { return "Season standings" }
         guard let squad = rivalsStandingsSquad else { return "Current standings" }
 
         let status: String
@@ -1845,7 +1839,8 @@ struct FantasyView: View {
         case .final:
             status = "Final"
         }
-        return "\(squad.gameweekTitle) • \(status)"
+        let scope = rivalsScoreMode == .allGameweeks ? "Season standings • " : ""
+        return "\(scope)\(squad.gameweekTitle) • \(status)"
     }
 
     private var rivalRankSnapshot: [FantasyRivalRankSnapshot] {
@@ -1867,7 +1862,7 @@ struct FantasyView: View {
 
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Your rivals")
+                Text("Rivals")
                     .font(.headline)
                 Spacer(minLength: 0)
             }
@@ -1915,9 +1910,10 @@ struct FantasyView: View {
                     Text("Team")
                         .font(.subheadline.weight(.semibold))
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    Color.clear
-                        .frame(width: 24)
-                    Text(rivalsScoreMode == .currentGameweek ? "Points" : "Total")
+                    Text("GW")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(width: 40, alignment: .trailing)
+                    Text("Total")
                         .font(.subheadline.weight(.semibold))
                         .frame(width: 52, alignment: .trailing)
                     Color.clear
@@ -1937,11 +1933,11 @@ struct FantasyView: View {
                             Button {
                                 openLeagueTableEntry(entry)
                             } label: {
-                                rivalTableRow(rank: index + 1, entry: entry, scoreMode: rivalsScoreMode)
+                                rivalTableRow(rank: index + 1, entry: entry)
                             }
                             .buttonStyle(.plain)
                         } else {
-                            rivalTableRow(rank: index + 1, entry: entry, scoreMode: rivalsScoreMode)
+                            rivalTableRow(rank: index + 1, entry: entry)
                         }
                         if !entry.isUser, fantasyViewModel.staleRivalEntryIDs.contains(entry.entryID) {
                             FantasyRivalStaleIndicator(
@@ -2152,8 +2148,7 @@ struct FantasyView: View {
 
     private func rivalTableRow(
         rank: Int,
-        entry: FantasyLeagueTableEntry,
-        scoreMode: RivalsScoreMode
+        entry: FantasyLeagueTableEntry
     ) -> some View {
         let isLoadingDetails = entry.isLoadingDetails
         let showsChevron = entry.canOpenDetails
@@ -2166,45 +2161,31 @@ struct FantasyView: View {
                 .foregroundStyle(.secondary)
 
             HStack(spacing: 8) {
-                leagueBadgeImage(urlString: entry.clubBadgeSrc, teamName: entry.teamName)
+                FantasyManagerBadge(entryID: entry.entryID, source: entry.clubBadgeSrc, size: 32)
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(entry.teamName)
                         .font(.body.weight(.semibold))
-                        .lineLimit(1)
+                        .lineLimit(2)
                         .foregroundStyle(Color.primary)
                     Text(entry.isUser ? "\(entry.managerName) (You)" : entry.managerName)
                         .font(.caption)
-                        .lineLimit(1)
+                        .lineLimit(2)
                         .foregroundStyle(.secondary)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            Group {
-                if let chip = entry.badgeChip(for: scoreMode) {
+            VStack(alignment: .trailing, spacing: 2) {
+                rivalPoints(entry, mode: .currentGameweek)
+                if let chip = entry.activeBadgeChip {
                     FantasyChipBadgeImage(chip: chip, width: 22)
-                } else {
-                    Color.clear
                 }
             }
-            .frame(width: 24)
+            .frame(width: 40, alignment: .trailing)
 
-            Group {
-                if entry.showsScoreLoadingIndicator(for: scoreMode),
-                   fantasyViewModel.loadingRivalEntryIDs.contains(entry.entryID),
-                   !fantasyViewModel.staleRivalEntryIDs.contains(entry.entryID) {
-                    ProgressView()
-                        .controlSize(.small)
-                        .tint(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                } else {
-                    Text(entry.scoreDisplay(for: scoreMode))
-                        .font(.body.monospacedDigit().weight(.semibold))
-                        .foregroundStyle(Color.primary)
-                        .frame(maxWidth: .infinity, alignment: .trailing)
-                }
-            }
-            .frame(width: 52, alignment: .trailing)
+            rivalPoints(entry, mode: .allGameweeks)
+                .frame(width: 52, alignment: .trailing)
 
             HStack(spacing: 4) {
                 leagueTrendIcon(currentRank: rank, lastRank: previousRank)
@@ -2238,6 +2219,25 @@ struct FantasyView: View {
         .animation(.easeInOut(duration: 0.2), value: isLoadingDetails)
         .accessibilityElement(children: .combine)
         .accessibilityValue(entry.hasPlayerInPlay ? "Currently in play" : "")
+    }
+
+    private func rivalPoints(_ entry: FantasyLeagueTableEntry, mode: RivalsScoreMode) -> some View {
+        Group {
+            if entry.showsScoreLoadingIndicator(for: mode),
+               fantasyViewModel.loadingRivalEntryIDs.contains(entry.entryID),
+               !fantasyViewModel.staleRivalEntryIDs.contains(entry.entryID) {
+                ProgressView()
+                    .controlSize(.small)
+                    .tint(.secondary)
+            } else {
+                Text(entry.scoreDisplay(for: mode))
+                    .font(.body.monospacedDigit().weight(.semibold))
+                    .foregroundStyle(Color.primary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .accessibilityLabel("\(mode == .currentGameweek ? "Gameweek" : "Total") points: \(entry.scoreDisplay(for: mode))")
+            }
+        }
     }
 
     private func leagueDetailSheet(_ league: FantasyTrackedLeagueStanding) -> some View {
@@ -2537,18 +2537,22 @@ struct FantasyView: View {
             Image(systemName: "arrow.up")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.green)
+                .accessibilityLabel("Position up")
         case .down:
             Image(systemName: "arrow.down")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.red)
+                .accessibilityLabel("Position down")
         case .equal:
             Image(systemName: "equal")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.gray)
+                .accessibilityLabel("Position unchanged")
         case .unavailable:
             Image(systemName: "minus")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.gray)
+                .accessibilityLabel("Position trend unavailable")
         }
     }
 
@@ -4290,7 +4294,7 @@ struct FantasyView: View {
         if currentRivalRanks.isEmpty {
             currentRivalRanks = nextRanks
             previousRivalRanks = [:]
-        } else {
+        } else if nextRanks != currentRivalRanks {
             previousRivalRanks = currentRivalRanks
             currentRivalRanks = nextRanks
         }

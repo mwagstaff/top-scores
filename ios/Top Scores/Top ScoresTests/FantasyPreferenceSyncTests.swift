@@ -59,4 +59,22 @@ struct FantasyPreferenceSyncTests {
         #expect(saved[1] == existing)
         #expect(saved[0].entryID == 3)
     }
+    @Test func leagueOrderRoundTripsAndLegacyPreferencesRemainCompatible() throws {
+        let suite = "FantasySyncTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("{\"99\":[9,8]}", forKey: "fantasy.leagueOrderByManagerJSON")
+        let preferences = FantasySyncedPreferences(manager: 1, rivals: [2], leagues: [], leagueOrder: [12,10,11])
+        preferences.apply(defaults: defaults)
+        #expect(FantasySyncedPreferences.local(defaults: defaults).hasSameSelection(as: preferences))
+        let roundTrip = try JSONDecoder().decode(FantasySyncedPreferences.self, from: JSONEncoder().encode(preferences))
+        #expect(roundTrip.leagueOrder == [12,10,11])
+        let orders = try JSONDecoder().decode([String: [Int]].self, from: Data(defaults.string(forKey: "fantasy.leagueOrderByManagerJSON")!.utf8))
+        #expect(orders["99"] == [9,8])
+        let legacy = try JSONDecoder().decode(FantasySyncedPreferences.self, from: Data(#"{"manager":1,"rivals":[],"leagues":[]}"#.utf8))
+        #expect(legacy.leagueOrder == nil)
+        legacy.apply(defaults: defaults)
+        #expect(FantasySyncedPreferences.local(defaults: defaults).leagueOrder == [12,10,11])
+    }
+
 }

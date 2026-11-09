@@ -25,6 +25,7 @@ struct FantasyConnectionView: View {
                             Text(pairing.code.prefix(3) + " " + pairing.code.suffix(3))
                                 .font(.largeTitle.monospacedDigit().bold())
                                 .accessibilityLabel("Connection code \(pairing.code.map(String.init).joined(separator: " "))")
+                            Text("If the codes match, tap Connect this browser below to finish pairing.")
                             Text(pairing.mode == "merge" ? "Use your app’s team and merge the browser’s saved rivals and leagues." : "Use your app’s team, rivals and leagues on that browser.")
                             Text(pairing.once ? "Import once. The browser will remain independent." : "Future changes will sync across your connected devices.").font(.footnote)
                             Button("Connect this browser", systemImage: "link") {
@@ -34,6 +35,8 @@ struct FantasyConnectionView: View {
                                     catch { self.error = error.localizedDescription }
                                 }
                             }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.large)
                             .disabled(sync.busy || sync.conflict != nil || pairing.expiry < .now)
                         }
                         if error != nil && pairing == nil {
@@ -68,7 +71,16 @@ struct FantasyConnectionView: View {
             }
             .navigationTitle(pairingSecret == nil ? "Website sync" : "Connect browser")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .toolbar {
+                if pairingSecret != nil && !approved {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel", role: .cancel) { dismiss() }.disabled(sync.busy)
+                    }
+                } else {
+                    ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
+                }
+            }
+            .interactiveDismissDisabled(sync.busy)
             .task {
                 if let pairingSecret { await inspect(pairingSecret) }
                 else { await sync.loadDevices() }

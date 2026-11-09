@@ -7,20 +7,24 @@ struct FantasySyncedPreferences: Codable, Equatable {
     var manager: Int?
     var rivals: [Int]
     var leagues: [League]
+    var leagueOrder: [Int]? = nil
 
-    private enum CodingKeys: String, CodingKey { case manager, rivals, leagues }
+    private enum CodingKeys: String, CodingKey { case manager, rivals, leagues, leagueOrder }
     func encode(to encoder: Encoder) throws {
         var values = encoder.container(keyedBy: CodingKeys.self)
         if let manager { try values.encode(manager, forKey: .manager) }
         else { try values.encodeNil(forKey: .manager) }
         try values.encode(rivals, forKey: .rivals)
         try values.encode(leagues, forKey: .leagues)
+        try values.encodeIfPresent(leagueOrder, forKey: .leagueOrder)
     }
 
     static func local(defaults: UserDefaults = .standard) -> Self {
         let rivals = (try? JSONDecoder().decode([FantasyRivalManager].self, from: Data((defaults.string(forKey: "fantasy.rivalManagersJSON") ?? "[]").utf8))) ?? []
         let leagues = (try? JSONDecoder().decode([FantasyTrackedLeague].self, from: Data((defaults.string(forKey: "fantasy.trackedLeaguesJSON") ?? "[]").utf8))) ?? []
-        return Self(manager: Int(defaults.string(forKey: "fantasy.managerEntryID") ?? ""), rivals: rivals.map(\.entryID), leagues: leagues.map { League(id: $0.leagueID, name: "League \($0.leagueID)") })
+        let manager = Int(defaults.string(forKey: "fantasy.managerEntryID") ?? "")
+        let orders = (try? JSONDecoder().decode([String: [Int]].self, from: Data((defaults.string(forKey: "fantasy.leagueOrderByManagerJSON") ?? "{}").utf8))) ?? [:]
+        return Self(manager: Int(defaults.string(forKey: "fantasy.managerEntryID") ?? ""), rivals: rivals.map(\.entryID), leagues: leagues.map { League(id: $0.leagueID, name: "League \($0.leagueID)") }, leagueOrder: manager.flatMap { orders[String($0)] })
     }
 
     func apply(defaults: UserDefaults = .standard) {
@@ -30,13 +34,18 @@ struct FantasySyncedPreferences: Codable, Equatable {
         }
         if let data = try? JSONEncoder().encode(managers) { defaults.set(String(decoding: data, as: UTF8.self), forKey: "fantasy.rivalManagersJSON") }
         if let data = try? JSONEncoder().encode(leagues.map { FantasyTrackedLeague(leagueID: $0.id) }) { defaults.set(String(decoding: data, as: UTF8.self), forKey: "fantasy.trackedLeaguesJSON") }
+        if let manager, let leagueOrder {
+            var orders = (try? JSONDecoder().decode([String: [Int]].self, from: Data((defaults.string(forKey: "fantasy.leagueOrderByManagerJSON") ?? "{}").utf8))) ?? [:]
+            orders[String(manager)] = leagueOrder
+            if let data = try? JSONEncoder().encode(orders) { defaults.set(String(decoding: data, as: UTF8.self), forKey: "fantasy.leagueOrderByManagerJSON") }
+        }
         let id = manager.map(String.init) ?? ""
         if defaults.string(forKey: "fantasy.managerEntryID") != id { defaults.set(id, forKey: "fantasy.managerEntryID") }
     }
 
     // Names are display hints; the app resolves authoritative league names itself.
     func hasSameSelection(as other: Self) -> Bool {
-        manager == other.manager && rivals == other.rivals && leagues.map(\.id) == other.leagues.map(\.id)
+        manager == other.manager && rivals == other.rivals && leagues.map(\.id) == other.leagues.map(\.id) && leagueOrder == other.leagueOrder
     }
 }
 
