@@ -19,6 +19,13 @@ struct FantasyManagerSwitcher: View {
                     HStack(alignment: .top, spacing: 16) {
                         ForEach(entries) { entry in
                             managerButton(entry)
+                                .padding(.trailing, entry.isUser ? 10 : 0)
+                                .overlay(alignment: .trailing) {
+                                    if entry.isUser {
+                                        Rectangle().fill(.secondary.opacity(0.2)).frame(width: 1)
+                                            .accessibilityHidden(true)
+                                    }
+                                }
                                 .id(entry.entryID)
                         }
                     }

@@ -208,3 +208,82 @@
 
 .fpl-portrait-fallback { display: grid; place-items: center; width: 88px; height: 112px; margin: auto; border-radius: 50% 50% 0 0; background: #174a3d; color: #b7dbcd; font-weight: 800; }
 @media (max-width: 600px) { .fpl-portrait-fallback { width: 58px; height: 74px; } }
+
+/* Keep the starting XI above the fold; secondary settings and bench follow it. */
+.fpl-heading { margin: 0 0 8px; min-height: 60px; }
+.fpl-heading h1 { margin: 0; font-size: 28px; }
+.fpl-deadline { margin-top: 4px; font-size: 12px; }
+.fpl-heading .fpl-toolbar { flex-wrap: nowrap; gap: 8px; }
+.fpl-heading .fpl-toolbar label { gap: 0; }
+.fpl-manager-strip { margin: 0 0 8px; padding: 6px 4px; gap: 14px; }
+.fpl-manager-strip .fpl-manager-badge { width: 48px; height: 48px; }
+.fpl-manager-strip .fpl-manager-pill { gap: 3px; }
+.fpl-manager-strip .fpl-manager-circle { padding: 3px; }
+.fpl-manager-strip .fpl-manager-add { gap: 3px; padding-inline: 14px; }
+.fpl-manager-strip .fpl-manager-add > span { width: 48px; height: 48px; font-size: 30px; }
+.fpl-manager-circle > b { font-size: 13px; padding: 1px 6px; }
+.fpl-pitch-controls { display: flex; flex-direction: row-reverse; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.fpl-pitch-controls .fpl-metric-select { margin: 0; }
+.fpl-settings { display: flex; justify-content: flex-end; gap: 8px; border-top: 1px solid #91a3b830; margin-top: 32px; padding-top: 16px; }
+.fpl-settings > button, .fpl-settings > .fpl-sync-control > button { background: transparent; border-color: transparent; color: #91a3b8; }
+.fpl-page .fpl-league-manage { min-height: 36px; padding: 4px 8px; font-size: 12px; border: 0; background: transparent; color: #2aa8ff; }
+.fpl-back-to-pitch { margin: 8px 0 16px; }
+@media (min-width: 1001px) {
+  .fpl-pitch { height: var(--pitch-available-height, calc(100dvh - 260px)); max-height: 800px; display: grid; grid-template-rows: repeat(4, minmax(0, 1fr)); gap: 6px; padding: 12px 14px; border-radius: 22px; }
+  .fpl-pitch .fpl-position { min-height: 0; padding: 0; align-items: center; }
+  .fpl-pitch .fpl-player { height: 100%; max-height: 180px; width: 104px; position: relative; padding-top: 20px; border-radius: 12px; flex-shrink: 1; }
+  .fpl-pitch .fpl-player-photo { flex: 1; min-height: 0; width: 100%; height: auto; }
+  .fpl-pitch .fpl-player-photo img { width: 100%; height: 100%; object-fit: contain; }
+  .fpl-pitch .fpl-portrait-fallback { height: 100%; width: 60%; }
+  .fpl-pitch .fpl-player-detail { position: absolute; top: 3px; left: 4px; margin: 0; padding: 2px 5px; font-size: 9px; max-width: calc(100% - 8px); z-index: 2; }
+  .fpl-pitch .fpl-player > strong { padding: 2px; font-size: 12px; flex-shrink: 0; }
+  .fpl-pitch .fpl-player-score { padding: 2px; font-size: 12px; flex-shrink: 0; }
+  .fpl-pitch .fpl-player-events { font-size: 9px; line-height: 12px; flex-shrink: 0; }
+  .fpl-pitch-stat { top: 12px; gap: 4px; }
+  .fpl-pitch-stat strong { width: 60px; height: 60px; border-width: 4px; font-size: 18px; }
+  .fpl-value-stat strong { font-size: 12px; }
+  .fpl-pitch .fpl-player-photo b, .fpl-pitch .fpl-player-photo > span { top: 0; right: 3px; width: 17px; height: 17px; line-height: 17px; font-size: 10px; }
+}
+@media (max-width: 700px) {
+  .fpl-heading { flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+  .fpl-heading .fpl-toolbar { width: 100%; }
+  .fpl-heading .fpl-toolbar label { margin-right: auto; }
+  .fpl-pitch-controls { gap: 8px; }
+  .fpl-pitch-controls .fpl-metric-select label { font-size: 0; gap: 0; }
+  .fpl-pitch-controls .fpl-metric-select select { font-size: 13px; max-width: 175px; }
+}
+
+@media (min-width: 1001px) {
+  .fpl-heading { min-height: 50px; margin-bottom: 4px; }
+  .fpl-heading h1 { font-size: 26px; line-height: 30px; }
+  .fpl-deadline { margin-top: 2px; line-height: 16px; }
+  .fpl-heading .fpl-toolbar button, .fpl-heading .fpl-toolbar select,
+  .fpl-pitch-controls button, .fpl-pitch-controls select { min-height: 36px; padding: 6px 10px; font-size: 13px; }
+  .fpl-manager-strip { padding-block: 5px; margin-bottom: 4px; }
+  .fpl-manager-strip .fpl-manager-badge, .fpl-manager-strip .fpl-manager-add > span { width: 40px; height: 40px; }
+  .fpl-manager-strip .fpl-manager-pill { font-size: 11px; gap: 2px; line-height: 14px; }
+  .fpl-manager-strip .fpl-manager-circle { padding: 2px; }
+  .fpl-pitch-controls { margin-bottom: 6px; }
+  .fpl-pitch .fpl-player { padding-top: 0; }
+  .fpl-pitch .fpl-player-score { line-height: 14px; }
+  .fpl-pitch .fpl-player-events { position: absolute; left: 3px; bottom: 40px; width: auto; background: #071b1dcc; color: white; border-radius: 3px; padding: 0 2px; }
+  .fpl-pitch .fpl-player-photo b { top: 3px; }
+}
+
+/* Identity, standings alignment and match-event details. */
+.fpl-heading > div:first-child { min-width: 0; }
+.fpl-heading h1 { overflow-wrap: anywhere; }
+.fpl-heading .fpl-toolbar { flex-shrink: 0; }
+.fpl-page .fpl-manager-pill.has-rival-separator { border-right: 1px solid #91a3b830; padding-right: 14px; border-radius: 0; }
+.fpl-rival.is-you { box-shadow: none; }
+.fpl-rival > .fpl-remove, .fpl-rival > .fpl-remove-space { width: 20px; flex: 0 0 20px; }
+.fpl-page .fpl-rival > button:first-child { flex: 1; min-width: 0; width: auto; }
+.fpl-page .fpl-league-link > .fpl-league-trend { flex: 0 0 18px; text-align: center; font-size: 18px; font-weight: 600; color: #91a3b8; }
+.fpl-page .fpl-league-link > .trend-up { color: #29ca70; }
+.fpl-page .fpl-league-link > .trend-down { color: #fa6c75; }
+.fpl-player-events > span { display: inline-flex; align-items: center; gap: 2px; }
+.fpl-page .fpl-player-events { font-size: 12px; line-height: 17px; gap: 4px; }
+.fpl-assist-icon { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; background: #078ce5; color: #fff; font-size: 12px; line-height: 16px; box-shadow: inset 0 1px 1px #ffffff60; }
+
+.fpl-page .fpl-league-team { display: flex; align-items: center; gap: 10px; text-align: left; }
+.fpl-league-team .fpl-manager-badge { width: 34px; height: 34px; flex: 0 0 34px; font-size: 11px; }

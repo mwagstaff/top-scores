@@ -16,7 +16,7 @@ export interface Squad {
   nextExpectedPoints: number | null; grossPoints: number; transferCost: number; points: number; finalized: boolean; chip: string | null;
   history: { total_points: number; overall_rank: number; bank: number; value: number; points: number }; updatedAt: string;
 }
-export interface Standing { id: number; entry: number; entry_name: string; player_name: string; rank: number; last_rank: number; event_total: number; total: number }
+export interface Standing { club_badge_src?: string | null; id: number; entry: number; entry_name: string; player_name: string; rank: number; last_rank: number; event_total: number; total: number }
 export interface LeagueData { league: { id: number; name: string }; standings: { has_next: boolean; page: number; results: Standing[] } }
 export interface PlayerData { player: Player; teams: Team[]; alternatives: Player[]; fixtures: Fixture[]; history: { fixture: number; round: number; opponent_team: number; was_home: boolean; total_points: number; minutes: number; goals_scored: number; assists: number; bonus: number }[] }
 export interface Preferences { leagueOrder?: number[]; manager: number | null; rivals: number[]; leagues: { id: number; name: string }[] }
@@ -62,7 +62,7 @@ export function visibleLeagues(profile: Profile | undefined, saved: Preferences[
   const byID = new Map([...saved.filter(l => !automatic.has(l.id)).map(l => ({ ...l, entry_rank: 0, entry_last_rank: 0 })), ...owned].map(l => [l.id, l]));
   return [...new Set([...order, ...byID.keys()])].flatMap(id => { const league = byID.get(id); return league ? [league] : []; });
 }
-export function managerInitials(profile?: Profile): string {
+export function managerInitials(profile?: Pick<Profile, 'player_first_name' | 'player_last_name'>): string {
   return profile ? [profile.player_first_name, ...profile.player_last_name.split(/[\s-]+/)].filter(Boolean).map(n => n[0]).join('').slice(0, 3).toUpperCase() : '…';
 }
 export function sortSquads(squads: Squad[], total = false): Squad[] {

@@ -1876,14 +1876,14 @@ struct FantasyView: View {
                 selection: $rivalsScoreMode,
                 options: [
                     FootballPitchSegmentOption(
-                        value: .currentGameweek,
-                        title: "Current gameweek",
-                        subtitle: "This round"
-                    ),
-                    FootballPitchSegmentOption(
                         value: .allGameweeks,
                         title: "All gameweeks",
                         subtitle: "Season total"
+                    ),
+                    FootballPitchSegmentOption(
+                        value: .currentGameweek,
+                        title: "Current gameweek",
+                        subtitle: "This round"
                     ),
                 ],
                 accessibilityLabel: "Rivals score scope",
@@ -2582,8 +2582,10 @@ struct FantasyView: View {
                 case .success(let image):
                     image
                         .resizable()
-                        .scaledToFit()
+                        .scaledToFill()
                         .frame(width: 30, height: 30)
+                        .clipShape(Circle())
+                        .overlay(Circle().strokeBorder(.white.opacity(0.15), lineWidth: 1))
                 case .failure:
                     leagueInitialsBadge(teamName: teamName)
                 @unknown default:
