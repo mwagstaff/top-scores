@@ -2004,7 +2004,7 @@ body:has(.page-stadium) .match-hero::after { display: none; }
 .league-number img { width: 26px; height: 26px; object-fit: contain; }
 .league-number { display: flex; align-items: center; flex-shrink: 0; }
 .date-shortcuts button { position: relative; }
-.date-shortcuts .date-count { position: absolute; right: 2px; top: -7px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 10px; background: var(--accent); color: #05111e; font-size: 10px; line-height: 17px; font-weight: 800; }
+.date-shortcuts .date-count { position: absolute; right: 7px; top: 6px; width: 5px; height: 5px; border-radius: 50%; background: var(--accent); opacity: 0.8; }
 .date-shortcuts .date-count.is-live { background: var(--live-pill); color: #fff; }
 .date-shortcuts .date-count.is-finished { background: var(--finished-pill); color: #fff; }
 
@@ -2064,3 +2064,7 @@ img[src*="/CompetitionLogo6.webp"] {
 @media (max-width: 600px) { .date-shortcuts button { flex-basis: 64px; } .scope-toggles button { flex-direction: column; } }
 
 .nav-fpl-icon { width: 20px; height: 22px; object-fit: contain; vertical-align: middle; }
+
+.empty-match-actions { display: grid; grid-template-columns: minmax(0, 1fr); width: fit-content; max-width: 100%; margin: 0 auto; gap: 10px; }
+.empty-match-actions button { width: 100%; white-space: normal; }
+.empty-action-separator { color: var(--text-muted); font-size: 12px; line-height: 1; }

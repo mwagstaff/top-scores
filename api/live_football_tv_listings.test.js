@@ -125,3 +125,55 @@ test("snapshot validation rejects a structurally incomplete first scrape", () =>
     /too few valid listings/
   );
 });
+
+test("TV query bounds cover whole London days including DST changes", () => {
+  assert.deepEqual(__private.listingDateBounds([{ date_local: "2026-03-29" }]), {
+    start: "2026-03-29T00:00:00.000Z", end: "2026-03-29T23:00:00.000Z",
+  });
+  assert.deepEqual(__private.listingDateBounds([{ date_local: "2026-10-25" }]), {
+    start: "2026-10-24T23:00:00.000Z", end: "2026-10-26T00:00:00.000Z",
+  });
+  assert.equal(__private.listingDateBounds([]), null);
+  assert.equal(__private.listingDateBounds([{ date_local: "2026-02-31" }]), null);
+});
+
+test("TV reconciliation restricts the database read and preserves matching with projected fields", async () => {
+  const fs = require("node:fs");
+  const vm = require("node:vm");
+  const records = prepareListings([listing()]);
+  const reads = [];
+  const details = [];
+  let saved;
+  const module = { exports: {} };
+  const mongo = {
+    getLiveFootballTvSnapshot: async () => records,
+    getBsdRecords: async (collection, filter, options) => {
+      reads.push({ collection, filter, options });
+      if (collection === "bsd_leagues") return leagues;
+      assert.equal(filter.event_date.$gte, "2026-08-29T23:00:00.000Z");
+      assert.equal(filter.event_date.$lt, "2026-08-30T23:00:00.000Z");
+      assert.equal(options.projection.payload, undefined);
+      const payload = event(101).payload;
+      return [{ _id: "101", payload: Object.fromEntries(Object.keys(options.projection)
+        .filter((key) => key.startsWith("payload."))
+        .map((key) => [key.slice(8), payload[key.slice(8)]])) }];
+    },
+    updateLiveFootballTvListingMatches: async (_, assignments) => { saved = assignments; },
+  };
+  vm.runInNewContext(fs.readFileSync(require.resolve("./live_football_tv_listings"), "utf8"), {
+    module, console, process, Buffer,
+    require: (name) => name === "./mongo_client" ? mongo
+      : name === "./bsd_diagnostics" ? { detail: (record) => details.push(record) } : require(name),
+  });
+  const result = await module.exports.reconcileLiveFootballTvSnapshot("test");
+  assert.equal(result.matched, 1);
+  assert.equal(saved[0].matched_event_id, "101");
+  assert.equal(reads.length, 2);
+  assert.equal(details[0].candidateEventCount, 1);
+  assert.equal(details[0].changedAssignmentCount, 1);
+  records.length = 0;
+  reads.length = 0;
+  const empty = await module.exports.reconcileLiveFootballTvSnapshot("empty");
+  assert.equal(empty.total, 0);
+  assert.equal(reads.length, 0, "empty listings must not trigger a historical collection read");
+});

@@ -1,3 +1,4 @@
+const operationalDiagnostics = require("./operational_diagnostics");
 const crypto = require("crypto");
 const { createClient } = require("redis");
 const mongoStore = require("./mongo_client");
@@ -2174,6 +2175,10 @@ async function getOperationalDatasetMetadata(names = []) {
 }
 
 async function getOperationalDataset(name) {
+  return operationalDiagnostics.run("getOperationalDataset", () => getOperationalDatasetMeasured(name), { dataset: name });
+}
+
+async function getOperationalDatasetMeasured(name) {
   const startedAtMs = Date.now();
   const timings = {};
   try {
@@ -2227,6 +2232,10 @@ async function getOperationalDataset(name) {
 }
 
 async function getOperationalDatasets(names = []) {
+  return operationalDiagnostics.run("getOperationalDatasets", () => getOperationalDatasetsMeasured(names), { datasets: names });
+}
+
+async function getOperationalDatasetsMeasured(names = []) {
   const requestedNames = Array.isArray(names)
     ? names.map((name) => String(name || "").trim()).filter(Boolean)
     : [];
@@ -2237,7 +2246,7 @@ async function getOperationalDatasets(names = []) {
   try {
     const mongoStartedAtMs = Date.now();
     const mongoRecords = shouldReadMongoPrimary()
-      ? await mongoStore.getOperationalDatasets(requestedNames)
+      ? await operationalDiagnostics.run("mongo_fetch_datasets", () => mongoStore.getOperationalDatasets(requestedNames), { count: requestedNames.length })
       : null;
     recordTiming(timings, "mongo_primary_ms", mongoStartedAtMs);
     if (mongoRecords && Object.keys(mongoRecords).length === requestedNames.length) {
@@ -2252,12 +2261,12 @@ async function getOperationalDatasets(names = []) {
     const redisStartedAtMs = Date.now();
     const redisClient = await getClient();
     const keys = requestedNames.map((name) => buildOperationalDatasetKey(name));
-    const rawValues = await redisClient.mGet(keys);
+    const rawValues = await operationalDiagnostics.run("redis_fetch_datasets", () => redisClient.mGet(keys), { count: keys.length });
     recordTiming(timings, "redis_mget_ms", redisStartedAtMs);
     const output = {};
     let payloadBytes = 0;
     const parseStartedAtMs = Date.now();
-    requestedNames.forEach((name, index) => {
+    operationalDiagnostics.runSync("parse_datasets", () => requestedNames.forEach((name, index) => {
       const raw = rawValues[index];
       if (!raw) return;
       payloadBytes += utf8ByteLength(raw);
@@ -2265,7 +2274,8 @@ async function getOperationalDatasets(names = []) {
       if (parsed && typeof parsed === "object" && Object.prototype.hasOwnProperty.call(parsed, "payload")) {
         output[name] = parsed;
       }
-    });
+    }), { count: requestedNames.length });
+    operationalDiagnostics.detail({ name: "dataset_payload", count: Object.keys(output).length, payloadBytes });
     recordTiming(timings, "parse_ms", parseStartedAtMs);
     if (Object.keys(output).length > 0 && shouldBackfillMongoReads()) {
       const backfillStartedAtMs = Date.now();
@@ -2449,12 +2459,16 @@ async function getOperationalMatchDetails(matchId) {
 }
 
 async function getAllOperationalMatchDetails() {
+  return operationalDiagnostics.run("getAllOperationalMatchDetails", () => getAllOperationalMatchDetailsMeasured(), {});
+}
+
+async function getAllOperationalMatchDetailsMeasured() {
   const startedAtMs = Date.now();
   const timings = {};
   try {
     const mongoStartedAtMs = Date.now();
     const mongoSnapshot = shouldReadMongoBulkPrimary()
-      ? await mongoStore.getAllOperationalMatchDetails()
+      ? await operationalDiagnostics.run("mongo_fetch_match_details", () => mongoStore.getAllOperationalMatchDetails())
       : null;
     recordTiming(timings, "mongo_primary_ms", mongoStartedAtMs);
     if (mongoSnapshot && Number(mongoSnapshot.total || 0) > 0) {
@@ -2472,7 +2486,7 @@ async function getAllOperationalMatchDetails() {
     if (!Array.isArray(ids) || ids.length === 0) {
       const fallbackStartedAtMs = Date.now();
       const fallbackMongoSnapshot = !shouldReadMongoBulkPrimary() && shouldReadMongoPrimary()
-        ? await mongoStore.getAllOperationalMatchDetails()
+        ? await operationalDiagnostics.run("mongo_fetch_match_details", () => mongoStore.getAllOperationalMatchDetails())
         : null;
       recordTiming(timings, "mongo_fallback_ms", fallbackStartedAtMs);
       if (fallbackMongoSnapshot && Number(fallbackMongoSnapshot.total || 0) > 0) {
@@ -2491,13 +2505,14 @@ async function getAllOperationalMatchDetails() {
 
     const mgetStartedAtMs = Date.now();
     const keys = ids.map((matchId) => buildOperationalMatchDetailsKey(matchId));
-    const values = await redisClient.mGet(keys);
+    const values = await operationalDiagnostics.run("redis_fetch_match_details",
+      () => redisClient.mGet(keys), { count: keys.length });
     recordTiming(timings, "redis_mget_ms", mgetStartedAtMs);
     const records = {};
     const staleIds = [];
     let payloadBytes = 0;
     const parseStartedAtMs = Date.now();
-    ids.forEach((matchId, index) => {
+    operationalDiagnostics.runSync("parse_match_details", () => ids.forEach((matchId, index) => {
       const raw = values[index];
       if (!raw) {
         staleIds.push(matchId);
@@ -2511,8 +2526,9 @@ async function getAllOperationalMatchDetails() {
       }
       const normalizedId = String(parsed.id || matchId).trim().toLowerCase();
       records[normalizedId] = parsed;
-    });
+    }), { count: ids.length });
     recordTiming(timings, "parse_ms", parseStartedAtMs);
+    operationalDiagnostics.detail({ name: "match_details_payload", count: Object.keys(records).length, payloadBytes, staleCount: staleIds.length });
 
     if (staleIds.length > 0) {
       const pruneStartedAtMs = Date.now();

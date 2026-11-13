@@ -70,3 +70,29 @@ test("disabled diagnostics and broken log sinks preserve results", async () => {
   assert.equal(await diagnostics.run("enabled", async () => 2), 2);
   diagnostics.stop();
 });
+
+test("sync phases retain parent context, memory deltas and clean up on failure", async () => {
+  const records = [];
+  let heapUsed = 10;
+  const diagnostics = createDiagnostics({ write: (r) => records.push(r),
+    memory: () => ({ rss: heapUsed * 2, heapUsed, external: 3 }) });
+  diagnostics.start();
+  try {
+    await diagnostics.run("reconciliation", async () => {
+      assert.equal(diagnostics.runSync("parse", () => {
+        heapUsed = 20;
+        assert.equal(diagnostics.snapshot().active.length, 2);
+        diagnostics.detail({ count: 7, payloadBytes: 100 });
+        return 42;
+      }), 42);
+      assert.throws(() => diagnostics.runSync("comparison", () => { throw new Error("failed"); }), /failed/);
+    }, { trigger: "interval" });
+    const phase = records.find((r) => r.event === "end" && r.name === "parse");
+    const parent = records.find((r) => r.event === "start" && r.name === "reconciliation");
+    assert.equal(phase.parentId, parent.id);
+    assert.equal(phase.heapDeltaBytes, 10);
+    assert.equal(records.find((r) => r.event === "detail").operationId, phase.id);
+    assert.equal(records.find((r) => r.event === "end" && r.name === "comparison").status, "rejected");
+    assert.deepEqual(diagnostics.snapshot().active, []);
+  } finally { diagnostics.stop(); }
+});

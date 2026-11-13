@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+const operationalDiagnostics = require("./operational_diagnostics");
 const { supportsTable, eligibleTables } = require("./table_availability");
 if (require.main === module) require("./runtime_logging").installTimestampedConsole();
 const {
@@ -1492,6 +1493,8 @@ function buildRuntimeActivitySnapshot() {
     runtime: runtimeRole,
     startup_backfill_running: startupBackfillRunning,
     cache_state_refresh_running: Boolean(cacheStateWatchTask),
+    redis_reconciliation_running: Boolean(redisReconciliationTask),
+    operational_phases: operationalDiagnostics.snapshot().active,
     bbc_live_updating: bsdMatchesRefreshInFlight,
     bbc_range_updating: bsdMatchesRefreshInFlight,
     epl_updating: eplUpdating,
@@ -1512,6 +1515,7 @@ function buildRuntimeActivitySnapshot() {
 }
 
 function startEventLoopStallLogger() {
+  operationalDiagnostics.start(() => ({ runtime: runtimeRole }), { intervalMs: 30000 });
   if (
     eventLoopStallLoggerHandle ||
     !Number.isFinite(DEBUG_EVENT_LOOP_STALL_THRESHOLD_MS) ||
@@ -1529,7 +1533,7 @@ function startEventLoopStallLogger() {
       return;
     }
     logPerformanceDiagnostic(
-      `[EventLoopStall] delay_ms=${delayMs} p99_lag_ms=${currentEventLoopLagP99Ms()} activities=${JSON.stringify(buildRuntimeActivitySnapshot())}`
+      `[EventLoopStall] delay_ms=${delayMs} p99_lag_ms=${currentEventLoopLagP99Ms()} activities=${JSON.stringify(buildRuntimeActivitySnapshot())} diagnostics=${JSON.stringify(operationalDiagnostics.snapshot())}`
     );
   }, intervalMs);
   if (typeof eventLoopStallLoggerHandle.unref === "function") {
@@ -1538,6 +1542,7 @@ function startEventLoopStallLogger() {
 }
 
 function stopEventLoopStallLogger() {
+  operationalDiagnostics.stop();
   if (!eventLoopStallLoggerHandle) return;
   clearInterval(eventLoopStallLoggerHandle);
   eventLoopStallLoggerHandle = null;
@@ -18140,6 +18145,11 @@ function filterCacheStateDomainsForRuntimeRefresh(domains, options = {}) {
 }
 
 async function reloadOperationalStateDomainsFromRedis(domains, options = {}) {
+  return operationalDiagnostics.run("snapshot_refresh",
+    () => reloadOperationalStateDomainsFromRedisMeasured(domains, options), { trigger: options.trigger || "cache_state_refresh", domains });
+}
+
+async function reloadOperationalStateDomainsFromRedisMeasured(domains, options = {}) {
   const normalized = normalizeCacheStateDomains(domains);
   const selectedDomains = normalized.domains;
   if (selectedDomains.length === 0) {
@@ -20612,6 +20622,11 @@ function currentOperationalDatasetMemorySnapshot(name) {
 }
 
 function currentOperationalMemoryDatasetSnapshots() {
+  return operationalDiagnostics.runSync("memory_dataset_snapshot",
+    () => currentOperationalMemoryDatasetSnapshotsMeasured(), {});
+}
+
+function currentOperationalMemoryDatasetSnapshotsMeasured() {
   const output = {};
   ADMIN_OPERATIONAL_DATASET_NAMES.forEach((name) => {
     const snapshot = currentOperationalDatasetMemorySnapshot(name);
@@ -20622,6 +20637,11 @@ function currentOperationalMemoryDatasetSnapshots() {
 }
 
 function currentOperationalMatchDetailsMemorySnapshot() {
+  return operationalDiagnostics.runSync("memory_match_details_snapshot",
+    () => currentOperationalMatchDetailsMemorySnapshotMeasured(), { count: matchDetailsById.size });
+}
+
+function currentOperationalMatchDetailsMemorySnapshotMeasured() {
   const snapshot = currentMatchDetailsLookupSnapshot();
   const records = {};
   if (snapshot && snapshot.lookup instanceof Map) {
@@ -20912,6 +20932,11 @@ function buildComparableDatasetSide(payload, updatedAt, source, nowMs) {
 }
 
 function buildDatasetReconciliationComponent(name, memorySnapshot, redisRecord, nowMs) {
+  return operationalDiagnostics.runSync("compare_dataset",
+    () => buildDatasetReconciliationComponentMeasured(name, memorySnapshot, redisRecord, nowMs), { dataset: name, memoryCount: memorySnapshot?.payload_count, redisCount: redisRecord?.payload_count });
+}
+
+function buildDatasetReconciliationComponentMeasured(name, memorySnapshot, redisRecord, nowMs) {
   const startedAtMs = Date.now();
   const memoryMetadataHash = memorySnapshot && memorySnapshot.payload_hash;
   const redisMetadataHash = redisRecord && redisRecord.payload_hash;
@@ -21085,6 +21110,11 @@ function buildMatchDetailsMetadataReconciliationComponent(memorySummary, redisSu
 }
 
 function buildMatchDetailsReconciliationComponent(memorySnapshot, redisSnapshot, nowMs) {
+  return operationalDiagnostics.runSync("compare_match_details",
+    () => buildMatchDetailsReconciliationComponentMeasured(memorySnapshot, redisSnapshot, nowMs), { memoryCount: memorySnapshot?.total, redisCount: redisSnapshot?.total });
+}
+
+function buildMatchDetailsReconciliationComponentMeasured(memorySnapshot, redisSnapshot, nowMs) {
   const startedAtMs = Date.now();
   const memoryPayload = cloneComparablePayload(memorySnapshot && memorySnapshot.records);
   const redisPayload = cloneComparablePayload(redisSnapshot && redisSnapshot.records);
@@ -21154,6 +21184,11 @@ function buildMatchDetailsReconciliationComponent(memorySnapshot, redisSnapshot,
 }
 
 async function repairRedisReconciliationComponent(component, memoryDatasetSnapshots, memoryMatchDetailsSnapshot) {
+  return operationalDiagnostics.run("repair_component",
+    () => repairRedisReconciliationComponentMeasured(component, memoryDatasetSnapshots, memoryMatchDetailsSnapshot), { component: component?.name });
+}
+
+async function repairRedisReconciliationComponentMeasured(component, memoryDatasetSnapshots, memoryMatchDetailsSnapshot) {
   const startedAtMs = Date.now();
   if (!component || !component.repair_recommended) {
     return {
@@ -21219,7 +21254,7 @@ async function runRedisReconciliationCheck(options = {}) {
     last_error: null,
   });
 
-  redisReconciliationTask = (async () => {
+  redisReconciliationTask = operationalDiagnostics.run("redis_reconciliation", async () => {
     const runStartedAtMs = Date.now();
     const nowMs = runStartedAtMs;
     try {
@@ -21423,7 +21458,7 @@ async function runRedisReconciliationCheck(options = {}) {
     } finally {
       redisReconciliationTask = null;
     }
-  })();
+  }, { trigger, repairEnabled });
 
   return redisReconciliationTask;
 }

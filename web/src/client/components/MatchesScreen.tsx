@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { competitionDateCounts, preferredCompetitionDate } from "../competitionDates";
+import { competitionDateCounts, preferredCompetitionDate, nextMatchDate, nextMatchDateLabel } from "../competitionDates";
 import { competitionLogo } from "../competitionLogos";
 import { loadCompetitions } from "../catalog";
 import { cachedDay, loadDay } from "../dayStore";
@@ -230,20 +230,17 @@ export function MatchesScreen({
     let active = true;
     setDateActivity({ counts: {}, liveDates: {}, finishedDates: {} });
     setDateCountsReady(false);
-    if (competition) {
-      const names = [...new Set([competition, ...competitionAliases])];
-      const update = () => {
-        if (document.visibilityState !== "visible") return;
-        void competitionDateCounts(names, moveDate(date, -15), moveDate(date, 15), mode === 'results')
-          .then(activity => { if (active) { setDateActivity(activity); setDateCountsReady(true); } }).catch(() => {});
-      };
-      update();
-      const timer = window.setInterval(update, 60_000);
-      document.addEventListener("visibilitychange", update);
-      return () => { active = false; window.clearInterval(timer); document.removeEventListener("visibilitychange", update); };
-    }
-    return () => { active = false; };
-  }, [competition, competitionAliases, date, mode]);
+    const names = competition ? [...new Set([competition, ...competitionAliases])] : [];
+    const update = () => {
+      if (document.visibilityState !== "visible") return;
+      void competitionDateCounts(names, moveDate(date, -15), moveDate(date, 15), mode === 'results', { scope: dayScope, tv, query, leagues: params.get('comps')?.split(',') })
+        .then(activity => { if (active) { setDateActivity(activity); setDateCountsReady(true); } }).catch(() => {});
+    };
+    update();
+    const timer = window.setInterval(update, 60_000);
+    document.addEventListener("visibilitychange", update);
+    return () => { active = false; window.clearInterval(timer); document.removeEventListener("visibilitychange", update); };
+  }, [competition, competitionAliases, date, mode, dayScope, tv, query, params.get("comps")]);
   useEffect(() => {
     const rail = dateRail.current;
     const selected = rail?.querySelector<HTMLElement>('[aria-pressed="true"]');
@@ -258,6 +255,20 @@ export function MatchesScreen({
       }
       return next;
     });
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      const target = event.target;
+      if (target instanceof HTMLElement && (target.isContentEditable || target.closest('input, textarea, select, [role="slider"], [role="tablist"], [role="menu"], [role="listbox"], [role="combobox"], [role="spinbutton"], dialog, [role="dialog"]'))) return;
+      const nextDate = moveDate(date, event.key === "ArrowLeft" ? -1 : 1);
+      if ((tv && nextDate < today) || (mode === "results" && nextDate > latestResultDate)) return;
+      event.preventDefault();
+      setParams(current => { const next = new URLSearchParams(current); next.set("date", nextDate); return next; });
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [date, tv, today, mode, latestResultDate, setParams]);
   const relevant = useMemo(
     () =>
       (payload?.matches || []).filter((match) => {
@@ -310,6 +321,20 @@ export function MatchesScreen({
   }, [payload, matches.length, error, emptyCountKey, date, mode, tv]);
   const availableCount = allCompetitionCount?.key === emptyCountKey ? allCompetitionCount.count : undefined;
   const noMoreTVToday = tv && date === today && availableCount === 0;
+  const nextDateKey = JSON.stringify([date, mode, dayScope, tv, competition, competitionAliases, query, params.get("comps")]);
+  const [nextDate, setNextDate] = useState<{ key: string; date: string } | null>(null);
+  useEffect(() => {
+    if (!payload || matches.length || error || (mode === "results" && date >= latestResultDate)) return;
+    let active = true;
+    const names = competition ? [...new Set([competition, ...competitionAliases])] : [];
+    void nextMatchDate(names, date, mode === "results" ? latestResultDate : '9999-12-31', mode === "results",
+      { scope: dayScope, tv, query, leagues: params.get("comps")?.split(",") }, () => active)
+      .then(found => { if (active) setNextDate(found ? { key: nextDateKey, date: found } : null); })
+      .catch(() => { if (active) setNextDate(null); });
+    return () => { active = false; };
+  }, [nextDateKey, Boolean(payload), matches.length, error, latestResultDate]);
+  const jumpDate = nextDate?.key === nextDateKey ? nextDate.date : undefined;
+
   const groups = useMemo(() => {
     const groups = new Map<string, Match[]>();
     for (const match of matches)
@@ -444,7 +469,7 @@ export function MatchesScreen({
                         day: "numeric",
                       })}
                     </span>
-                    {dateCounts[day] > 0 && <span className={`date-count${liveDates[day] ? " is-live" : finishedDates[day] ? " is-finished" : ""}`} aria-hidden="true">{dateCounts[day]}</span>}
+                    {dateCounts[day] > 0 && <span className={`date-count${liveDates[day] ? " is-live" : finishedDates[day] ? " is-finished" : ""}`} aria-hidden="true" />}
                   </button>
                 );
               })}
@@ -598,6 +623,7 @@ export function MatchesScreen({
                     ? "Try another team or channel, or widen your filters."
                     : "Choose another day or explore all competitions."}
                 </p>
+                <div className="empty-match-actions">
                 {!noMoreTVToday && <button
                   onClick={() => {
                     setQuery("");
@@ -610,6 +636,11 @@ export function MatchesScreen({
                 >
                   {availableCount === undefined ? "Show matches across all competitions" : `Show ${availableCount} ${availableCount === 1 ? "match" : "matches"} across all competitions`}
                 </button>}
+                {jumpDate && <>
+                  {!noMoreTVToday && <span className="empty-action-separator">or</span>}
+                  <button onClick={() => change({ date: jumpDate })}>Jump to next matchdate ({nextMatchDateLabel(jumpDate, today)})</button>
+                </>}
+                </div>
               </div>
             )
           )}

@@ -274,3 +274,128 @@ test("TV empty state confirms no remaining broadcasts across all competitions to
     globalThis.fetch = originalFetch;
   }
 });
+
+
+test("empty fixtures jump to the next filtered matchdate and mark the carousel with dots", async t => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-10T12:00:00Z") });
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async url => {
+    const parsed = new URL(String(url), "https://example.test");
+    if (!parsed.pathname.endsWith("/matches")) return new Response("[]");
+    requests.push(parsed.searchParams);
+    const start = parsed.searchParams.get("start"), end = parsed.searchParams.get("end");
+    const date = "2026-11-13";
+    return new Response(JSON.stringify(start <= date && end >= date ? [{
+      match_details_id: "next-friday", date, time: "20:00", league: "Premier League",
+      score_status: "NS", home_team: "Home FC", away_team: "Away FC", tv_channels: [],
+    }] : []));
+  };
+  let renderer, location;
+  function Harness() { location = useLocation(); return React.createElement(MatchesScreen); }
+  try {
+    await act(async () => {
+      renderer = create(React.createElement(MemoryRouter, { initialEntries: ["/?date=2026-11-10&scope=top"] }, React.createElement(Harness)));
+    });
+    const jump = renderer.root.findAllByType("button").find(node => node.children.join("") === "Jump to next matchdate (this Friday)");
+    assert.ok(jump);
+    const dots = renderer.root.findAll(node => node.type === "span" && node.props.className?.startsWith("date-count"));
+    assert.equal(dots.length, 1);
+    assert.deepEqual(dots[0].children, []);
+    assert.equal(dots[0].props["aria-hidden"], "true");
+    assert.match(dots[0].parent.props["aria-label"], /1 match/);
+    assert.ok(requests.filter(query => query.get("start") !== query.get("end")).every(query => query.get("view_option") === "preset:top-teams"));
+    await act(async () => { jump.props.onClick(); });
+    assert.match(location.search, /date=2026-11-13/);
+    assert.match(location.search, /scope=top/);
+  } finally {
+    if (renderer) await act(async () => { renderer.unmount(); });
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("next matchdate lookup paginates past nonmatching broadcasts and honours cancellation", async () => {
+  const { nextMatchDate, nextMatchDateLabel } = await import("../src/client/competitionDates.ts");
+  const originalFetch = globalThis.fetch;
+  const pages = [];
+  globalThis.fetch = async url => {
+    const page = new URL(String(url), "https://example.test").searchParams.get("page");
+    pages.push(page);
+    return new Response(JSON.stringify([{
+      match_details_id: `page-${page}`, date: page === "1" ? "2026-11-11" : "2026-12-03", time: "20:00",
+      league: "Premier League", score_status: "NS", home_team: "Home", away_team: "Away",
+      tv_channels: page === "1" ? [] : [{ name: "BBC One", country_code: "GB" }],
+    }]), { headers: { "X-Has-More": String(page === "1") } });
+  };
+  try {
+    assert.equal(await nextMatchDate([], "2026-11-10", "9999-12-31", false, { tv: true }), "2026-12-03");
+    assert.deepEqual(pages, ["1", "2"]);
+    assert.equal(await nextMatchDate([], "2026-11-10", "9999-12-31", false, {}, () => false), undefined);
+    assert.equal(pages.length, 2);
+    assert.equal(nextMatchDateLabel("2026-11-11", "2026-11-10"), "tomorrow");
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+
+test("arrow keys navigate dates, preserve filters, and respect controls and date limits", async t => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-11-10T12:00:00Z") });
+  const listeners = new Set();
+  t.mock.method(window, "addEventListener", (type, listener) => { if (type === "keydown") listeners.add(listener); });
+  t.mock.method(window, "removeEventListener", (type, listener) => { if (type === "keydown") listeners.delete(listener); });
+  class Element {
+    constructor(control = false, editable = false) { this.control = control; this.isContentEditable = editable; }
+    closest() { return this.control ? this : null; }
+  }
+  const originalElement = globalThis.HTMLElement;
+  globalThis.HTMLElement = Element;
+  t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify([])));
+  let renderer, location, navigate;
+  function Harness() {
+    location = useLocation();
+    navigate = useNavigate();
+    return React.createElement(Routes, null,
+      React.createElement(Route, { path: "/", element: React.createElement(MatchesScreen) }),
+      React.createElement(Route, { path: "/tv", element: React.createElement(MatchesScreen, { tv: true }) }),
+      React.createElement(Route, { path: "/results", element: React.createElement(MatchesScreen, { mode: "results" }) }));
+  }
+  async function key(key, options = {}) {
+    const event = { key, target: new Element(), preventDefault() { this.defaultPrevented = true; }, ...options };
+    await act(async () => { for (const listener of [...listeners]) listener(event); });
+    return event.defaultPrevented === true;
+  }
+  const date = () => new URLSearchParams(location.search).get("date");
+  try {
+    await act(async () => { renderer = create(React.createElement(MemoryRouter, { initialEntries: ["/?date=2026-11-15&scope=top&highlight=1"] }, React.createElement(Harness))); });
+    assert.equal(listeners.size, 1);
+    assert.equal(await key("ArrowLeft"), true);
+    assert.equal(date(), "2026-11-14");
+    await key("ArrowRight");
+    await key("ArrowRight");
+    assert.equal(date(), "2026-11-16");
+    assert.equal(new URLSearchParams(location.search).get("scope"), "top");
+    assert.equal(new URLSearchParams(location.search).get("highlight"), "1");
+    for (const options of [{ target: new Element(true) }, { target: new Element(false, true) }, { altKey: true }, { ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { isComposing: true }, { defaultPrevented: true }]) {
+      await key("ArrowLeft", options);
+      assert.equal(date(), "2026-11-16");
+    }
+    await key("ArrowDown");
+    assert.equal(date(), "2026-11-16");
+    await act(async () => { navigate("/?date=2026-12-31"); });
+    await key("ArrowRight");
+    assert.equal(date(), "2027-01-01");
+    await act(async () => { navigate("/tv?date=2026-11-10"); });
+    assert.equal(await key("ArrowLeft"), false);
+    assert.equal(date(), "2026-11-10");
+    await key("ArrowRight");
+    assert.equal(date(), "2026-11-11");
+    await act(async () => { navigate("/results?date=2026-11-09"); });
+    assert.equal(await key("ArrowRight"), false);
+    assert.equal(date(), "2026-11-09");
+    await key("ArrowLeft");
+    assert.equal(date(), "2026-11-08");
+  } finally {
+    if (renderer) await act(async () => { renderer.unmount(); });
+    globalThis.HTMLElement = originalElement;
+  }
+  assert.equal(listeners.size, 0);
+});

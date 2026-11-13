@@ -50,6 +50,41 @@ function createDiagnostics({ memory = () => process.memoryUsage(), now = () => p
     }
   }
 
+  function runSync(name, work, details = {}) {
+    if (!enabled) return work();
+    const id = ++sequence;
+    const parentId = context.getStore() || null;
+    const started = now();
+    const before = memory();
+    active.set(id, { id, parentId, name, started, ...details });
+    emit({ event: "start", id, parentId, name, ...details, memory: before });
+    let status = "fulfilled";
+    try {
+      return context.run(id, work);
+    } catch (error) {
+      status = "rejected";
+      throw error;
+    } finally {
+      const after = memory();
+      active.delete(id);
+      emit({ event: "end", id, parentId, name, ...details, status,
+        durationMs: Math.round(now() - started), heapDeltaBytes: after.heapUsed - before.heapUsed,
+        rssDeltaBytes: after.rss - before.rss, memory: after });
+    }
+  }
+
+  function detail(details) {
+    if (!enabled) return;
+    emit({ event: "detail", operationId: context.getStore() || null, ...details });
+  }
+
+  function snapshot() {
+    return { memory: memory(),
+      active: [...active.values()].map(({ started, ...job }) => ({ ...job, ageMs: Math.round(now() - started) })),
+      eventLoopMaxMs: delay ? Math.round(delay.max / 1e6) : 0,
+      gcCount, gcDurationMs: Math.round(gcDurationMs) };
+  }
+
   function request(event) {
     if (!enabled) return;
     if (event.errorCode || event.durationMs >= 2000 || event.responseBytes >= 1024 * 1024) {
@@ -68,9 +103,7 @@ function createDiagnostics({ memory = () => process.memoryUsage(), now = () => p
 
   function sample(state = {}) {
     if (!enabled) return;
-    emit({ event: "sample", memory: memory(), ...state,
-      active: [...active.values()].map(({ started, ...job }) => ({ ...job, ageMs: Math.round(now() - started) })),
-      eventLoopMaxMs: delay ? Math.round(delay.max / 1e6) : 0, gcCount, gcDurationMs: Math.round(gcDurationMs) });
+    emit({ event: "sample", ...state, ...snapshot() });
     delay?.reset();
     gcCount = 0;
     gcDurationMs = 0;
@@ -98,7 +131,7 @@ function createDiagnostics({ memory = () => process.memoryUsage(), now = () => p
     active.clear();
   }
 
-  return { run, request, sample, start, stop };
+  return { run, runSync, detail, snapshot, request, sample, start, stop };
 }
 
 module.exports = createDiagnostics();

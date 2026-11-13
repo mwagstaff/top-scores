@@ -415,3 +415,26 @@ while disabled, configured `merged`/`footballdatabase` defaults resolve to the a
 feed to avoid stale blends. Explicit historical-source queries remain available. Club Elo
 fixture polling remains disabled (`CLUB_ELO_FIXTURES_ENABLED=false`) because its upstream
 CSV endpoint was deactivated. BSD remains the fixture, player and match-data provider.
+
+
+### Memory-pressure investigation
+
+TV reconciliation bounds its BSD event query to the active listings' London
+calendar dates (including DST) and projects only the matching fields. Empty
+listings do not read the event collection. It does not truncate candidates, so
+one-to-one and ambiguity decisions retain all eligible fixtures.
+
+The BSD worker's `[bsd-diagnostics]` TV reconciliation detail records include
+listing/candidate/changed-assignment counts and the UTC date bounds. Existing
+operation start/end records supply memory deltas and duration.
+
+API, scraper and monitor `[operational-diagnostics]` logs correlate operations
+using `id`/`parentId` and record trigger, duration, RSS, heap, external and
+array-buffer memory. Named phases cover snapshot refresh, Redis/Mongo reads,
+Redis parsing, memory snapshot creation, comparisons and repairs. Redis payload
+detail records include serialized byte and record counts without logging payloads.
+Thirty-second samples and `[EventLoopStall]` logs include active phases and GC
+statistics since the last sample. GC observer delivery can lag a synchronous
+stall; use phase start/end records as well as the next sample. Memory deltas are
+process-wide and can include overlapping work or garbage collection; they are
+not exclusive allocation attribution. No heap snapshots are taken automatically.

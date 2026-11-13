@@ -1,6 +1,7 @@
 "use strict";
 
 const crypto = require("crypto");
+const diagnostics = require("./bsd_diagnostics");
 const { fetchLiveFootballTvListings } = require("./fetch_live_footballontv");
 const { BSD_LEAGUE_ALLOWLIST } = require("./bsd_config");
 const { zonedDateTimeToUtcMs } = require("./match_time");
@@ -298,6 +299,24 @@ function matchListingsToEvents(listings, eventDocs, leagueDocs = []) {
   };
 }
 
+function listingDateBounds(listings) {
+  const dates = [...new Set(listings.map((listing) => listing.date_local))]
+    .filter((date) => typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date)
+      && Number.isFinite(Date.parse(date)) && new Date(date).toISOString().slice(0, 10) === date)
+    .sort();
+  if (!dates.length) return null;
+  const nextDate = new Date(Date.parse(dates.at(-1)) + 86400000).toISOString().slice(0, 10);
+  return {
+    start: new Date(zonedDateTimeToUtcMs(dates[0], "00:00", LONDON_TIME_ZONE)).toISOString(),
+    end: new Date(zonedDateTimeToUtcMs(nextDate, "00:00", LONDON_TIME_ZONE)).toISOString(),
+  };
+}
+
+const TV_EVENT_PROJECTION = {
+  _id: 1, "payload.id": 1, "payload.event_date": 1, "payload.home_team": 1,
+  "payload.away_team": 1, "payload.league_id": 1, "payload.league_name": 1,
+};
+
 async function reconcileLiveFootballTvSnapshot(snapshotId) {
   const allowedLeagueIds = Array.from(new Set(
     BSD_LEAGUE_ALLOWLIST.flatMap((id) => {
@@ -305,16 +324,18 @@ async function reconcileLiveFootballTvSnapshot(snapshotId) {
       return Number.isFinite(numeric) ? [String(id), numeric] : [String(id)];
     })
   ));
-  const [listings, eventDocs, leagueDocs] = await Promise.all([
-    getLiveFootballTvSnapshot(snapshotId),
+  const listings = await getLiveFootballTvSnapshot(snapshotId);
+  const bounds = listingDateBounds(listings);
+  const [eventDocs, leagueDocs] = bounds ? await Promise.all([
     getBsdRecords("bsd_events", {
+      event_date: { $gte: bounds.start, $lt: bounds.end },
       $or: [
         { league_id: { $in: allowedLeagueIds } },
         { "payload.league_id": { $in: allowedLeagueIds } },
       ],
-    }),
-    getBsdRecords("bsd_leagues"),
-  ]);
+    }, { projection: TV_EVENT_PROJECTION }),
+    getBsdRecords("bsd_leagues", {}, { projection: { _id: 1, "payload.id": 1, "payload.name": 1 } }),
+  ]) : [[], []];
   const result = matchListingsToEvents(listings, eventDocs, leagueDocs);
   const listingBySourceKey = new Map(listings.map((listing) => [listing.source_key, listing]));
   const changedAssignments = result.assignments.filter((assignment) => {
@@ -329,6 +350,10 @@ async function reconcileLiveFootballTvSnapshot(snapshotId) {
     ].some((field) => current[field] !== assignment[field]);
   });
   await updateLiveFootballTvListingMatches(snapshotId, changedAssignments);
+  diagnostics.detail({ name: "tv_reconciliation", listingCount: listings.length,
+    candidateEventCount: eventDocs.length, dateStart: bounds?.start || null,
+    dateEndExclusive: bounds?.end || null, changedAssignmentCount: changedAssignments.length,
+    matched: result.matched, ambiguous: result.ambiguous, unmatched: result.unmatched });
   return {
     snapshot_id: snapshotId,
     total: listings.length,
@@ -445,6 +470,8 @@ module.exports = {
   teamSimilarity,
   __private: {
     buildEventCandidates,
+    listingDateBounds,
+    TV_EVENT_PROJECTION,
     londonDateTime,
     scoreCandidate,
     timeDeltaMinutes,
