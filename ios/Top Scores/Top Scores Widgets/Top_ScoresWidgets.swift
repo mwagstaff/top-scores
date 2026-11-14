@@ -3226,11 +3226,11 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
     }
 
     private var rowSpacing: CGFloat {
-        usesDenseRows ? 3 : 5
+        visibleMatches.count <= 3 ? 7 : (usesDenseRows ? 3 : 5)
     }
 
     private var teamLogoSize: CGFloat {
-        usesDenseRows ? 12 : 14
+        visibleMatches.count <= 2 ? 22 : (visibleMatches.count == 3 ? 19 : (usesDenseRows ? 12 : 14))
     }
 
     private var tvLogoHeight: CGFloat {
@@ -3245,7 +3245,7 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
         if visibleMatches.contains(where: { $0.hasScore && $0.hasDisplayableAggregateScore }) {
             return usesDenseRows ? 36 : 40
         }
-        return usesDenseRows ? 16 : 18
+        return visibleMatches.count <= 3 ? 20 : (usesDenseRows ? 16 : 18)
     }
 
     private var tvColumnWidth: CGFloat {
@@ -3257,7 +3257,9 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
     }
 
     private var rowFont: Font {
-        usesDenseRows ? .caption2.weight(.semibold) : .caption.weight(.semibold)
+        if visibleMatches.count <= 2 { return .subheadline.weight(.semibold) }
+        if visibleMatches.count == 3 { return .footnote.weight(.semibold) }
+        return usesDenseRows ? .caption2.weight(.semibold) : .caption.weight(.semibold)
     }
 
     private var delayBannerText: String? {
@@ -3265,9 +3267,9 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
             return "Delayed | Tap to open"
         }
         if state.delayMinutes > 0 {
-            return "Delayed \(state.delayMinutes) m | Tap to open"
+            return "Delayed \(state.delayMinutes)m | Tap to open"
         }
-        return nil
+        return "Tap to open"
     }
 
     private var fantasyScoreText: String? {
@@ -3327,6 +3329,7 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .dynamicTypeSize(...(visibleMatches.count <= 3 ? DynamicTypeSize.xxxLarge : .large))
     }
 
     // One HStack per match with the same column structure for every row
@@ -3408,7 +3411,7 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
                 }
 
                 Text(homeScoreText(for: match))
-                    .font(usesDenseRows ? .caption2.weight(.bold) : .caption.weight(.bold))
+                    .font(rowFont.bold())
                     .monospacedDigit()
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
@@ -3423,7 +3426,7 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
         if match.hasScore {
             HStack(spacing: 3) {
                 Text(awayScoreText(for: match))
-                    .font(usesDenseRows ? .caption2.weight(.bold) : .caption.weight(.bold))
+                    .font(rowFont.bold())
                     .monospacedDigit()
                     .lineLimit(1)
                     .minimumScaleFactor(0.75)
@@ -3499,7 +3502,9 @@ private struct TopScoresLiveActivityMinimalLockScreenView: View {
                     .layoutPriority(1)
             }
 
-            Spacer(minLength: 0)
+            if fantasyScoreText != nil {
+                Spacer(minLength: 0)
+            }
 
             if let fantasyScoreText {
                 HStack(spacing: 4) {
@@ -3539,20 +3544,24 @@ private struct TopScoresLiveActivityMinimalExpandedView: View {
         visibleMatches.count > 4
     }
 
+    private var usesLargerRows: Bool { visibleMatches.count <= 3 }
+    private var rowFont: Font { usesLargerRows ? .footnote.weight(.semibold) : .caption2.weight(.semibold) }
+
     var body: some View {
         VStack(alignment: .leading, spacing: usesDenseRows ? 3 : 4) {
             ForEach(visibleMatches, id: \.matchId) { match in
                 matchRow(for: match)
             }
         }
+        .dynamicTypeSize(...(usesLargerRows ? DynamicTypeSize.xxxLarge : .large))
     }
 
     // Fixed-width middle columns (mirrors TopScoresLiveActivityMinimalLockScreenView)
     // so the TV logo, away logo and status column all line up vertically across
     // both fixture and scored rows, while the team-name columns flex to fill width.
-    private let scoreColumnWidth: CGFloat = 14
+    private var scoreColumnWidth: CGFloat { usesLargerRows ? 18 : 14 }
     private let tvColumnWidth: CGFloat = 20
-    private let statusColumnWidth: CGFloat = 32
+    private var statusColumnWidth: CGFloat { usesLargerRows ? 42 : 32 }
 
     private func hasTvLogo(_ match: TopScoresLiveActivityMatchState) -> Bool {
         LiveActivityTvLogoAsset.assetName(for: match.tvLogoKey) != nil
@@ -3563,7 +3572,7 @@ private struct TopScoresLiveActivityMinimalExpandedView: View {
             LiveActivityPrecomputedTeamLogo(
                 logoKey: match.homeLogoKey,
                 teamName: match.displayHomeTeam,
-                size: 11
+                size: usesLargerRows ? 18 : 11
             )
 
             Text(match.displayHomeTeam)
@@ -3588,7 +3597,7 @@ private struct TopScoresLiveActivityMinimalExpandedView: View {
             LiveActivityPrecomputedTeamLogo(
                 logoKey: match.awayLogoKey,
                 teamName: match.displayAwayTeam,
-                size: 11
+                size: usesLargerRows ? 18 : 11
             )
 
             Text(matchTimeText(for: match))
@@ -3599,7 +3608,7 @@ private struct TopScoresLiveActivityMinimalExpandedView: View {
                 .minimumScaleFactor(0.75)
                 .frame(width: statusColumnWidth, alignment: .trailing)
         }
-        .font(.caption2.weight(.semibold))
+        .font(rowFont)
     }
 
     @ViewBuilder
@@ -3623,9 +3632,10 @@ private struct TopScoresLiveActivityMinimalExpandedView: View {
     private func homeScoreCell(for match: TopScoresLiveActivityMatchState) -> some View {
         if match.hasScore {
             Text(homeScoreText(for: match))
-                .font(.caption2.weight(.bold))
+                .font(rowFont.bold())
                 .monospacedDigit()
                 .lineLimit(1)
+                .minimumScaleFactor(0.75)
         } else {
             Color.clear
         }
@@ -3635,9 +3645,10 @@ private struct TopScoresLiveActivityMinimalExpandedView: View {
     private func awayScoreCell(for match: TopScoresLiveActivityMatchState) -> some View {
         if match.hasScore {
             Text(awayScoreText(for: match))
-                .font(.caption2.weight(.bold))
+                .font(rowFont.bold())
                 .monospacedDigit()
                 .lineLimit(1)
+                .minimumScaleFactor(0.75)
         } else {
             Color.clear
         }

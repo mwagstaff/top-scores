@@ -29204,7 +29204,9 @@ async function buildAdminLiveActivityPreview(record, nowMs = Date.now()) {
     operationalMatches,
     nowMs
   );
-  const presentation = hooks.buildLiveActivityPresentationForUser(record, entries, nowMs);
+  const presentation = hooks.buildLiveActivityPresentationForUser(record, entries, nowMs, {
+    fantasyMatches: operationalMatches,
+  });
   const contentState =
     presentation && presentation.mode
       ? hooks.buildLiveActivityContentState(
@@ -31777,7 +31779,9 @@ app.get(`${API_PREFIX}/live-activity/test/state`, async (req, res) => {
           operationalMatches,
           nowMs
         );
-        const presentation = hooks.buildLiveActivityPresentationForUser(record, entries, nowMs);
+        const presentation = hooks.buildLiveActivityPresentationForUser(record, entries, nowMs, {
+          fantasyMatches: operationalMatches,
+        });
         const selectedLeagueNames =
           record &&
           record.preferences &&
@@ -33613,6 +33617,7 @@ app.post(`${API_PREFIX}/live-activity/reconcile`, async (_req, res) => {
                 )
                 : null;
             const presentation = hooks.buildLiveActivityPresentationForUser(record, entries, nowMs, {
+              fantasyMatches: operationalMatches,
               delayedSnapshotsByMatchId,
             });
             if (presentation && presentation.mode) {

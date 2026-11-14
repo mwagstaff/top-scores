@@ -5777,10 +5777,32 @@ function isFantasyDeadlineReminderDue(record, nowMs = Date.now()) {
   );
 }
 
-function fantasyCurrentScoreForUser(user) {
+function fantasyCurrentScoreForUser(user, matches, nowMs) {
   if (!isEplSeasonActiveCached()) return null;
   const fantasy = user && user.fantasy && typeof user.fantasy === "object" ? user.fantasy : null;
   if (!hasConnectedFantasyTeam(fantasy)) return null;
+  const players = fantasy.squad && fantasy.squad.players;
+  const squadTeamKeys = new Set(
+    (Array.isArray(players) ? players : []).flatMap((player) => teamIdentityKeys(player && player.teamName))
+  );
+  if (squadTeamKeys.size === 0) return null;
+  const today = currentLondonDateKey(nowMs);
+  // Use the full day's fixtures, before display preferences and the six-row cap.
+  // A saved gameweek score alone does not mean any of this squad plays today.
+  const hasSquadFixtureToday = matches.some((match) => {
+    if (!isLiveActivityMatchOnDateKey(match, today) || isPostponedMatchStatus(match.score_status)) {
+      return false;
+    }
+    if (["P-P", "PST", "CANCELLED", "CANCELED", "CANC", "ABANDONED", "ABD"].includes(normalizeStatusToken(match.score_status))) {
+      return false;
+    }
+    const league = normalizeLiveActivityCompetitionFilterName(match.league);
+    if (league !== "premier league" && league !== "english premier league") return false;
+    return [match.home_team, match.away_team].some((team) =>
+      teamIdentityKeys(team).some((key) => squadTeamKeys.has(key))
+    );
+  });
+  if (!hasSquadFixtureToday) return null;
   return calculateFantasyCurrentScore(fantasy);
 }
 
@@ -7327,7 +7349,11 @@ function buildLiveActivityPresentationForUser(user, entries, nowMs = Date.now(),
     options && options.delayedSnapshotsByMatchId && typeof options.delayedSnapshotsByMatchId === "object"
       ? options.delayedSnapshotsByMatchId
       : null;
-  const fantasyCurrentScore = fantasyCurrentScoreForUser(user);
+  const fantasyCurrentScore = fantasyCurrentScoreForUser(
+    user,
+    [...(options.fantasyMatches || []), ...entries.map((entry) => entry && entry.match).filter(Boolean)],
+    nowMs
+  );
   const eligible = [];
 
   for (const entry of entries) {
@@ -7684,6 +7710,7 @@ async function evaluateAndDispatchLiveActivities(options = {}) {
         user && user.preferences && typeof user.preferences === "object" ? user.preferences : {}
       );
       const presentation = buildLiveActivityPresentationForUser(user, entries, nowMs, {
+        fantasyMatches: candidateOperationalMatches,
         delayedSnapshotsByMatchId:
           delayedSnapshotsByDelay.get(Number(userDelayMinutes)) || null,
       });

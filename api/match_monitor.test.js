@@ -65,6 +65,7 @@ function liveActivityUserWithFantasyScore(score, delayMinutes = 5, extraPreferen
         managerEntryID: 123456,
         gameweekID: 29,
         gameweekTitle: "GW29",
+        players: [{ elementID: 1, displayName: "Saka", teamName: "Arsenal", isStarter: true }],
         effectiveContributions: [{ elementID: 1, displayName: "Saka", teamName: "Arsenal", points: score }],
       },
     },
@@ -4060,6 +4061,46 @@ test("buildLiveActivityPresentationForUser includes synced fantasy score when av
       fantasyCurrentScore: 28,
     })
   );
+});
+
+test("Live Activity fantasy footer follows today's squad fixtures, not a saved score", () => {
+  eplSeasonActive = true;
+  const nowMs = Date.parse("2026-08-22T23:30:00Z"); // 00:30 Sunday in London
+  const user = liveActivityUserWithFantasyScore(29, 2);
+  const fixture = {
+    date: "2026-08-23", time: "15:00", league: "Premier League",
+    home_team: "Arsenal", away_team: "Chelsea", score_status: null,
+  };
+  const scoreFor = (matches, selectedUser = user) => __testHooks.buildLiveActivityPresentationForUser(
+    selectedUser, [], nowMs, { fantasyMatches: matches }
+  ).fantasyCurrentScore;
+
+  assert.equal(scoreFor([fixture]), 29, "upcoming squad fixture today");
+  assert.equal(scoreFor([{ ...fixture, score_status: "45" }]), 29, "live fixture");
+  assert.equal(scoreFor([{ ...fixture, score_status: "FT" }]), 29, "finished fixture today");
+  assert.equal(scoreFor([]), null, "no matches");
+  assert.equal(scoreFor([{ ...fixture, date: "2026-08-22" }]), null, "yesterday in London");
+  assert.equal(scoreFor([{ ...fixture, date: "2026-08-24" }]), null, "tomorrow");
+  assert.equal(scoreFor([{ ...fixture, league: "UEFA Champions League" }]), null, "cup match involving squad club");
+  assert.equal(scoreFor([{ ...fixture, league: "Scottish Premiership" }]), null, "another league");
+  assert.equal(scoreFor([{ ...fixture, home_team: "Liverpool" }]), null, "no squad players in either club");
+  for (const score_status of ["P-P", "POSTPONED", "CANCELLED", "ABD"]) {
+    assert.equal(scoreFor([{ ...fixture, score_status }]), null, score_status);
+  }
+  assert.equal(scoreFor([fixture], { ...user, fantasy: { managerEntryID: 123456, squad: { resolvedCurrentScore: 29 } } }), null, "score without a synced squad");
+
+  const benchUser = liveActivityUserWithFantasyScore(29, 2);
+  benchUser.fantasy.squad.players = [{ elementID: 2, teamName: "Man City", isStarter: false }];
+  assert.equal(scoreFor([{ ...fixture, away_team: "Manchester City" }], benchUser), 29, "bench players and club aliases");
+
+  const filteredUser = liveActivityUserWithFantasyScore(29, 2, {
+    competitionFilterEnabled: true, selectedLeagues: ["La Liga"],
+  });
+  assert.equal(scoreFor([fixture], filteredUser), 29, "day relevance is independent of display preferences and row cap");
+
+  const zeroUser = liveActivityUserWithFantasyScore(0, 2);
+  zeroUser.fantasy.squad.resolvedCurrentScore = 0;
+  assert.equal(scoreFor([fixture], zeroUser), 0, "zero is a valid score on a relevant day");
 });
 
 test("buildLiveActivityPresentationForUser omits fantasy score when no fantasy team is connected", () => {
