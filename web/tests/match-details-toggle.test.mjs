@@ -230,7 +230,7 @@ test("empty TV view counts all competition pages and clears the scope without ch
     await act(async () => {
       renderer = create(React.createElement(MemoryRouter, { initialEntries: ["/tv?date=2026-11-03&scope=top"] }, React.createElement(Harness)));
     });
-    const button = renderer.root.findAllByType("button").find(node => node.children.includes("Show 3 matches across all competitions"));
+    const button = renderer.root.findAllByType("button").find(node => node.children.includes("Show all matches for this day"));
     assert.ok(button);
     assert.equal(renderer.root.findAllByProps({ className: "empty-tv" }).length, 0);
     assert.ok(requests.some(url => url.searchParams.get("page") === "2" && !url.searchParams.has("view_option")));
@@ -398,4 +398,148 @@ test("arrow keys navigate dates, preserve filters, and respect controls and date
     globalThis.HTMLElement = originalElement;
   }
   assert.equal(listeners.size, 0);
+});
+
+
+test("show all day matches counts all pages and undo restores filters and URL", async t => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-09-19T12:00:00Z") });
+  stored.clear();
+  const originalFetch = globalThis.fetch;
+  const fixture = (id, league = "UEFA Nations League", status = "FT") => ({
+    match_details_id: id, date: "2026-09-18", time: "20:00", league,
+    score_status: status, home_team: `Home ${id}`, away_team: `Away ${id}`, tv_channels: [],
+  });
+  globalThis.fetch = async url => {
+    const parsed = new URL(String(url), "https://example.test");
+    if (!parsed.pathname.endsWith("/matches")) return new Response("[]");
+    const filtered = parsed.searchParams.has("view_option");
+    const second = parsed.searchParams.get("page") === "2";
+    const items = filtered ? [fixture("visible")] : second
+      ? [fixture("extra"), fixture("future", undefined, "NS"), fixture("other", "Other League")]
+      : [fixture("visible")];
+    return new Response(JSON.stringify(items), { headers: { "X-Has-More": String(!filtered && !second) } });
+  };
+  let renderer, location, navigate;
+  function Harness() {
+    location = useLocation();
+    navigate = useNavigate();
+    return React.createElement(MatchesScreen, { mode: "results" });
+  }
+  const moreButtons = () => renderer.root.findAllByProps({ className: "show-all-day-matches" });
+  try {
+    await act(async () => {
+      renderer = create(React.createElement(MemoryRouter, { initialEntries: ["/results?date=2026-09-18&scope=top&details=1&highlight=0&comps=UEFA%20Nations%20League"] }, React.createElement(Harness)));
+    });
+    assert.equal(moreButtons().length, 1);
+    assert.ok(moreButtons()[0].children.includes("Show all matches for this day"));
+    await act(async () => { moreButtons()[0].props.onClick(); });
+    const params = new URLSearchParams(location.search);
+    assert.equal(params.get("scope"), "all");
+    assert.equal(params.get("date"), "2026-09-18");
+    assert.equal(params.get("details"), "1");
+    assert.equal(params.get("highlight"), "0");
+    assert.equal(params.has("comps"), false);
+    assert.equal(moreButtons()[0].props.disabled, true);
+    const allButton = renderer.root.findAllByType("button").find(node => node.findAllByType("span").some(span => span.children.includes("All competitions")));
+    assert.equal(allButton.props["aria-pressed"], true);
+    assert.equal(renderer.root.findAllByProps({ className: "fixture-competition" }).length, 2);
+    const undo = renderer.root.findByProps({ "aria-label": "Undo show all matches" });
+    await act(async () => { undo.props.onClick(); });
+    assert.equal(new URLSearchParams(location.search).get("scope"), "top");
+    assert.equal(new URLSearchParams(location.search).get("comps"), "UEFA Nations League");
+    assert.equal(moreButtons().length, 1);
+    assert.equal(renderer.root.findAllByProps({ "aria-label": "Undo show all matches" }).length, 0);
+    await act(async () => { moreButtons()[0].props.onClick(); });
+    await act(async () => { navigate("/results?date=2026-09-17&scope=all"); });
+    assert.equal(renderer.root.findAllByProps({ "aria-label": "Undo show all matches" }).length, 0);
+  } finally {
+    if (renderer) await act(async () => { renderer.unmount(); });
+    globalThis.fetch = originalFetch;
+  }
+});
+
+
+test("show all action is disabled when a preset excludes no matches and restores search on undo", async t => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-09-20T12:00:00Z") });
+  stored.clear();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async url => {
+    const parsed = new URL(String(url), "https://example.test");
+    if (!parsed.pathname.endsWith("/matches")) return new Response("[]");
+    return new Response(JSON.stringify(["Scotland", "France"].map(home => ({
+      match_details_id: `search-${home}`, date: "2026-09-20", time: "20:00", league: "UEFA Nations League",
+      score_status: "NS", home_team: home, away_team: "Away", tv_channels: [],
+    }))));
+  };
+  let renderer;
+  const action = () => renderer.root.findAllByProps({ className: "show-all-day-matches" });
+  try {
+    await act(async () => { renderer = create(React.createElement(MemoryRouter, { initialEntries: ["/?date=2026-09-20&scope=top"] }, React.createElement(MatchesScreen))); });
+    assert.equal(action()[0].props.disabled, true, "A filter alone must not imply hidden matches");
+    assert.ok(action()[0].children.includes("No other matches today"));
+    const noTV = renderer.root.findAllByType("button").find(node => node.children.includes("No matches on TV today"));
+    assert.equal(noTV.props.disabled, true);
+    const searchButton = renderer.root.findByProps({ "aria-label": "Search matches" });
+    await act(async () => { searchButton.props.onClick(); });
+    const input = renderer.root.findAllByType("input").find(node => node.props.type === "search");
+    await act(async () => { input.props.onChange({ target: { value: "Scotland" } }); });
+    assert.equal(action().length, 1);
+    assert.ok(action()[0].children.includes("Show all today's matches"));
+    await act(async () => { action()[0].props.onClick(); });
+    assert.equal(action()[0].props.disabled, true);
+    assert.equal(input.props.value, "");
+    await act(async () => { renderer.root.findByProps({ "aria-label": "Undo show all matches" }).props.onClick(); });
+    assert.equal(input.props.value, "Scotland");
+    assert.equal(action().length, 1);
+  } finally {
+    if (renderer) await act(async () => { renderer.unmount(); });
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("day TV guide action preserves date and restores filters, search and undo", async t => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-21T12:00:00Z") });
+  stored.clear();
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async url => {
+    const parsed = new URL(String(url), "https://example.test");
+    if (!parsed.pathname.endsWith("/matches")) return new Response("[]");
+    return new Response(JSON.stringify(["Scotland", "France"].map(home => ({
+      match_details_id: `guide-${home}`, date: "2026-10-21", time: "20:00", league: "UEFA Nations League",
+      score_status: "NS", home_team: home, away_team: "Away",
+      tv_channels: [{ name: "BBC One", country_code: "GB" }],
+    }))));
+  };
+  let renderer, location;
+  function Harness() {
+    location = useLocation();
+    return React.createElement(MatchesScreen, { tv: location.pathname === "/tv" });
+  }
+  try {
+    await act(async () => { renderer = create(React.createElement(MemoryRouter, { initialEntries: ["/?date=2026-10-21&scope=top&details=1"] }, React.createElement(Harness))); });
+    await act(async () => { renderer.root.findByProps({ "aria-label": "Search matches" }).props.onClick(); });
+    const input = () => renderer.root.findAllByType("input").find(node => node.props.type === "search");
+    await act(async () => { input().props.onChange({ target: { value: "Scotland" } }); });
+    const guide = () => renderer.root.findAllByType("button").find(node => node.children.includes("Show TV guide"));
+    assert.equal(guide().props.disabled, false);
+    await act(async () => { guide().props.onClick(); });
+    assert.equal(location.pathname, "/tv");
+    assert.match(location.search, /date=2026-10-21/);
+    assert.match(location.search, /scope=all/);
+    await act(async () => { renderer.root.findByProps({ "aria-label": "Next day" }).props.onClick(); });
+    assert.match(location.search, /date=2026-10-22/);
+    await act(async () => { renderer.root.findByProps({ "aria-label": "Return to previous match view" }).props.onClick(); });
+    assert.match(location.search, /date=2026-10-21/);
+    assert.equal(location.pathname, "/");
+    assert.match(location.search, /scope=top/);
+    assert.match(location.search, /details=1/);
+    assert.equal(input().props.value, "Scotland");
+    await act(async () => { renderer.root.findByProps({ className: "show-all-day-matches" }).props.onClick(); });
+    await act(async () => { guide().props.onClick(); });
+    await act(async () => { renderer.root.findByProps({ "aria-label": "Return to previous match view" }).props.onClick(); });
+    assert.equal(renderer.root.findAllByProps({ "aria-label": "Undo show all matches" }).length, 1);
+  } finally {
+    if (renderer) await act(async () => { renderer.unmount(); });
+    globalThis.fetch = originalFetch;
+  }
 });

@@ -19,6 +19,7 @@ const { BSD_LEAGUE_ALLOWLIST } = require("./bsd_config");
 const { bsdPlayerImageUrl } = require("./player_images");
 const BSD_VENUE_IMAGE_CATALOG = require("./bsd_venue_image_overrides.json");
 const SunCalc = require("suncalc");
+const matchContextService = require("./bsd_match_context").createMatchContextService({ read: getBsdRecords });
 
 function canonicalBsdTeamName(teamID, providerName) {
   const rawName = String(providerName || "").trim();
@@ -1579,9 +1580,9 @@ async function projectBsdMatchDetails(eventId, options = {}) {
   const teamIds = [eventDoc.payload.home_team_id, eventDoc.payload.away_team_id]
     .filter((teamId) => teamId != null)
     .map(String);
-  const [incidentsDoc, lineupsDoc, broadcastsDoc, supplementaryListings, venueDoc, previousLegDoc, leagues, teamDocs, playerStatsDoc] = await Promise.all([
+  const [incidentsDoc, contextResult, broadcastsDoc, supplementaryListings, venueDoc, previousLegDoc, leagues, teamDocs, playerStatsDoc, statsDoc] = await Promise.all([
     options.incidentsDoc || getBsdRecords("bsd_incidents", { _id: id }).then((r) => r[0] || null),
-    options.lineupsDoc || getBsdRecords("bsd_lineups", { _id: id }).then((r) => r[0] || null),
+    matchContextService.load(eventDoc.payload, { refreshInBackground: options.refreshContext === true, lineupsDoc: options.lineupsDoc }),
     options.broadcastsDoc || getBsdRecords("bsd_broadcasts", { _id: id }).then((r) => r[0] || null),
     getActiveLiveFootballTvListings({
       matchedOnly: true,
@@ -1599,7 +1600,11 @@ async function projectBsdMatchDetails(eventId, options = {}) {
       ? getBsdRecords("bsd_teams", { _id: { $in: teamIds } })
       : Promise.resolve([]),
     options.playerStatsDoc || getBsdRecords("bsd_player_stats", { _id: id }).then((r) => r[0] || null),
+    options.statsDoc || getBsdRecords("bsd_event_stats", { _id: id }, {
+      projection: { "payload.momentum": 1, updated_at: 1 },
+    }).then(rows => rows[0] || null).catch(() => null),
   ]);
+  const lineupsDoc = options.lineupsDoc || contextResult.docs.lineups;
   const leagueNameById = new Map();
   leagues.forEach((doc) => {
     const p = doc.payload || {};
@@ -1620,6 +1625,13 @@ async function projectBsdMatchDetails(eventId, options = {}) {
       teamDocs.map((doc) => [String(doc._id), doc.payload || null])
     ),
   });
+  if (match) match.momentum = require("./bsd_momentum").projectMomentum(
+    statsDoc, eventDoc.payload, incidentsDoc?.payload?.incidents
+  );
+  if (match) {
+    match.match_context = contextResult.context;
+    if (match.match_context.lineup_status === "unavailable") match.team_lineups = null;
+  }
   return applyBsdTwoLegAggregates(
     [previousLegDoc && previousLegDoc.payload, eventDoc.payload].filter(Boolean),
     [match]

@@ -51,6 +51,108 @@ final class Top_ScoresUITests: XCTestCase {
     }
 
     @MainActor
+    func testScoresMatchOpensOnFirstTapAcrossRow() throws {
+        let app = XCUIApplication()
+        app.launch()
+        let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "scoresMatch-"))
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 30))
+        let row = try XCTUnwrap(rows.allElementsBoundByIndex.first { $0.isHittable && $0.isEnabled })
+        let identifier = row.identifier
+
+        // The competition card has a 16-point screen inset. Its row padding
+        // must also open details, even outside the text/crest label's bounds.
+        app.coordinate(withNormalizedOffset: .zero)
+            .withOffset(CGVector(dx: 20, dy: row.frame.midY)).tap()
+        let initialDetails = app.navigationBars["Match Details"]
+        XCTAssertTrue(initialDetails.waitForExistence(timeout: 5), "First tap in row margin failed")
+        initialDetails.buttons.firstMatch.tap()
+
+        // Include blank label padding, not just the visible text and crest.
+        for point in [CGVector(dx: 0.98, dy: 0.05), CGVector(dx: 0.98, dy: 0.95),
+                      CGVector(dx: 0.5, dy: 0.05), CGVector(dx: 0.02, dy: 0.5),
+                      CGVector(dx: 0.98, dy: 0.5), CGVector(dx: 0.5, dy: 0.95)] {
+            let currentRow = app.buttons[identifier]
+            XCTAssertTrue(currentRow.waitForExistence(timeout: 10))
+            currentRow.coordinate(withNormalizedOffset: point).tap()
+            let details = app.navigationBars["Match Details"]
+            XCTAssertTrue(details.waitForExistence(timeout: 5), "First tap failed at \(point)")
+            details.buttons.firstMatch.tap()
+        }
+    }
+
+    @MainActor
+    func testScoresMatchOpensAfterCancelledDateSwipe() throws {
+        let app = XCUIApplication()
+        app.launch()
+        let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "scoresMatch-"))
+        XCTAssertTrue(rows.firstMatch.waitForExistence(timeout: 30))
+        let row = try XCTUnwrap(rows.allElementsBoundByIndex.first { $0.isHittable && $0.isEnabled })
+        let start = row.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: -25, dy: 0)),
+                    withVelocity: .slow, thenHoldForDuration: 0.2)
+        XCTAssertFalse(app.navigationBars["Match Details"].exists, "A drag must not open a match")
+        row.tap()
+        XCTAssertTrue(app.navigationBars["Match Details"].waitForExistence(timeout: 5))
+    }
+
+    @MainActor
+    func testShowAllDayMatchesCanBeUndone() throws {
+        let app = XCUIApplication()
+        app.launch()
+        let options = app.buttons["fixtureOptionsButton"]
+        XCTAssertTrue(options.waitForExistence(timeout: 30))
+        options.tap()
+        app.buttons["Top Teams"].tap()
+        XCTAssertEqual(options.value as? String, "Top Teams")
+
+        let showAll = app.buttons["showAllDayMatches"]
+        // Use a nearby day with hidden matches, since this UI test uses the live feed.
+        for _ in 0..<7 {
+            if showAll.waitForExistence(timeout: 5), showAll.isEnabled { break }
+            let start = app.coordinate(withNormalizedOffset: CGVector(dx: 0.20, dy: 0.58))
+            start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: app.frame.width * 0.6, dy: 0)))
+        }
+        XCTAssertTrue(showAll.exists, "Expected a nearby day with matches outside Top Teams")
+        for _ in 0..<10 where !showAll.isHittable { app.swipeUp() }
+        attachMenuScreenshot(app, name: "Scores - show all action placement")
+        XCTAssertTrue(showAll.isHittable, app.debugDescription)
+        func selectedDateID() -> String? {
+            app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "fixtureDate-"))
+                .allElementsBoundByIndex.first(where: { $0.isSelected })?.identifier
+        }
+        let selectedDate = try XCTUnwrap(selectedDateID())
+        attachMenuScreenshot(app, name: "Scores - show all day matches")
+        showAll.tap()
+        let undo = app.buttons["undoShowAllDayMatches"]
+        XCTAssertTrue(undo.waitForExistence(timeout: 10))
+        XCTAssertEqual(options.value as? String, "All Competitions")
+        XCTAssertEqual(selectedDateID(), selectedDate)
+        XCTAssertTrue(!showAll.exists || !showAll.isEnabled)
+        XCTAssertLessThan(undo.frame.midX, app.frame.midX)
+        XCTAssertEqual(undo.frame.midY, options.frame.midY, accuracy: 2)
+        app.swipeUp()
+        XCTAssertTrue(undo.isHittable, "Undo must stay available while scrolling")
+        attachMenuScreenshot(app, name: "Scores - sticky undo")
+        undo.tap()
+        XCTAssertEqual(options.value as? String, "Top Teams")
+        XCTAssertFalse(undo.exists)
+        XCTAssertTrue(showAll.waitForExistence(timeout: 10))
+        XCTAssertEqual(selectedDateID(), selectedDate)
+        let tvGuide = app.buttons["showDayTVGuide"]
+        for _ in 0..<10 where !tvGuide.isHittable { app.swipeUp() }
+        XCTAssertTrue(tvGuide.isEnabled, "Expected TV broadcasts on the selected test day")
+        tvGuide.tap()
+        let back = app.buttons["returnFromDayTVGuide"]
+        XCTAssertTrue(back.waitForExistence(timeout: 10))
+        XCTAssertEqual(selectedDateID(), selectedDate)
+        attachMenuScreenshot(app, name: "TV Guide - return to scores")
+        back.tap()
+        XCTAssertTrue(options.waitForExistence(timeout: 10))
+        XCTAssertEqual(options.value as? String, "Top Teams")
+        XCTAssertEqual(selectedDateID(), selectedDate)
+    }
+
+    @MainActor
     func testExample() throws {
         // UI tests must launch the application that they test.
         let app = XCUIApplication()

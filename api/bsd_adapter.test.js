@@ -1424,3 +1424,28 @@ test("grouped standings preserve different zone legends without leaking across g
   assert.deepEqual(table.zones, []);
   assert.deepEqual(table.groups.map(g => g.zones), [[relegation], [promotion], []]);
 });
+
+test("match detail joins projected momentum while fixture lists stay lightweight", async () => {
+  const event = { id: 123, league_id: 1, home_team: "Arsenal", away_team: "Chelsea", event_date: "2026-11-12T20:00:00Z", status: "finished", home_score: 1, away_score: 0 };
+  const reads = [];
+  const module = { exports: {} };
+  vm.runInNewContext(fs.readFileSync(require.resolve("./bsd_adapter"), "utf8"), {
+    module,
+    require: name => name === "./mongo_client" ? {
+      getBsdRecords: async (name, filter, options) => {
+        reads.push({ name, filter, options });
+        if (name === "bsd_events") return [{ _id: "123", payload: event }];
+        if (name === "bsd_event_stats") return [{ _id: "123", updated_at: "2026-11-12T22:00:00Z", payload: { momentum: [{ m: 1, v: 20 }, { m: 2, v: -10 }] } }];
+        if (name === "bsd_incidents") return [{ payload: { incidents: [{ type: "goal", minute: 1, is_home: true, player: "Scorer" }] } }];
+        return [];
+      },
+      getActiveLiveFootballTvListings: async () => ({ records: [] }),
+    } : require(name),
+  });
+  const details = await module.exports.projectBsdMatchDetails("123");
+  assert.equal(details.momentum.status, "available");
+  assert.equal(details.momentum.annotations[0].label, "Goal · Scorer");
+  assert.equal(details.momentum.updated_at, "2026-11-12T22:00:00Z");
+  assert.equal(reads.find(r => r.name === "bsd_event_stats").options.projection["payload.momentum"], 1);
+  assert.equal(bsdEventToCanonicalMatch(event).momentum, undefined);
+});

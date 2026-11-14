@@ -1070,7 +1070,9 @@ async function upsertBsdRecord(collectionName, id, payload, extra = {}) {
   const normalizedId = normalizeRecordId(id);
   if (!normalizedId) return null;
   const updatedAtIso = new Date().toISOString();
-  const update = shouldMergeExistingBsdEventMetadata(collectionName, payload)
+  const update = collectionName === "bsd_lineups"
+    ? [{ $set: bsdLineupsSetStage(payload, extra, updatedAtIso) }]
+    : shouldMergeExistingBsdEventMetadata(collectionName, payload)
     ? [
         {
           $set: {
@@ -1092,6 +1094,29 @@ async function upsertBsdRecord(collectionName, id, payload, extra = {}) {
     { upsert: true }
   );
   return normalizedId;
+}
+
+// Atomic precedence protects against a slower prediction request arriving after
+// a confirmed teamsheet, including requests made by separate ingestion processes.
+function bsdLineupsSetStage(payload, extra, fetchedAt) {
+  const sourceTime = Date.parse(payload?.updated_at);
+  const keepExisting = { $or: [
+    { $and: [{ $eq: ["$payload.lineup_status", "confirmed"] },
+      { $ne: [{ $literal: payload?.lineup_status }, "confirmed"] }] },
+    ...(Number.isFinite(sourceTime) ? [{ $and: [
+      { $eq: ["$payload.lineup_status", { $literal: payload?.lineup_status }] },
+      { $gt: [
+        { $convert: { input: "$payload.updated_at", to: "date", onError: null, onNull: null } },
+        { $literal: new Date(sourceTime) },
+      ] },
+    ] }] : []),
+  ] };
+  return {
+    payload: { $cond: [keepExisting, "$payload", { $literal: payload }] },
+    lineup_status: { $cond: [keepExisting, "$payload.lineup_status", { $literal: payload?.lineup_status || "unavailable" }] },
+    event_id: { $literal: extra.event_id ?? payload?.event_id },
+    updated_at: { $literal: fetchedAt },
+  };
 }
 
 async function upsertBsdRecords(collectionName, records = []) {
@@ -1243,5 +1268,6 @@ module.exports = {
     shouldMergeExistingBsdEventMetadata,
     bsdEventPayloadPreservingRoundNameExpression,
     bsdUpsertSetStage,
+    bsdLineupsSetStage,
   },
 };

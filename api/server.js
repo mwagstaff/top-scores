@@ -25728,7 +25728,7 @@ app.get(`${API_PREFIX}/matches/:matchId`, async (req, res) => {
   }
 
   res.set("X-Match-Source", "bsd");
-  const bsdDetails = await projectBsdMatchDetails(matchId).catch((error) => {
+  const bsdDetails = await projectBsdMatchDetails(matchId, { refreshContext: true }).catch((error) => {
     console.warn(`[BSD] match details projection failed for ${matchId}:`, error.message || error);
     return null;
   });

@@ -1,3 +1,5 @@
+import { normalizeMomentum } from "./momentum";
+import { normalizeMatchContext } from "./matchContext";
 import {
   channelApiQueryValues,
   type CompetitionWeightEntry,
@@ -477,6 +479,8 @@ function normalizeTeamRanking(raw: unknown): TeamRankingEntry {
 
 export function normalizeMatchDetails(raw: Record<string, unknown>): MatchDetails {
   return {
+    matchContext: normalizeMatchContext(raw.match_context),
+    momentum: normalizeMomentum(raw.momentum),
     id: asString(raw.id),
     detailsUrl: optionalString(raw.details_url),
     date: optionalString(raw.date),
@@ -845,7 +849,7 @@ function normalizeLineupPlayer(value: unknown): MatchLineupPlayer | null {
 }
 
 function shouldCacheMatchDetails(details: MatchDetails): boolean {
-  return !isIncompleteFinishedMatchDetails(details);
+  return !details.matchContext?.refresh_after_seconds && !details.momentum?.refresh_after_seconds && !isIncompleteFinishedMatchDetails(details);
 }
 
 export function shouldRetryMatchDetails(details: MatchDetails): boolean {

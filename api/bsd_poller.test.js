@@ -73,7 +73,7 @@ test("mapWithConcurrency preserves result order and bounds active workers", asyn
   assert.equal(maxActive, 2);
 });
 
-test("selectPrematchLineupEventIds applies adaptive cadence and skips confirmed/live events", () => {
+test("selectPrematchLineupEventIds applies adaptive cadence and rechecks confirmed teamsheets", () => {
   const nowMs = Date.parse("2026-08-15T12:00:00Z");
   const events = [
     { _id: "early-due", status: "notstarted", event_date: "2026-08-15T13:30:00Z" },
@@ -100,7 +100,7 @@ test("selectPrematchLineupEventIds applies adaptive cadence and skips confirmed/
       closePollMs: 60 * 1000,
     }
   );
-  assert.deepEqual(ids, ["early-due", "close-due"]);
+  assert.deepEqual(ids, ["early-due", "close-due", "confirmed"]);
 });
 
 test("millisecondsUntilNextLondonTime: returns a positive delay within 24h", () => {
@@ -232,6 +232,7 @@ function isolatedPollerState(overrides = {}, clock = Date) {
   const fs = require("node:fs");
   const dependencies = {
     "./bsd_client": { setRequestObserver() {} },
+    "./bsd_momentum": { ingestMomentum: Object.assign(async () => {}, { canFetch: () => true }), selectMomentumBackfill: require("./bsd_momentum").selectMomentumBackfill },
     "./mongo_client": { getBsdRecords: async () => [], upsertBsdRecord: async () => {} },
     "./bsd_current_matches": {
       publishBsdCurrentMatchesProjection: async () => ({ changed: false, payload_hash: "test" }),
@@ -383,4 +384,47 @@ test("player stats polling caches valid and empty responses and isolates failure
   state.setLiveIds(["rated"]);
   await state.poller.pollPlayerStats();
   assert.equal(saved.length, 3);
+});
+
+test("slow momentum settlement does not delay score publication", { timeout: 1000 }, async () => {
+  let release, requested = false;
+  const saved = [];
+  const state = isolatedPollerState({
+    "./bsd_client": {
+      setRequestObserver() {}, getEvent: async () => ({ id: 123, status: "finished" }),
+      getIncidents: async () => ({ event_id: 123, incidents: [] }),
+      getLineups: async () => ({ event_id: 123 }),
+      getEventPlayerStats: async () => ({ event_id: 123, player_stats: [] }),
+    },
+    "./mongo_client": { upsertBsdRecord: async name => saved.push(name), upsertBsdRecords: async name => saved.push(name) },
+    "./bsd_commentary": { refreshCachedMatchCommentary: async () => {} },
+    "./bsd_momentum": { ingestMomentum: () => { requested = true; return new Promise(resolve => { release = resolve; }); } },
+  });
+  await state.poller.reconcileSettledEvent(123);
+  assert.equal(requested, true);
+  assert.ok(saved.includes("bsd_events"));
+  release();
+});
+
+test("momentum backfill scopes Mongo reads and skips temporarily failing IDs without starving other matches", async () => {
+  const now = Date.parse("2026-11-14T18:00:00Z");
+  const calls = [], fetched = [];
+  const events = Array.from({ length: 30 }, (_, i) => ({ _id: String(i), status: "finished", event_date: new Date(now - i * 3600000).toISOString() }));
+  const state = isolatedPollerState({
+    "./bsd_momentum": {
+      ingestMomentum: Object.assign(async id => fetched.push(id), { canFetch: id => id !== "0" }),
+      selectMomentumBackfill: require("./bsd_momentum").selectMomentumBackfill,
+    },
+    "./mongo_client": { getBsdRecords: async (name, filter, options) => {
+      calls.push({ name, filter, options }); return name === "bsd_events" ? events : [];
+    } },
+  }, class extends Date { static now() { return now; } });
+  await state.poller.refreshFinishedMomentum();
+  assert.equal(calls[0].filter.event_date.$gte, "2026-10-31T18:00:00.000Z");
+  assert.equal(calls[0].filter.status, "finished");
+  assert.ok(calls[0].filter.league_id.$in.length > 0);
+  assert.equal(calls[1].options.projection.updated_at, 1);
+  assert.equal(fetched.length, 20);
+  assert.equal(fetched[0], "1");
+  assert.equal(fetched.at(-1), "20");
 });

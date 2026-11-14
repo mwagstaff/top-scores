@@ -597,6 +597,26 @@ function getLineups(id, options = {}) {
   });
 }
 
+// Single-match resources: these do not accept list pagination parameters.
+function getHeadToHead(id, options = {}) {
+  return _request(`/events/${encodeURIComponent(id)}/h2h`, {
+    source: "bsd_event_h2h", reason: "event_h2h_fetch", ...options,
+  });
+}
+
+function getEventMetadata(id, options = {}) {
+  return _request(`/events/${encodeURIComponent(id)}/metadata`, {
+    source: "bsd_event_metadata", reason: "event_metadata_fetch", ...options,
+  });
+}
+
+// Stats is a single-match resource; BSD rejects limit/offset here.
+function getEventStats(id, options = {}) {
+  return _request(`/events/${encodeURIComponent(id)}/stats`, {
+    source: "bsd_event_stats", reason: "event_stats_fetch", ...options,
+  });
+}
+
 function getEventPlayerStats(id, options = {}) {
   return _request(`/events/${encodeURIComponent(id)}/player-stats`, {
     source: "bsd_event_player_stats",
@@ -684,6 +704,9 @@ module.exports = {
   getIncidents,
   getCommentary,
   getLineups,
+  getHeadToHead,
+  getEventMetadata,
+  getEventStats,
   getEventPlayerStats,
   getPlayerStats,
   getPlayer,

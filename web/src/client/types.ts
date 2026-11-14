@@ -153,6 +153,8 @@ export interface MatchTeamLineups {
 }
 
 export interface MatchDetails {
+  matchContext?: import("./matchContext").MatchContext | null;
+  momentum?: import("./momentum").MatchMomentum | null;
   id: string;
   detailsUrl?: string | null;
   date?: string | null;

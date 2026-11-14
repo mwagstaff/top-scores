@@ -15,6 +15,7 @@ import { teamPath } from "../catalog";
 import type { Match } from "../types";
 import { CompactMatchEvents } from "./CompactMatchEvents";
 import { MatchCard } from "./MatchCard";
+import { MatchTeamLeaguePositionsLink } from "./MatchTeamLeaguePositionsLink";
 import { ChannelLogo, TeamCrest, WatchabilityRating } from "./FixtureRow";
 import { StadiumBackdrop } from "./StadiumBackdrop";
 import { PageMeta } from "./PageMeta";
@@ -94,6 +95,9 @@ export default function MatchPage() {
         setMatch(next);
         setError("");
         interval = isMatchLive(next) ? 10_000 : 60_000;
+        if (next.matchDetails?.matchContext?.refresh_after_seconds) {
+          interval = Math.min(interval, next.matchDetails.matchContext.refresh_after_seconds * 1000);
+        }
         if (!next.watchabilityIndex && validDate(next.date) && ukChannels(next.tvChannels).length && !isMatchFinished(next) && !isMatchAbandoned(next)) {
           try {
             let day = await loadDay(next.date);
@@ -219,6 +223,7 @@ export default function MatchPage() {
           <button onClick={() => setRetry((v) => v + 1)}>Try again</button>
         </div>
       )}
+      <MatchTeamLeaguePositionsLink match={match} />
       {!isMatchFinished(match) && !isMatchAbandoned(match) && (
         <section className="uk-broadcast-panel">
           <div>

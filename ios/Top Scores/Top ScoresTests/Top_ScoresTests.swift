@@ -369,6 +369,23 @@ struct Top_ScoresTests {
         #expect(coordinator.allowsMatchNavigation)
     }
 
+    @Test @MainActor func dateSwipeInteraction_expiryDoesNotRequireMainActorTask() {
+        let coordinator = FixturesViewCoordinator()
+        coordinator.beginDateSwipeInteraction()
+        coordinator.endDateSwipeInteraction(delayNanoseconds: 10_000_000)
+        #expect(!coordinator.allowsMatchNavigation)
+
+        // Simulate rendering occupying the main actor past the settling window.
+        // Deliberately do not yield to a queued release task before the next tap.
+        Thread.sleep(forTimeInterval: 0.03)
+        #expect(coordinator.allowsMatchNavigation)
+
+        coordinator.beginDateSwipeInteraction()
+        #expect(!coordinator.allowsMatchNavigation)
+        coordinator.resetPresentation()
+        #expect(coordinator.allowsMatchNavigation)
+    }
+
     @Test @MainActor func dateSwipeInteraction_failSafeRestoresMatchNavigation() async {
         let coordinator = FixturesViewCoordinator()
 

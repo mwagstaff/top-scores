@@ -1,3 +1,6 @@
+import { MatchMomentumCard } from "./MatchMomentumCard";
+import { FunFacts, HeadToHead, LineupStatusBadge, MatchPreview } from "./MatchContextSections";
+import { isContextPrematch } from "../matchContext";
 import { useEffect, useMemo, useRef, useState, memo, type CSSProperties } from "react";
 import { clearMatchDetailsCache, fetchMatchDetails, fetchMatchRatings, fetchMatchSocial, fetchPlayerDetails, shouldRetryMatchDetails } from "../api";
 import { MatchTeamLeaguePositionsLink } from "./MatchTeamLeaguePositionsLink";
@@ -75,14 +78,25 @@ export function MatchCard({
   const [socialItems, setSocialItems]         = useState<MatchSocialItem[]>([]);
   const [socialLoading, setSocialLoading]     = useState(false);
   const [showCommentary, setShowCommentary]   = useState(false);
+  const [now, setNow] = useState(Date.now);
   const retriedIncompleteDetailsIdRef         = useRef<string | null>(null);
 
   const status        = displayStatus(match);
   const aggregateText = aggregateSummary(match);
-  const isLive        = isMatchLive(match);
-  const isFinished    = isMatchFinished(match);
+  const isLive        = details?.inProgress === true || isMatchLive(match);
+  const isFinished    = ["FT", "AET", "PENS"].includes(details?.scoreStatus || "") || isMatchFinished(match);
   const isAbandoned   = isMatchAbandoned(match);
   const showMatchUpdates = isLive || isFinished || isAbandoned;
+  const prematch = !showMatchUpdates && isContextPrematch(details?.matchContext, now);
+
+  // Expire pre-match content even when the next network request fails.
+  useEffect(() => {
+    const kickoff = Date.parse(details?.matchContext?.kickoff_at || "");
+    setNow(Date.now());
+    if (!Number.isFinite(kickoff) || kickoff <= Date.now()) return;
+    const timer = window.setTimeout(() => setNow(Date.now()), Math.min(2_147_483_647, kickoff - Date.now() + 10));
+    return () => window.clearTimeout(timer);
+  }, [details?.matchContext?.kickoff_at]);
   const isExpandable  = Boolean(match.matchDetailsId);
   const detailPanelId = `match-details-${match.id.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 
@@ -117,6 +131,28 @@ export function MatchCard({
       setDetailsError(null);
     }
   }, [match.matchDetails]);
+
+  // Standalone match pages already poll. Expanded cards need their own bounded
+  // refresh while momentum is pending/live, including late post-match coverage.
+  useEffect(() => {
+    const intervals = [details?.momentum?.refresh_after_seconds, details?.matchContext?.refresh_after_seconds]
+      .filter((value): value is number => typeof value === "number" && value > 0);
+    const seconds = intervals.length ? Math.min(...intervals) : null;
+    if (detailOnly || !isExpanded || !match.matchDetailsId || !seconds) return;
+    let cancelled = false;
+    let inFlight = false;
+    const timer = window.setInterval(async () => {
+      if (inFlight || document.visibilityState !== "visible") return;
+      inFlight = true;
+      try {
+        clearMatchDetailsCache(match.matchDetailsId!);
+        const next = await fetchMatchDetails(match.matchDetailsId!);
+        if (!cancelled) setDetails(next);
+      } catch { /* Retain the last valid graph during a failed refresh. */ }
+      finally { inFlight = false; }
+    }, Math.max(15, seconds) * 1000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [detailOnly, isExpanded, match.matchDetailsId, details?.momentum?.refresh_after_seconds, details?.matchContext?.refresh_after_seconds]);
 
   // Fetch details on expand
   useEffect(() => {
@@ -306,7 +342,10 @@ export function MatchCard({
       {/* Expanded match details panel */}
       {isExpandable && isExpanded && (
         <div className="match-details-panel" id={detailPanelId}>
-          <MatchTeamLeaguePositionsLink match={match} />
+          {!detailOnly && <MatchTeamLeaguePositionsLink match={match} />}
+          {!detailOnly && !isFinished && !isAbandoned && <WhereToWatch channels={match.tvChannels} />}
+          <MatchPreview context={details?.matchContext} prematch={prematch} />
+          {showMatchUpdates && details?.momentum && <MatchMomentumCard key={match.id} momentum={details.momentum} homeTeam={match.homeTeam} awayTeam={match.awayTeam} isLive={isLive} />}
           {showMatchUpdates && (
             <div className="match-feed-picker" role="group" aria-label="Match updates">
               <button type="button" aria-pressed={!showCommentary} onClick={() => setShowCommentary(false)}>Key events</button>
@@ -322,7 +361,7 @@ export function MatchCard({
             <ExpandedMatchDetails
               details={details}
               isLive={isLive}
-              tvChannels={detailOnly ? [] : match.tvChannels}
+              prematch={prematch}
               homeTeam={match.homeTeam}
               awayTeam={match.awayTeam}
               showEvents={showMatchUpdates && !showCommentary}
@@ -333,6 +372,7 @@ export function MatchCard({
             <div className="match-details-message">No additional match details available.</div>
           )}
           <MatchSocialSection items={socialItems} />
+          <FunFacts context={details?.matchContext} />
         </div>
       )}
       {/* Debug panel always visible in debug mode, regardless of expand state */}
@@ -610,21 +650,22 @@ function WhereToWatch({ channels }: { channels: TvChannel[] }) {
 function ExpandedMatchDetails({
   details,
   isLive = false,
-  tvChannels = [],
+  prematch = false,
   homeTeam,
   awayTeam,
   showEvents = true,
 }: {
   details: MatchDetails;
   isLive?: boolean;
-  tvChannels?: TvChannel[];
+  prematch?: boolean;
   homeTeam: string;
   awayTeam: string;
   showEvents?: boolean;
 }) {
   const timelineEntries    = useMemo(() => buildTimelineEntries(details), [details]);
-  const hasCompleteLineups = hasRenderableTeamLineups(details.teamLineups);
-  const hasTvData          = tvChannels.length > 0;
+  const lineupStatus = details.matchContext?.lineup_status;
+  const hasCompleteLineups = hasRenderableTeamLineups(details.teamLineups) &&
+    lineupStatus !== "unavailable" && (lineupStatus !== "predicted" || prematch);
   const [selectedTimelinePlayer, setSelectedTimelinePlayer] = useState<MatchLineupPlayer | null>(null);
   const [newestFirst, setNewestFirst] = useState(true);
   const teamColorCatalog = useTeamColorCatalog();
@@ -632,10 +673,6 @@ function ExpandedMatchDetails({
   const awayTeamName = details.teamLineups?.away?.team || details.awayTeam || awayTeam;
   const homeColors = teamColorCatalog.lineupColors(homeTeamName, awayTeamName, "home");
   const awayColors = teamColorCatalog.lineupColors(awayTeamName, homeTeamName, "away");
-
-  if (timelineEntries.length === 0 && !hasCompleteLineups && !hasTvData) {
-    return showEvents ? <div className="match-details-message">No additional match details available.</div> : null;
-  }
 
   return (
     <div className="match-details-body">
@@ -701,7 +738,10 @@ function ExpandedMatchDetails({
       )}
 
       {hasCompleteLineups && <LineupSection details={details} teamLineups={details.teamLineups!} isLive={isLive} />}
-      {hasTvData && <WhereToWatch channels={tvChannels} />}
+      {!hasCompleteLineups && details.matchContext && <div className="match-context-note">
+        {prematch ? "Lineups not available yet." : "Confirmed lineups unavailable."}
+      </div>}
+      <HeadToHead context={details.matchContext} homeTeam={homeTeam} awayTeam={awayTeam} />
       {selectedTimelinePlayer && (
         <PlayerDetailsDialog
           player={selectedTimelinePlayer}
@@ -828,8 +868,11 @@ interface LineupSectionProps {
 }
 
 function LineupSection({ details, teamLineups, isLive }: LineupSectionProps) {
-  const homeLineup       = teamLineups.home!;
-  const awayLineup       = teamLineups.away!;
+  const emptyLineup: MatchTeamLineup = { startingLineup: [], substitutes: [], substitutions: [] };
+  const homeLineup       = teamLineups.home || emptyLineup;
+  const awayLineup       = teamLineups.away || emptyLineup;
+  const predicted = details.matchContext?.lineup_status === "predicted";
+  const showRatings = isLive || ["FT", "AET", "PENS"].includes(details.scoreStatus || "");
   const [selectedPlayer, setSelectedPlayer] = useState<MatchLineupPlayer | null>(null);
   const [ratings, setRatings] = useState<{ matchId: string; byPlayer: Record<string, number> } | null>(null);
   const [ratingsError, setRatingsError] = useState(false);
@@ -837,7 +880,7 @@ function LineupSection({ details, teamLineups, isLive }: LineupSectionProps) {
   const teamColorCatalog = useTeamColorCatalog();
 
   useEffect(() => {
-    if (!/^\d+$/.test(details.id)) return;
+    if (!showRatings || !/^\d+$/.test(details.id)) return;
     const controller = new AbortController();
     const loadRatings = () => {
       void fetchMatchRatings(details.id, controller.signal)
@@ -853,7 +896,7 @@ function LineupSection({ details, teamLineups, isLive }: LineupSectionProps) {
       controller.abort();
       if (interval !== null) window.clearInterval(interval);
     };
-  }, [details.id, isLive, ratingsRetry]);
+  }, [details.id, isLive, ratingsRetry, showRatings]);
 
   const homeLookup = buildLineupEventLookup({
     goals: details.homeGoalScorers, assists: details.homeAssists,
@@ -877,14 +920,15 @@ function LineupSection({ details, teamLineups, isLive }: LineupSectionProps) {
   return (
     <>
     <section className="details-section lineup-section">
-      <div className="details-section-title">Starting Line-ups</div>
-      {ratingsError ? (
+      <div className="match-context-heading"><div className="details-section-title">{predicted ? "Predicted line-ups" : "Starting Line-ups"}</div><LineupStatusBadge status={details.matchContext?.lineup_status} /></div>
+      {(!homeLineup.startingLineup.length || !awayLineup.startingLineup.length) && <p className="match-context-note">{!homeLineup.startingLineup.length ? homeTeamName : awayTeamName} lineup not available yet.</p>}
+      {showRatings && (ratingsError ? (
         <button className="lineup-ratings-note lineup-ratings-retry" type="button" onClick={() => setRatingsRetry((value) => value + 1)}>
           Ratings temporarily unavailable · Retry
         </button>
       ) : (
         <div className="lineup-ratings-note">Match ratings out of 10 · – means not available</div>
-      )}
+      ))}
       <div className="lineup-pitch-header">
         <span>{homeTeamName}</span><span>{homeLineup.formation}</span>
       </div>
@@ -898,6 +942,7 @@ function LineupSection({ details, teamLineups, isLive }: LineupSectionProps) {
             teamColor={homeColors.background}
             teamOutline={homeColors.foreground}
             ratings={playerRatings}
+            showRatings={showRatings}
             onSelectPlayer={setSelectedPlayer}
           />
           <LineupHalf
@@ -907,6 +952,7 @@ function LineupSection({ details, teamLineups, isLive }: LineupSectionProps) {
             teamColor={awayColors.background}
             teamOutline={awayColors.foreground}
             ratings={playerRatings}
+            showRatings={showRatings}
             onSelectPlayer={setSelectedPlayer}
           />
         </div>
@@ -914,17 +960,17 @@ function LineupSection({ details, teamLineups, isLive }: LineupSectionProps) {
       <div className="lineup-pitch-header lineup-pitch-header-away">
         <span>{awayTeamName}</span><span>{awayLineup.formation}</span>
       </div>
-      <div className="lineup-marker-legend" aria-label="Line-up markers">
+      {showRatings && <div className="lineup-marker-legend" aria-label="Line-up markers">
         <span>⚽ Goal</span><span><b className="lineup-legend-assist">A</b> Assist</span>
         <span><b className="lineup-legend-card lineup-legend-yellow" /> Yellow</span>
         <span><b className="lineup-legend-card lineup-legend-red" /> Red</span>
         <span><b className="lineup-sub-arrow lineup-sub-arrow-on">↑</b> Sub in</span>
         <span><b className="lineup-sub-arrow lineup-sub-arrow-off">↓</b> Sub out</span>
-      </div>
+      </div>}
     </section>
     {hasSubstitutes && (
       <section className="details-section lineup-substitutes-section">
-        <div className="details-section-title">Substitutes</div>
+        <div className="details-section-title">{predicted ? "Predicted bench" : "Substitutes"}</div>
         <LineupSubstitutesTable lineup={homeLineup} teamName={homeTeamName} lookup={homeLookup} teamColor={homeColors.background} teamOutline={homeColors.foreground} ratings={playerRatings} onSelectPlayer={setSelectedPlayer} />
         <LineupSubstitutesTable lineup={awayLineup} teamName={awayTeamName} lookup={awayLookup} teamColor={awayColors.background} teamOutline={awayColors.foreground} ratings={playerRatings} onSelectPlayer={setSelectedPlayer} />
       </section>
@@ -949,10 +995,11 @@ interface LineupHalfProps {
   teamColor: string;
   teamOutline: string;
   ratings: Record<string, number>;
+  showRatings: boolean;
   onSelectPlayer: (player: MatchLineupPlayer) => void;
 }
 
-function LineupHalf({ starters, lookup, side, teamColor, teamOutline, ratings, onSelectPlayer }: LineupHalfProps) {
+function LineupHalf({ starters, lookup, side, teamColor, teamOutline, ratings, showRatings, onSelectPlayer }: LineupHalfProps) {
   const groupedRows = buildDisplayLineupRows(starters, side);
 
   return (
@@ -972,6 +1019,7 @@ function LineupHalf({ starters, lookup, side, teamColor, teamOutline, ratings, o
                 summary={lookup.summaryFor(player)}
                 replacementSummary={lookup.replacementSummaryFor(player)}
                 ratings={ratings}
+                showRatings={showRatings}
                 onSelectPlayer={onSelectPlayer}
               />
             ))}
@@ -991,10 +1039,11 @@ interface LineupPlayerMarkerProps {
   summary: MatchLineupPlayerEventSummary;
   replacementSummary: MatchLineupPlayerEventSummary | null;
   ratings: Record<string, number>;
+  showRatings: boolean;
   onSelectPlayer: (player: MatchLineupPlayer) => void;
 }
 
-function LineupPlayerMarker({ player, summary, replacementSummary, ratings, onSelectPlayer }: LineupPlayerMarkerProps) {
+function LineupPlayerMarker({ player, summary, replacementSummary, ratings, showRatings, onSelectPlayer }: LineupPlayerMarkerProps) {
   const replacementPlayer = summary.substitution?.playerOn ?? null;
   const badgeItems        = buildPlayerBadgeItems(summary);
   const replacementBadges = replacementSummary ? buildPlayerBadgeItems(replacementSummary) : [];
@@ -1022,7 +1071,7 @@ function LineupPlayerMarker({ player, summary, replacementSummary, ratings, onSe
         <div className="lineup-player-photo-wrap">
           <LineupPlayerPortrait player={player} className="lineup-player-portrait-team" />
           <span className={`lineup-player-rating${rating === undefined ? " lineup-player-rating-empty" : rating >= 8 ? " lineup-player-rating-high" : rating >= 6 ? " lineup-player-rating-mid" : " lineup-player-rating-low"}`}>
-            {rating === undefined ? "–" : rating.toFixed(1)}
+            {showRatings ? (rating === undefined ? "–" : rating.toFixed(1)) : player.number || "–"}
           </span>
           {replacementPlayer && (
             <>
@@ -1297,15 +1346,13 @@ function LineupEventBadge({ badge }: { badge: LineupEventBadgeDescriptor }) {
 }
 
 
-// ── Guard: only render lineup when both teams have starters ───────
+// Partial teamsheets remain useful; render the known side without inventing players.
 
 function hasRenderableTeamLineups(
   teamLineups: MatchTeamLineups | null | undefined
-): teamLineups is MatchTeamLineups & { home: MatchTeamLineup; away: MatchTeamLineup } {
+): teamLineups is MatchTeamLineups {
   return Boolean(
-    teamLineups?.home && teamLineups.away &&
-    teamLineups.home.startingLineup.length > 0 &&
-    teamLineups.away.startingLineup.length > 0
+    teamLineups?.home?.startingLineup.length || teamLineups?.away?.startingLineup.length
   );
 }
 

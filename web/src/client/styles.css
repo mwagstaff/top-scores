@@ -2757,3 +2757,31 @@ button.match-row:hover {
   /* Desktop: mobile tab dock hidden */
   .tab-strip-mobile { display: none; }
 }
+
+/* Match momentum */
+.momentum-card { margin: 12px 0 20px; padding: 16px 20px; border: 1px solid #91a3b830; border-radius: 10px; background: #0a131de6; }
+.momentum-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.momentum-heading h3 { margin: 0; font-size: 16px; }
+.momentum-heading > span, .momentum-note { color: #91a3b8; font-size: 12px; }
+.momentum-teams { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px 20px; margin: 12px 0; font-size: 13px; }
+.momentum-teams > span { display: flex; align-items: center; gap: 7px; }
+.momentum-teams i { display: inline-block; flex: 0 0 9px; width: 9px; height: 9px; border: 1px solid; border-radius: 50%; }
+.momentum-teams small { color: #91a3b8; }
+.momentum-plot { margin: 0 4px; }
+.momentum-plot svg { display: block; width: 100%; height: 140px; overflow: visible; }
+.momentum-divider { stroke: #91a3b850; stroke-dasharray: 3 5; vector-effect: non-scaling-stroke; }
+.momentum-baseline { stroke: #91a3b870; vector-effect: non-scaling-stroke; }
+.momentum-markers { position: relative; }
+.momentum-marker { position: absolute; transform: translateX(-50%); width: 44px; height: 44px; border: 0; background: transparent; color: #f2f5fa; cursor: pointer; font-family: inherit; font-size: 15px; font-weight: 700; display: grid; place-items: center; padding: 0; }
+.momentum-marker span { display: grid; place-items: center; min-width: 24px; height: 24px; border-radius: 5px; background: #142235; border: 1px solid #91a3b850; }
+.momentum-marker-red_card span { color: #ff365e; }
+.momentum-marker[aria-pressed="true"] span { border-color: #2aa8ff; background: #173753; }
+.momentum-marker:focus-visible { outline: 2px solid #2aa8ff; outline-offset: -3px; border-radius: 6px; }
+.momentum-axis { position: relative; height: 24px; margin-top: 8px; color: #91a3b8; font-size: 11px; font-variant-numeric: tabular-nums; }
+.momentum-axis span { position: absolute; transform: translateX(-50%); }
+.momentum-axis span:first-child { transform: none; }
+.momentum-axis span:last-child { transform: translateX(-100%); }
+.momentum-note { margin: 8px 0 0; line-height: 1.5; }
+.momentum-event { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; min-height: 44px; font-size: 13px; }
+.momentum-event button { width: 44px; min-height: 44px; flex: 0 0 44px; color: #f2f5fa; background: transparent; border: 0; font-size: 22px; cursor: pointer; }
+@media (max-width: 600px) { .momentum-card { padding: 14px 20px; } }

@@ -139,6 +139,21 @@ struct FixtureBrowserLocalCompetitionCacheTests {
         #expect(topSummaries?.map(\.id) == ["premier-league", "la-liga"])
         #expect(topSummaries?.map(\.matchCount) == [1, 1])
         #expect(store.calendarCompetitionSummariesByDate["2026-09-24"]?.map(\.id) == ["uefa-nations-league"])
+        // The day-level override reveals every competition without changing the
+        // selected date or the stored preset; undo simply removes the override.
+        let dateBeforeShowAll = store.selectedDateKey
+        store.configure(preferences: Self.preferences(
+            baseURL: baseURL, competitionID: "", optionID: FixtureViewOptionID.topTeamsPreset,
+            showAllMatches: true
+        ))
+        #expect(store.selectedDateKey == dateBeforeShowAll)
+        #expect(store.visibleMatches.map(\.homeTeam) == ["Arsenal", "Barcelona", "Lille"])
+        store.configure(preferences: Self.preferences(
+            baseURL: baseURL, competitionID: "", optionID: FixtureViewOptionID.topTeamsPreset
+        ))
+        #expect(store.selectedDateKey == dateBeforeShowAll)
+        #expect(store.visibleMatches.map(\.homeTeam) == ["Arsenal", "Barcelona"])
+        #expect(requestLog.urls.count == requestCountBeforeSwitch)
         // Loading a cached month must not fetch the same matches again.
         let august = try #require(ISO8601DateFormatter().date(from: "2026-08-01T00:00:00Z"))
         try await store.loadCalendarMonth(containing: august)
@@ -202,7 +217,8 @@ struct FixtureBrowserLocalCompetitionCacheTests {
     private static func preferences(
         baseURL: String,
         competitionID: String,
-        optionID: String? = nil
+        optionID: String? = nil,
+        showAllMatches: Bool = false
     ) -> PreferencesSnapshot {
         PreferencesSnapshot(
             selectedLeagues: [],
@@ -211,7 +227,8 @@ struct FixtureBrowserLocalCompetitionCacheTests {
             fixtureAllMajorMatchesEnabled: false,
             englishPremierLeagueTeamsOnly: false,
             apiBaseURL: baseURL,
-            refreshIntervalMinutes: 10
+            refreshIntervalMinutes: 10,
+            showAllMatches: showAllMatches
         )
     }
 }

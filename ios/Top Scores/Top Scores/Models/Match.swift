@@ -722,6 +722,8 @@ nonisolated struct MatchVenueDetails: Codable, Hashable, Sendable {
 }
 
 nonisolated struct MatchDetailsPayload: Codable, Hashable, Sendable {
+    let momentum: MatchMomentum?
+    let matchContext: MatchContext?
     let id: String
     let detailsURL: String?
     let date: String?
@@ -761,6 +763,8 @@ nonisolated struct MatchDetailsPayload: Codable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id
+        case momentum
+        case matchContext = "match_context"
         case detailsURL = "details_url"
         case date
         case time
@@ -800,6 +804,8 @@ nonisolated struct MatchDetailsPayload: Codable, Hashable, Sendable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        momentum = try? container.decodeIfPresent(MatchMomentum.self, forKey: .momentum)
+        matchContext = try? container.decodeIfPresent(MatchContext.self, forKey: .matchContext)
         id = try container.decode(String.self, forKey: .id)
         detailsURL = try container.decodeIfPresent(String.self, forKey: .detailsURL)
         date = try container.decodeIfPresent(String.self, forKey: .date)
@@ -1702,7 +1708,7 @@ struct Match: Identifiable, Codable, Hashable, Sendable {
             awayRedCards: details.awayRedCards,
             homeVarEvents: details.homeVarEvents,
             awayVarEvents: details.awayVarEvents,
-            teamLineups: details.teamLineups ?? teamLineups,
+            teamLineups: details.matchContext != nil ? details.teamLineups : (details.teamLineups ?? teamLineups),
             penaltyResult: details.penaltyResult ?? penaltyResult,
             isTestMatch: isTestMatch
         )

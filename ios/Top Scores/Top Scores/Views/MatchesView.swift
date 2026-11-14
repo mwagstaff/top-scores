@@ -246,8 +246,7 @@ final class FixturesViewCoordinator: ObservableObject {
     @Published private(set) var toastMessage: String?
 
     private var toastTask: Task<Void, Never>?
-    private var dateSwipeNavigationReleaseTask: Task<Void, Never>?
-    private var isDateSwipeSuppressingMatchNavigation = false
+    private var dateSwipeNavigationReleaseDeadline: ContinuousClock.Instant?
 
     private static let competitionDockExpandAnimation = Animation.timingCurve(
         0.22,
@@ -275,11 +274,14 @@ final class FixturesViewCoordinator: ObservableObject {
     }
 
     var allowsMatchNavigation: Bool {
-        !isDateSwipeSuppressingMatchNavigation
+        // A queued release task can run late when the main actor is busy.
+        // Check elapsed time at the tap so that delay cannot swallow a new tap.
+        guard let dateSwipeNavigationReleaseDeadline else { return true }
+        return ContinuousClock.now >= dateSwipeNavigationReleaseDeadline
     }
 
     func waitUntilDateSwipeFinishes() async -> Bool {
-        while isDateSwipeSuppressingMatchNavigation {
+        while !allowsMatchNavigation {
             guard !Task.isCancelled else { return false }
             try? await Task.sleep(for: .milliseconds(25))
         }
@@ -299,31 +301,20 @@ final class FixturesViewCoordinator: ObservableObject {
     }
 
     func beginDateSwipeInteraction(failSafeNanoseconds: UInt64 = 10_000_000_000) {
-        dateSwipeNavigationReleaseTask?.cancel()
-        isDateSwipeSuppressingMatchNavigation = true
-        dateSwipeNavigationReleaseTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: failSafeNanoseconds)
-            guard !Task.isCancelled, let self else { return }
-            self.isDateSwipeSuppressingMatchNavigation = false
-            self.dateSwipeNavigationReleaseTask = nil
-        }
+        dateSwipeNavigationReleaseDeadline = ContinuousClock.now.advanced(
+            by: .nanoseconds(Int64(clamping: failSafeNanoseconds))
+        )
     }
 
     func endDateSwipeInteraction(delayNanoseconds: UInt64 = 75_000_000) {
-        guard isDateSwipeSuppressingMatchNavigation else { return }
-        dateSwipeNavigationReleaseTask?.cancel()
-        dateSwipeNavigationReleaseTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: delayNanoseconds)
-            guard !Task.isCancelled, let self else { return }
-            self.isDateSwipeSuppressingMatchNavigation = false
-            self.dateSwipeNavigationReleaseTask = nil
-        }
+        guard !allowsMatchNavigation else { return }
+        dateSwipeNavigationReleaseDeadline = ContinuousClock.now.advanced(
+            by: .nanoseconds(Int64(clamping: delayNanoseconds))
+        )
     }
 
     private func clearDateSwipeInteraction() {
-        dateSwipeNavigationReleaseTask?.cancel()
-        dateSwipeNavigationReleaseTask = nil
-        isDateSwipeSuppressingMatchNavigation = false
+        dateSwipeNavigationReleaseDeadline = nil
     }
 
     func toggleMatchFilters(reduceMotion: Bool) {
@@ -420,7 +411,7 @@ struct MatchesView: View {
     @State private var fixtureBrowseUnfilteredPageGroupedDays: [String: [MatchDay]] = [:]
     @State private var fixtureBrowseUnfilteredPageSourceMatchesByDate: [String: [Match]] = [:]
     @StateObject private var fixtureArtworkPreparation = FixtureArtworkPreparationState()
-    @State private var expandedFixtureCompetitionKeys: Set<String> = []
+    @State private var showAllMatchesUndoDate: String?
     @State private var fixtureCompetitionMatchLimits: [String: Int] = [:]
     @State private var isFixtureDatePickerPresented = false
     @State private var fixtureDatePickerSelection = Date()
@@ -432,6 +423,7 @@ struct MatchesView: View {
     @State private var showsCalendarSubscriptionError = false
     @State private var isTVListingsPresented = false
     @State private var dateBeforeTVGuide: String?
+    @State private var showsTVGuideReturnButton = false
     @State private var showsMatchDetails = false
     @State private var isTeamSearchPresented = false
     @State private var pendingTeamSearchDestination: TeamDetailsContext?
@@ -559,6 +551,11 @@ struct MatchesView: View {
                     }
                 }
             }
+            .overlay(alignment: .bottomLeading) {
+                if mode == .fixtures && isSelected {
+                    undoShowAllMatchesButton
+                }
+            }
             .overlay(alignment: .bottomTrailing) {
                 if mode == .fixtures && isSelected {
                     FixtureCompetitionDockView(
@@ -606,7 +603,11 @@ struct MatchesView: View {
             case .loading:
                 FixtureMatchesLoadingPlaceholder()
             case .empty:
-                emptyState
+                VStack {
+                    emptyState
+                    showAllDayMatchesButton(for: dateKey)
+                }
+                .safeAreaPadding(.bottom, Self.fixtureDockContentClearance)
             case .fixtures:
                 fixtureMatchesScrollContent(days: days ?? [])
                     .refreshable {
@@ -694,8 +695,9 @@ struct MatchesView: View {
             fixtureBrowser.setTVListingsModeEnabled(false)
             if let dateBeforeTVGuide { fixtureBrowser.selectDate(dateBeforeTVGuide) }
             dateBeforeTVGuide = nil
+            showsTVGuideReturnButton = false
         }) {
-            FixtureTVGuideView(browser: fixtureBrowser, rowPreferences: matchRowPreferences,
+            FixtureTVGuideView(browser: fixtureBrowser, showsReturnButton: showsTVGuideReturnButton, rowPreferences: matchRowPreferences,
                                fantasyContext: fantasyViewModel.matchRowContext)
                 .environment(\.colorScheme, .dark)
         }
@@ -781,7 +783,6 @@ struct MatchesView: View {
             fixtureBrowseUnfilteredPageSourceMatchesByDate = [:]
             fixtureBrowseUnfilteredPageGroupedDays = [:]
             fixtureArtworkPreparation.reset()
-            expandedFixtureCompetitionKeys.removeAll(keepingCapacity: true)
             fixtureCompetitionMatchLimits.removeAll(keepingCapacity: true)
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
             #if DEBUG
@@ -806,6 +807,7 @@ struct MatchesView: View {
             scheduleGroupedSideEffects(for: sourceGroupedDays, immediate: false)
         }
         .onChange(of: preferences.showAllMatches) { _, newValue in
+            if !newValue { showAllMatchesUndoDate = nil }
             guard isSelected else { return }
             fixturesCoordinator.showToast(
                 newValue ? "Viewing all matches (unfiltered)" : "Viewing preferred matches only"
@@ -839,6 +841,7 @@ struct MatchesView: View {
             rebuildFixtureBrowseGrouping()
         }
         .onChange(of: fixtureBrowser.selectedDateKey) { _, dateKey in
+            if !isTVListingsPresented, dateKey != showAllMatchesUndoDate, dateBeforeTVGuide == nil { showAllMatchesUndoDate = nil }
             if let dateKey, dateKey > fixtureBrowser.todayDateKey {
                 showsMatchDetails = false
             }
@@ -1142,10 +1145,83 @@ struct MatchesView: View {
         ScrollView {
             LazyVStack(spacing: 0) {
                 fixtureCompetitionCards(days: days)
+                if let dateKey = days.first?.dateKey {
+                    showAllDayMatchesButton(for: dateKey)
+                }
             }
         }
         .background(Color.clear)
         .safeAreaPadding(.bottom, Self.fixtureDockContentClearance)
+    }
+
+    private func hasFilteredMatches(on dateKey: String) -> Bool {
+        guard usesFixtureBrowser, !showAllMatches,
+              let visible = fixtureBrowsePageSourceMatchesByDate[dateKey],
+              let all = fixtureBrowseUnfilteredPageSourceMatchesByDate[dateKey] else { return false }
+        let visibleIDs = Set(visible.map(\.id))
+        return all.contains { !visibleIDs.contains($0.id) }
+    }
+
+    @ViewBuilder
+    private func showAllDayMatchesButton(for dateKey: String) -> some View {
+        if dateKey == fixtureBrowser.selectedDateKey {
+            let all = fixtureBrowseUnfilteredPageSourceMatchesByDate[dateKey]
+            let hasMore = hasFilteredMatches(on: dateKey)
+            let hasTV = TVListingsTimeline.isAvailable(for: dateKey)
+                && !TVListingsTimeline.matches(for: dateKey, from: all ?? []).isEmpty
+            let today = dateKey == fixtureBrowser.todayDateKey
+            HStack(spacing: 12) {
+                Button {
+                    showAllMatchesUndoDate = dateKey
+                    preferences.showAllMatches = true
+                } label: {
+                    Text(all == nil ? "Checking matches…" : hasMore
+                         ? (today ? "Show all today's matches" : "Show all matches for this day")
+                         : (today ? "No other matches today" : "No other matches this day"))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .disabled(all == nil || !hasMore)
+                .accessibilityIdentifier("showAllDayMatches")
+                Button {
+                    dateBeforeTVGuide = dateKey
+                    showsTVGuideReturnButton = true
+                    isTVListingsPresented = true
+                } label: {
+                    Text(all == nil ? "Checking TV listings…" : hasTV ? "Show TV guide"
+                         : (today ? "No matches on TV today" : "No matches on TV this day"))
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                }
+                .disabled(all == nil || !hasTV)
+                .accessibilityIdentifier("showDayTVGuide")
+            }
+            .font(.footnote)
+            .buttonStyle(.bordered)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+        }
+    }
+
+    @ViewBuilder
+    private var undoShowAllMatchesButton: some View {
+        if showAllMatches, let dateKey = showAllMatchesUndoDate,
+           dateKey == fixtureBrowser.selectedDateKey {
+            Button {
+                showAllMatchesUndoDate = nil
+                preferences.showAllMatches = false
+            } label: {
+                Image(systemName: "arrow.uturn.backward")
+                    .font(.system(size: 20, weight: .semibold))
+                    .frame(width: 50, height: 50)
+                    .background(.ultraThinMaterial, in: Circle())
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Undo show all matches")
+            .accessibilityHint("Returns to your previous match view")
+            .accessibilityIdentifier("undoShowAllDayMatches")
+            .padding(.leading, 16)
+            .padding(.bottom, 12)
+        }
     }
 
     @ViewBuilder
@@ -1285,17 +1361,8 @@ struct MatchesView: View {
     }
 
     private func competitionCardRow(for league: MatchLeague, day: MatchDay) -> some View {
-        let unfilteredLeague = unfilteredFixtureLeague(matching: league, on: day)
-        let visibleMatchIDs = Set(league.matches.map(\.id))
-        let filteredOutMatchCount = unfilteredLeague?.matches.reduce(into: 0) { count, match in
-            if !visibleMatchIDs.contains(match.id) {
-                count += 1
-            }
-        } ?? 0
         let expansionKey = fixtureCompetitionExpansionKey(for: league, on: day)
-        let includesFilteredOutMatches = filteredOutMatchCount > 0 &&
-            expandedFixtureCompetitionKeys.contains(expansionKey)
-        let sourceLeague = includesFilteredOutMatches ? (unfilteredLeague ?? league) : league
+        let sourceLeague = league
         let matchLimit = FixtureCompetitionRenderWindow.displayedCount(
             totalCount: sourceLeague.matches.count,
             configuredLimit: fixtureCompetitionMatchLimits[expansionKey]
@@ -1308,10 +1375,8 @@ struct MatchesView: View {
                 league: sourceLeague.league,
                 matches: displayedMatches
             )
-        let hiddenMatchCount = sourceLeague.matches.count - displayedMatches.count +
-            (includesFilteredOutMatches ? 0 : filteredOutMatchCount)
-        let canCollapse = includesFilteredOutMatches ||
-            matchLimit > FixtureCompetitionRenderWindow.initialLimit
+        let hiddenMatchCount = sourceLeague.matches.count - displayedMatches.count
+        let canCollapse = matchLimit > FixtureCompetitionRenderWindow.initialLimit
         let competitionName = displayedLeague.matches.first?.league ?? displayedLeague.league
         let competitionSubtitle = displayedLeague.matches.first?.leagueSubcategory?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1408,7 +1473,6 @@ struct MatchesView: View {
                 }
 
                 matchButton(for: match, day: day)
-                    .padding(.horizontal, 8)
 
                 if index < displayedLeague.matches.count - 1 {
                     Rectangle()
@@ -1427,7 +1491,7 @@ struct MatchesView: View {
                 fixtureCompetitionExpansionButton(
                     hiddenMatchCount: hiddenMatchCount,
                     displayedMatchCount: displayedMatches.count,
-                    totalMatchCount: (unfilteredLeague ?? league).matches.count,
+                    totalMatchCount: league.matches.count,
                     canCollapse: canCollapse,
                     expansionKey: expansionKey,
                     competitionName: competitionName
@@ -1463,17 +1527,6 @@ struct MatchesView: View {
         .accessibilityElement(children: .contain)
     }
 
-    private func unfilteredFixtureLeague(
-        matching league: MatchLeague,
-        on day: MatchDay
-    ) -> MatchLeague? {
-        guard usesFixtureBrowser else { return nil }
-        return fixtureBrowseUnfilteredPageGroupedDays[day.dateKey]?
-            .first(where: { $0.dateKey == day.dateKey })?
-            .leagues
-            .first(where: { $0.id == league.id })
-    }
-
     private func fixtureCompetitionExpansionKey(
         for league: MatchLeague,
         on day: MatchDay
@@ -1497,13 +1550,11 @@ struct MatchesView: View {
 
         return Button {
             if hiddenMatchCount > 0 {
-                expandedFixtureCompetitionKeys.insert(expansionKey)
                 fixtureCompetitionMatchLimits[expansionKey] = FixtureCompetitionRenderWindow.nextLimit(
                     displayedCount: displayedMatchCount,
                     totalCount: totalMatchCount
                 )
             } else if canCollapse {
-                expandedFixtureCompetitionKeys.remove(expansionKey)
                 fixtureCompetitionMatchLimits.removeValue(forKey: expansionKey)
             }
         } label: {
@@ -1569,9 +1620,13 @@ struct MatchesView: View {
                             .fill(Color.accentColor.opacity(0.14))
                     }
                 }
+                .padding(.horizontal, 8)
+                // Plain buttons must include the row's empty space in hit testing.
+                .contentShape(Rectangle())
         }
         .disabled(match.isPostponed)
         .buttonStyle(.plain)
+        .accessibilityIdentifier("scoresMatch-\(match.id)")
         .onAppear {
             guard mode == .results else { return }
             let snapshot = showAllMatches ? preferences.unfilteredSnapshot : preferences.snapshot
@@ -1704,8 +1759,8 @@ struct MatchesView: View {
 
 private extension PreferencesStore {
     var fixtureViewMenuTitle: String {
-        if fixtureAllMajorMatchesEnabled { return "Favourites" }
         if showAllMatches { return "All Competitions" }
+        if fixtureAllMajorMatchesEnabled { return "Favourites" }
         let optionIDs = Set(selectedFixtureViewOptionIDs)
         if optionIDs == Set([FixtureViewOptionID.topTeamsPreset]) { return "Top Teams" }
         if optionIDs.contains(FixtureViewOptionID.topTeamsPreset) { return "Top Teams + Custom" }
@@ -2227,7 +2282,7 @@ struct FixtureCompetitionDockView: View {
     private var fixtureFavouritesActions: some View {
         VStack(spacing: 0) {
             if preferences.hasSavedFavouriteFixtureView {
-                fixtureFavouritesActionRow("Favourites", isSelected: preferences.fixtureAllMajorMatchesEnabled, action: selectFavourites)
+                fixtureFavouritesActionRow("Favourites", isSelected: preferences.fixtureAllMajorMatchesEnabled && !preferences.showAllMatches, action: selectFavourites)
             }
             fixtureFavouritesActionRow("Top Teams", isSelected: isTopTeamsPresetSelected, action: selectTopTeams)
             fixtureFavouritesActionRow("Matches with Premier League teams", isSelected: isPremierLeagueMatchesPresetSelected, action: selectPremierLeagueMatches)
@@ -4649,6 +4704,7 @@ private struct ToastView: View {
 
 private struct FixtureTVGuideView: View {
     @ObservedObject var browser: FixtureBrowserStore
+    var showsReturnButton = false
     let rowPreferences: MatchRowPreferences
     let fantasyContext: FantasyMatchRowContext
     @Environment(\.dismiss) private var dismiss
@@ -4688,6 +4744,21 @@ private struct FixtureTVGuideView: View {
                 }
             }
             .background(FootballVisualStyle.pageBackground)
+            .overlay(alignment: .bottomLeading) {
+                if showsReturnButton {
+                    Button { dismiss() } label: {
+                        Image(systemName: "arrow.uturn.backward")
+                            .font(.system(size: 20, weight: .semibold))
+                            .frame(width: 50, height: 50)
+                            .background(.ultraThinMaterial, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Return to previous match view")
+                    .accessibilityIdentifier("returnFromDayTVGuide")
+                    .padding(.leading, 16)
+                    .padding(.bottom, 12)
+                }
+            }
             .navigationTitle("TV Guide")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

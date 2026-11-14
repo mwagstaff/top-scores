@@ -18,6 +18,9 @@ struct MatchDetailView: View {
     @State private var saveCalendarAsDefault = false
     @State private var refreshedMatch: Match?
     @State private var detailedMatch: Match?
+    @State private var momentum: MatchMomentum?
+    @State private var matchContext: MatchContext?
+    @State private var contextNow = Date()
     @State private var detailsRefreshTask: Task<Void, Never>?
     @State private var fantasyHistoryTask: Task<Void, Never>?
     @State private var detailsErrorMessage: String?
@@ -98,14 +101,15 @@ struct MatchDetailView: View {
     }
 
     private var shouldShowLineupPitch: Bool {
-        guard let teamLineups = activeMatch.teamLineups,
-              let home = teamLineups.home,
-              let away = teamLineups.away
-        else {
-            return false
-        }
+        if matchContext?.lineupStatus == "unavailable" { return false }
+        if matchContext?.lineupStatus == "predicted" && !isContextPrematch { return false }
+        return activeMatch.teamLineups?.home?.startingLineup.isEmpty == false ||
+            activeMatch.teamLineups?.away?.startingLineup.isEmpty == false
+    }
 
-        return !home.startingLineup.isEmpty && !away.startingLineup.isEmpty
+    private var isContextPrematch: Bool {
+        !activeMatch.isInProgress && !activeMatch.isFinished &&
+            matchContext?.isPrematch(at: contextNow) == true
     }
 
     private var isEligibleFantasyFixture: Bool {
@@ -237,15 +241,17 @@ struct MatchDetailView: View {
                             teamCompetitionEntries: teamCompetitionEntries
                         )
 
+                        MatchTeamLeaguePositionsLink(entries: teamCompetitionEntries)
+                            .padding(.horizontal)
+
                         if !activeMatch.isFinished {
                             tvChannelSection
                                 .padding(.horizontal)
                         }
 
-                        MatchTeamLeaguePositionsLink(
-                            entries: teamCompetitionEntries
-                        )
-                        .padding(.horizontal)
+                        if isContextPrematch, let preview = matchContext?.matchPreview {
+                            MatchPreviewSection(preview: preview).padding(.horizontal)
+                        }
 
                         if let penaltyDetailSummary = activeMatch.penaltyDetailSummaryText {
                             MatchPenaltyShootoutSummary(text: penaltyDetailSummary)
@@ -266,6 +272,12 @@ struct MatchDetailView: View {
                                 )
                                 .padding(.horizontal)
                             }
+                        }
+
+                        if (activeMatch.isInProgress || activeMatch.isFinished), let momentum, momentum.isRenderable {
+                            MatchMomentumCard(momentum: momentum, homeTeam: activeMatch.homeTeam,
+                                              awayTeam: activeMatch.awayTeam, isLive: activeMatch.isInProgress)
+                                .padding(.horizontal)
                         }
 
                         if activeMatch.isInProgress || activeMatch.isFinished {
@@ -301,9 +313,18 @@ struct MatchDetailView: View {
                         if shouldShowLineupPitch {
                             MatchLineupPitchSection(
                                 match: activeMatch,
+                                lineupStatus: matchContext?.lineupStatus,
                                 fantasyHighlightLookup: fantasyHighlightLookup,
                                 fantasyPointsLookup: fantasyPointsLookup
                             )
+                                .padding(.horizontal)
+                        } else if matchContext != nil {
+                            Text(isContextPrematch ? "Lineups not available yet." : "Confirmed lineups unavailable.")
+                                .font(.subheadline).foregroundStyle(.secondary).padding(.horizontal)
+                        }
+
+                        if let headToHead = matchContext?.headToHead {
+                            MatchHeadToHeadSection(data: headToHead, homeTeam: activeMatch.homeTeam, awayTeam: activeMatch.awayTeam)
                                 .padding(.horizontal)
                         }
 
@@ -328,6 +349,9 @@ struct MatchDetailView: View {
                             MatchVenueSection(venue: venue)
                                 .padding(.horizontal)
                         }
+                        if let facts = matchContext?.funFacts, !facts.isEmpty {
+                            MatchFunFactsSection(facts: facts).padding(.horizontal)
+                        }
                     }
                     // Keep data-heavy child views from widening the vertical scroll content.
                     .frame(width: proxy.size.width, alignment: .leading)
@@ -346,6 +370,15 @@ struct MatchDetailView: View {
             )
             guard !Task.isCancelled else { return }
             teamCompetitionEntries = entries
+        }
+        .task(id: matchContext?.kickoffAt) {
+            contextNow = Date()
+            guard let kickoff = matchContext?.kickoffDate, kickoff > contextNow else { return }
+            do {
+                try await Task.sleep(for: .seconds(kickoff.timeIntervalSinceNow))
+                try Task.checkCancellation()
+                contextNow = Date()
+            } catch { /* Navigation or a changed kickoff cancels the old timer. */ }
         }
         .task(id: "fantasy-live|\(activeMatch.id)|\(activeMatch.isInProgress)") {
             await refreshFantasyScoresForLiveMatchIfNeeded()
@@ -384,6 +417,7 @@ struct MatchDetailView: View {
             fantasyHistoryTask = nil
         }
         .onChange(of: scenePhase) { _, phase in
+            contextNow = Date()
             if phase == .active, screenOpenedAt != nil {
                 loadDiagnostics.start(matchID: match.matchDetailsID ?? match.id)
                 if let baseURL = URL(string: preferences.apiBaseURL) {
@@ -532,6 +566,8 @@ struct MatchDetailView: View {
 
         refreshedMatch = nil
         detailedMatch = nil
+        momentum = nil
+        matchContext = nil
 
         guard let baseURL = URL(string: preferences.apiBaseURL) else {
             detailsErrorMessage = "Invalid API base URL."
@@ -567,6 +603,9 @@ struct MatchDetailView: View {
                 guard !Task.isCancelled else { return }
                 if let cached {
                     detailedMatch = baseMatch.withDetails(cached)
+                    momentum = cached.momentum
+                    matchContext = cached.matchContext
+                    contextNow = Date()
                 }
                 diagnosticLogAsync("[MatchDetail][INFO] details_load_start id=\(detailsID) cached=\(cached != nil)")
                 loadDiagnostics.mark(stage: cached == nil ? "cache_miss" : "cache_applied")
@@ -679,6 +718,9 @@ struct MatchDetailView: View {
                 if let refreshed = fallbackMatch {
                     refreshedMatch = refreshed
                 }
+                momentum = details.momentum
+                matchContext = details.matchContext
+                contextNow = Date()
                 let updated = base.withDetails(details)
                 // For finished matches, don't replace populated events with empty server data (backfill race)
                 let currentHasEvents = detailedMatch.map {
@@ -690,8 +732,8 @@ struct MatchDetailView: View {
                     detailsErrorMessage = nil
                 }
                 pendingEventsQuickRetry = updated.isFinished && !hasEvents
-                // Stop polling once a finished match has its events and lineups — the data won't change
-                if updated.isFinished && hasEvents && hasLineups {
+                // Keep refreshing while momentum is pending or the match is settling.
+                if updated.isFinished && hasEvents && hasLineups && details.momentum?.refreshAfterSeconds == nil && details.matchContext?.refreshAfterSeconds == nil {
                     detailsRefreshTask?.cancel()
                     detailsRefreshTask = nil
                 }
@@ -753,11 +795,17 @@ struct MatchDetailView: View {
     }
 
     private func refreshIntervalNanos(for match: Match) -> UInt64 {
+        if let seconds = matchContext?.refreshAfterSeconds, !match.isInProgress {
+            return UInt64(max(15, min(seconds, 30))) * 1_000_000_000
+        }
         if match.matchDetailsID == nil || match.isInProgress {
             return Self.detailsRefreshIntervalNanos
         }
         if pendingEventsQuickRetry {
             return Self.pendingEventsBackfillRefreshIntervalNanos
+        }
+        if match.isFinished, let seconds = momentum?.refreshAfterSeconds {
+            return UInt64(max(30, min(seconds, 3600))) * 1_000_000_000
         }
         return Self.idleDetailsRefreshIntervalNanos
     }
@@ -3033,23 +3081,30 @@ private struct TvChannelRow: View {
 
 private struct MatchLineupPitchSection: View {
     let match: Match
+    let lineupStatus: String?
     let fantasyHighlightLookup: FantasySquadMembershipLookup?
     let fantasyPointsLookup: FantasySquadMembershipLookup?
 
     var body: some View {
-        if let teamLineups = match.teamLineups,
-           let home = teamLineups.home,
-           let away = teamLineups.away,
-           !home.startingLineup.isEmpty,
-           !away.startingLineup.isEmpty {
+        if let teamLineups = match.teamLineups {
+            let empty = MatchTeamLineup(team: nil, manager: nil, formation: nil, startingLineup: [], substitutes: [], substitutions: [])
+            let home = teamLineups.home ?? empty
+            let away = teamLineups.away ?? empty
             VStack(alignment: .leading, spacing: 10) {
-                Text("Starting Line-ups")
-                    .font(.headline)
-                    .foregroundStyle(.primary)
+                ViewThatFits(in: .horizontal) {
+                    HStack { Text(lineupStatus == "predicted" ? "Predicted line-ups" : "Starting Line-ups").font(.headline); Spacer(); MatchLineupStatusBadge(status: lineupStatus ?? "") }
+                    VStack(alignment: .leading, spacing: 8) { Text(lineupStatus == "predicted" ? "Predicted line-ups" : "Starting Line-ups").font(.headline); MatchLineupStatusBadge(status: lineupStatus ?? "") }
+                }
+                if home.startingLineup.isEmpty || away.startingLineup.isEmpty {
+                    Text("\(home.startingLineup.isEmpty ? match.homeTeam : match.awayTeam) lineup not available yet.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
 
                 MatchLineupTeamPanelsView(
                     matchID: match.matchDetailsID,
                     isLive: match.isInProgress,
+                    isPlayed: match.isInProgress || match.isFinished,
+                    isPredicted: lineupStatus == "predicted",
                     homeLineup: home,
                     awayLineup: away,
                     fallbackHomeTeamName: match.homeTeam,
@@ -3082,6 +3137,8 @@ private struct MatchLineupTeamPanelsView: View {
 
     let matchID: String?
     let isLive: Bool
+    let isPlayed: Bool
+    let isPredicted: Bool
     let homeLineup: MatchTeamLineup
     let awayLineup: MatchTeamLineup
     let fallbackHomeTeamName: String
@@ -3147,21 +3204,23 @@ private struct MatchLineupTeamPanelsView: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            Picker("Pitch badges", selection: $showsRatings) {
-                Text("Ratings").tag(true)
-                Text("Shirt numbers").tag(false)
-            }
-            .pickerStyle(.segmented)
-            .accessibilityIdentifier("lineupBadgeMode")
-            if showsRatings {
-                if isLoadingStats && statsByPlayer.isEmpty {
-                    ProgressView("Loading match ratings")
-                } else if let statsError {
-                    Button(statsError + " · Retry") { Task { await loadStats() } }
-                        .font(.caption)
-                } else {
-                    Text("Match ratings out of 10 · – means not available")
-                        .font(.caption).foregroundStyle(.secondary)
+            if isPlayed {
+                Picker("Pitch badges", selection: $showsRatings) {
+                    Text("Ratings").tag(true)
+                    Text("Shirt numbers").tag(false)
+                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("lineupBadgeMode")
+                if showsRatings {
+                    if isLoadingStats && statsByPlayer.isEmpty {
+                        ProgressView("Loading match ratings")
+                    } else if let statsError {
+                        Button(statsError + " · Retry") { Task { await loadStats() } }
+                            .font(.caption)
+                    } else {
+                        Text("Match ratings out of 10 · – means not available")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             }
             VStack(spacing: 0) {
@@ -3193,7 +3252,7 @@ private struct MatchLineupTeamPanelsView: View {
                                 side: .home,
                                 lookup: homeLookup,
                                 teamColors: homeTeamColors,
-                                showsRatings: showsRatings,
+                                showsRatings: isPlayed && showsRatings,
                                 onSelectPlayer: { selectedPlayer = $0 }
                             )
 
@@ -3202,7 +3261,7 @@ private struct MatchLineupTeamPanelsView: View {
                                 side: .away,
                                 lookup: awayLookup,
                                 teamColors: awayTeamColors,
-                                showsRatings: showsRatings,
+                                showsRatings: isPlayed && showsRatings,
                                 onSelectPlayer: { selectedPlayer = $0 }
                             )
                         }
@@ -3224,9 +3283,10 @@ private struct MatchLineupTeamPanelsView: View {
                     side: .away
                 )
 
-                MatchLineupMarkerLegend()
+                if isPlayed { MatchLineupMarkerLegend()
                     .padding(.horizontal, 16)
                     .padding(.vertical, 14)
+                }
 
                 if !matchLineupBenchPlayers(in: displayHomeLineup).isEmpty {
                     substitutes(
@@ -3254,7 +3314,8 @@ private struct MatchLineupTeamPanelsView: View {
                     .stroke(Color.primary.opacity(0.10), lineWidth: 1)
             }
         }
-        .task(id: "\(matchID ?? "")|\(isLive)") {
+        .task(id: "\(matchID ?? "")|\(isLive)|\(isPlayed)") {
+            guard isPlayed else { return }
             repeat {
                 await loadStats()
                 guard isLive else { break }
@@ -3329,7 +3390,7 @@ private struct MatchLineupTeamPanelsView: View {
         teamColors: TeamLineupNumberColors
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("\(teamName.uppercased()) SUBSTITUTES")
+            Text("\(teamName.uppercased()) \(isPredicted ? "PREDICTED BENCH" : "SUBSTITUTES")")
                 .font(.caption2.weight(.bold))
                 .tracking(0.5)
                 .foregroundStyle(.secondary)
@@ -3354,7 +3415,7 @@ private struct MatchLineupTeamPanelsView: View {
                                 borderOutlineColor: teamColors.foreground
                             )
 
-                            if showsRatings, let rating = playerOn.matchStats?.displayRating {
+                            if isPlayed && showsRatings, let rating = playerOn.matchStats?.displayRating {
                                 MatchPlayerRatingBadge(rating: rating)
                             }
 

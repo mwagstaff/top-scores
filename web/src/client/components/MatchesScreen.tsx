@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, useRef } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { competitionDateCounts, preferredCompetitionDate, nextMatchDate, nextMatchDateLabel } from "../competitionDates";
 import { competitionLogo } from "../competitionLogos";
 import { loadCompetitions } from "../catalog";
@@ -37,6 +37,7 @@ export function MatchesScreen({
   competition?: string;
 }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const dateRail = useRef<HTMLDivElement>(null);
   const [params, setParams] = useSearchParams();
   const savedView = useMatchViewPreferences();
@@ -69,7 +70,7 @@ export function MatchesScreen({
   const date = tv && candidateDate < today ? today : mode === "results" && candidateDate > latestResultDate ? latestResultDate : candidateDate;
   useEffect(() => {
     if (validDate(requestedDate) && requestedDate !== date) {
-      setParams(current => { const next = new URLSearchParams(current); next.set("date", date); return next; }, { replace: true });
+      setParams(current => { const next = new URLSearchParams(current); next.set("date", date); return next; }, { replace: true, state: location.state });
     }
   }, [requestedDate, date, setParams]);
   const requestedScope = params.get("scope");
@@ -94,7 +95,7 @@ export function MatchesScreen({
         : undefined,
     [seed, date, filteredScope],
   );
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState<string>(location.state?.restoredMatchQuery || "");
   const [searchOpen, setSearchOpen] = useState(false);
   const [data, setData] = useState(() => ({
     key: `${date}:${dayScope}`,
@@ -126,7 +127,7 @@ export function MatchesScreen({
       if (storedView.highlightEnglishEuropean !== (requestedHighlight === "1")) changes.highlightEnglishEuropean = requestedHighlight === "1";
     } else next.set("highlight", storedView.highlightEnglishEuropean ? "1" : "0");
     if (Object.keys(changes).length) saveMatchViewPreferences(changes);
-    if (next.toString() !== params.toString()) setParams(next, { replace: true });
+    if (next.toString() !== params.toString()) setParams(next, { replace: true, state: location.state });
   }, [params, requestedScope, requestedDetails, requestedHighlight, savedView, detailsAvailable, setParams]);
   const payload = data.key === key ? data.value : cachedDay(date, dayScope);
   useEffect(() => {
@@ -219,7 +220,7 @@ export function MatchesScreen({
       const entry = items.find(item => item.name === competition || item.aliases.includes(competition));
       return preferredCompetitionDate([...new Set([competition, ...(entry ? [entry.name, ...entry.aliases] : [])])], today, mode === 'results');
     }).then(nextDate => {
-      if (active && nextDate) setParams(current => { if (current.has('date')) return current; const next = new URLSearchParams(current); next.set('date', nextDate); return next; }, { replace: true });
+      if (active && nextDate) setParams(current => { if (current.has('date')) return current; const next = new URLSearchParams(current); next.set('date', nextDate); return next; }, { replace: true, state: location.state });
     }).catch(() => {});
     return () => { active = false; };
   }, [competition, requestedDate, today, mode, setParams]);
@@ -246,7 +247,8 @@ export function MatchesScreen({
     const selected = rail?.querySelector<HTMLElement>('[aria-pressed="true"]');
     if (rail && selected) rail.scrollLeft += selected.getBoundingClientRect().left - rail.getBoundingClientRect().left - (rail.clientWidth - selected.clientWidth) / 2;
   }, [date]);
-  const change = (values: Record<string, string>) =>
+  const change = (values: Record<string, string>) => {
+    if ("scope" in values || "comps" in values || "date" in values) setUndoView(null);
     setParams((current) => {
       const next = new URLSearchParams(current);
       for (const [key, value] of Object.entries(values)) {
@@ -254,7 +256,8 @@ export function MatchesScreen({
         else next.delete(key);
       }
       return next;
-    });
+    }, { state: location.state?.matchGuideReturn ? { matchGuideReturn: location.state.matchGuideReturn } : null });
+  };
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.defaultPrevented || event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
@@ -264,7 +267,7 @@ export function MatchesScreen({
       const nextDate = moveDate(date, event.key === "ArrowLeft" ? -1 : 1);
       if ((tv && nextDate < today) || (mode === "results" && nextDate > latestResultDate)) return;
       event.preventDefault();
-      setParams(current => { const next = new URLSearchParams(current); next.set("date", nextDate); return next; });
+      setParams(current => { const next = new URLSearchParams(current); next.set("date", nextDate); return next; }, { state: location.state?.matchGuideReturn ? { matchGuideReturn: location.state.matchGuideReturn } : null });
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
@@ -292,6 +295,33 @@ export function MatchesScreen({
       }),
     [relevant, filter, query],
   );
+  const [undoView, setUndoView] = useState<{ date: string; mode: MatchesMode; tv: boolean; scope: string; comps: string; query: string } | null>(null);
+  const undoAvailable = undoView && undoView.date === date && undoView.mode === mode && undoView.tv === tv && scope === "all" && !params.get("comps") && !query && !competition;
+  useEffect(() => {
+    setUndoView(null);
+  }, [date, mode, tv, competition]);
+  const showAllDayMatches = () => {
+    change({ scope: "all", comps: "" });
+    setUndoView({ date, mode, tv, scope, comps: params.get("comps") || "", query });
+    setQuery("");
+    const allDay = cachedDay(date);
+    if (allDay && !allDay.hasMore) setData({ key: `${date}:false`, value: allDay });
+  };
+  useEffect(() => {
+    if (location.state?.restoredMatchView) {
+      setQuery(location.state.restoredMatchQuery || "");
+      setUndoView(location.state.restoredMatchView.undoView || null);
+    }
+  }, [location.state?.restoredMatchView]);
+  const tvReturn = tv ? location.state?.matchGuideReturn : null;
+  const openDayTVGuide = () => {
+    setQuery("");
+    const previous = new URLSearchParams(params);
+    previous.set("date", date);
+    navigate(`/tv?date=${date}&scope=all`, { state: {
+      matchGuideReturn: { url: `${location.pathname}?${previous}`, query, undoView }
+    } });
+  };
   const isEnglishEuropean = useEnglishEuropeanMatcher(useMemo(() => relevant.some(match => isEuropeanClubCompetition(match.league)), [relevant]));
   // Ignores the search box so the toggle stays put while typing.
   const highlightAvailable = useMemo(() => {
@@ -300,10 +330,10 @@ export function MatchesScreen({
     const highlightedCount = listed.filter(isEnglishEuropean).length;
     return highlightedCount > 0 && highlightedCount < listed.length;
   }, [relevant, filter, isEnglishEuropean]);
-  const [allCompetitionCount, setAllCompetitionCount] = useState<{ key: string; count: number } | null>(null);
+  const [allCompetitionCount, setAllCompetitionCount] = useState<{ key: string; count: number; tvCount: number } | null>(null);
   const emptyCountKey = `${date}:${mode}:${tv}`;
   useEffect(() => {
-    if (!payload || matches.length || error) return;
+    if (!payload || error || competition) return;
     let active = true;
     setAllCompetitionCount(null);
     void (async () => {
@@ -315,11 +345,13 @@ export function MatchesScreen({
         if (tv && (finished || !ukChannels(match.tvChannels).length)) return false;
         return true;
       }).length;
-      if (active) setAllCompetitionCount({ key: emptyCountKey, count });
-    })().catch(() => { /* Keep the all-competitions action available without an unverified count. */ });
+      const tvCount = day.matches.filter(match => !isMatchFinished(match) && !isMatchAbandoned(match) && ukChannels(match.tvChannels).length > 0).length;
+      if (active) setAllCompetitionCount({ key: emptyCountKey, count, tvCount });
+    })().catch(() => { /* Do not offer a filter override without verified extra matches. */ });
     return () => { active = false; };
-  }, [payload, matches.length, error, emptyCountKey, date, mode, tv]);
+  }, [payload, matches.length, error, emptyCountKey, date, mode, tv, competition, scope, params.get("comps"), query]);
   const availableCount = allCompetitionCount?.key === emptyCountKey ? allCompetitionCount.count : undefined;
+  const availableTVCount = allCompetitionCount?.key === emptyCountKey ? allCompetitionCount.tvCount : undefined;
   const noMoreTVToday = tv && date === today && availableCount === 0;
   const nextDateKey = JSON.stringify([date, mode, dayScope, tv, competition, competitionAliases, query, params.get("comps")]);
   const [nextDate, setNextDate] = useState<{ key: string; date: string } | null>(null);
@@ -624,7 +656,7 @@ export function MatchesScreen({
                     : "Choose another day or explore all competitions."}
                 </p>
                 <div className="empty-match-actions">
-                {!noMoreTVToday && <button
+                {competition && !noMoreTVToday && <button
                   onClick={() => {
                     setQuery("");
                     if (competition) {
@@ -637,7 +669,7 @@ export function MatchesScreen({
                   {availableCount === undefined ? "Show matches across all competitions" : `Show ${availableCount} ${availableCount === 1 ? "match" : "matches"} across all competitions`}
                 </button>}
                 {jumpDate && <>
-                  {!noMoreTVToday && <span className="empty-action-separator">or</span>}
+                  {competition && !noMoreTVToday && <span className="empty-action-separator">or</span>}
                   <button onClick={() => change({ date: jumpDate })}>Jump to next matchdate ({nextMatchDateLabel(jumpDate, today)})</button>
                 </>}
                 </div>
@@ -668,6 +700,39 @@ export function MatchesScreen({
               {busy ? "Loading…" : "Load more matches"}
             </button>
           )}
+          {!competition && tv && availableCount !== undefined && availableCount > matches.length && <div className="day-match-actions">
+            <button className="show-all-day-matches" onClick={showAllDayMatches}>Show all matches for this day</button>
+          </div>}
+          {!competition && !tv && payload && <div className="day-match-actions">
+            <button className="show-all-day-matches" disabled={availableCount === undefined || availableCount <= matches.length}
+              onClick={showAllDayMatches}>
+              {availableCount === undefined ? "Checking other matches…" : availableCount <= matches.length
+                ? date === today ? "No other matches today" : "No other matches this day"
+                : date === today ? "Show all today's matches" : "Show all matches for this day"}
+            </button>
+            <button disabled={availableTVCount === undefined || availableTVCount === 0 || date < today}
+              onClick={openDayTVGuide}>
+              {availableTVCount === undefined ? "Checking TV listings…" : availableTVCount === 0 || date < today
+                ? date === today ? "No matches on TV today" : "No matches on TV this day"
+                : "Show TV guide"}
+            </button>
+          </div>}
+          {tvReturn && <button className="undo-match-view" aria-label="Return to previous match view" title="Return to previous view"
+            onClick={() => navigate(tvReturn.url, { state: { restoredMatchQuery: tvReturn.query, restoredMatchView: { undoView: tvReturn.undoView } } })}>
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M9 5 4 10l5 5M4 10h10a6 6 0 0 1 0 12" /></svg>
+          </button>}
+          {undoAvailable && <button
+            className="undo-match-view"
+            aria-label="Undo show all matches"
+            title="Return to previous view"
+            onClick={() => {
+              setQuery(undoView.query);
+              change({ scope: undoView.scope, comps: undoView.comps });
+              setUndoView(null);
+            }}
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><path d="M9 5 4 10l5 5M4 10h10a6 6 0 0 1 0 12" /></svg>
+          </button>}
           {payload?.lastUpdated && (
             <div className="scores-footnote">
               <span>

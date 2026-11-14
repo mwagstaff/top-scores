@@ -15,6 +15,7 @@ if (require.main === module) require("./runtime_logging").installTimestampedCons
 //     is in progress, dropping to a 30s recon between matches
 //   - incidents poll for in-progress events             every 10s
 //   - lineups poll for live and soon-to-start events on an adaptive cadence
+//   - momentum every 60s while live; 14-day backfill in batches of 20, retried daily
 //   - player match statistics every 60s while live; recent results retried daily
 //   - post-match event/incidents/lineups/player stats reconciliation at 0m, 2m and 15m
 //   - incomplete incidents for finished matches in the last 60 days retried
@@ -28,6 +29,8 @@ if (require.main === module) require("./runtime_logging").installTimestampedCons
 // ---------------------------------------------------------------------------
 
 const bsd = require("./bsd_client");
+const matchContext = require("./bsd_match_context");
+const { ingestMomentum, selectMomentumBackfill } = require("./bsd_momentum");
 const diagnostics = require("./bsd_diagnostics");
 const { refreshCatalogue } = require("./fetch_bsd_catalogue");
 const http = require("http");
@@ -72,10 +75,10 @@ const DETAIL_FETCH_CONCURRENCY = Math.max(
   Math.floor(Number(process.env.BSD_DETAIL_FETCH_CONCURRENCY) || 8)
 );
 const PREMATCH_LINEUP_WINDOW_MS = Number(
-  process.env.BSD_PREMATCH_LINEUP_WINDOW_MS || 2 * 60 * 60 * 1000
+  process.env.BSD_PREMATCH_LINEUP_WINDOW_MS || 14 * 24 * 60 * 60 * 1000
 );
 const PREMATCH_LINEUP_CLOSE_WINDOW_MS = Number(
-  process.env.BSD_PREMATCH_LINEUP_CLOSE_WINDOW_MS || 45 * 60 * 1000
+  process.env.BSD_PREMATCH_LINEUP_CLOSE_WINDOW_MS || 75 * 60 * 1000
 );
 const PREMATCH_LINEUP_EARLY_POLL_MS = Number(
   process.env.BSD_PREMATCH_LINEUP_EARLY_POLL_MS || 5 * 60 * 1000
@@ -100,7 +103,11 @@ let livePollInFlight = false;
 let lastLivePollAt = 0;
 let incidentsPollInFlight = false;
 let lineupsPollInFlight = false;
+let contextPollInFlight = false;
+const lineupRetryAfter = new Map();
 let playerStatsPollInFlight = false;
+let momentumPollInFlight = false;
+let momentumBackfillInFlight = false;
 let finishedStatsRefreshInFlight = false;
 let referenceRefreshInFlight = false;
 let catalogueAbortController = new AbortController();
@@ -358,6 +365,10 @@ async function reconcileSettledEvent(eventId) {
       `[bsd-runtime] settled event ${eventId} lineups failed: ${lineupsResult.reason.message || lineupsResult.reason}`
     );
   }
+  // Secondary enrichment must not delay the final score/lineup projection.
+  void ingestMomentum(eventId, options).catch(error => {
+    console.warn(`[bsd-runtime] settled momentum ${eventId} failed: ${error.message}`);
+  });
   // Commentary must not delay publishing the final score/lineup projection.
   void require("./bsd_commentary").refreshCachedMatchCommentary(eventId).catch(error => {
     console.warn(`[bsd-runtime] settled event ${eventId} commentary failed: ${error.message}`);
@@ -496,6 +507,42 @@ async function pollPlayerStats() {
   } finally {
     playerStatsPollInFlight = false;
   }
+}
+
+// Match-level statistics are stored independently of the score feed. UI reads
+// never wait on upstream; backfill is limited to 20 matches per minute.
+async function pollMomentum() {
+  if (momentumPollInFlight) return;
+  momentumPollInFlight = true;
+  try {
+    await mapWithConcurrency([...liveEventIds], 2, async id => {
+      try { await ingestMomentum(id); }
+      catch (error) { console.error(`[bsd-runtime] momentum ${id} failed: ${error.message}`); }
+    });
+  } finally { momentumPollInFlight = false; }
+}
+
+async function refreshFinishedMomentum() {
+  if (momentumBackfillInFlight) return;
+  momentumBackfillInFlight = true;
+  try {
+    const now = Date.now();
+    const events = await getBsdRecords("bsd_events", {
+      status: "finished",
+      league_id: { $in: BSD_LEAGUE_ALLOWLIST.flatMap(id => [id, Number(id)]) },
+      event_date: { $gte: new Date(now - 14 * 86400_000).toISOString(), $lte: new Date(now).toISOString() },
+    }, { projection: { _id: 1, event_date: 1, status: 1 } });
+    if (!events.length) return;
+    const docs = await getBsdRecords("bsd_event_stats", {
+      _id: { $in: events.map(event => String(event._id)) },
+    }, { projection: { _id: 1, updated_at: 1 } });
+    await mapWithConcurrency(selectMomentumBackfill(events.filter(e => ingestMomentum.canFetch(e._id)), docs, now), 2, async id => {
+      try { await ingestMomentum(id, { trigger: "momentum_backfill" }); }
+      catch (error) { console.error(`[bsd-runtime] momentum backfill ${id} failed: ${error.message}`); }
+    });
+  } catch (error) {
+    console.warn(`[bsd-runtime] momentum backfill failed: ${error.message}`);
+  } finally { momentumBackfillInFlight = false; }
 }
 
 // Backfill recent results on deployment and retry delayed/corrected provider data
@@ -742,26 +789,20 @@ function selectPrematchLineupEventIds(
       const id = String(event._id);
       if (liveIds.has(id)) return false;
       const status = String(event.status || (event.payload && event.payload.status) || "").toLowerCase();
-      if (status !== "notstarted") return false;
+      if (!["notstarted", "not_started", "upcoming"].includes(status)) return false;
       const kickoffMs = Date.parse(
         event.event_date || (event.payload && event.payload.event_date) || ""
       );
       const untilKickoffMs = kickoffMs - nowMs;
-      if (!Number.isFinite(kickoffMs) || untilKickoffMs < 0 || untilKickoffMs > windowMs) {
+      if (!Number.isFinite(kickoffMs) || untilKickoffMs < -3 * 60 * 60 * 1000 || untilKickoffMs > windowMs) {
         return false;
       }
 
       const lineupDoc = lineupsById.get(id);
-      const lineupStatus = String(
-        (lineupDoc && lineupDoc.lineup_status) ||
-          (lineupDoc && lineupDoc.payload && lineupDoc.payload.lineup_status) ||
-          ""
-      ).toLowerCase();
-      if (lineupStatus === "confirmed") return false;
-
       const lastPollMs = Date.parse((lineupDoc && lineupDoc.updated_at) || "");
       if (!Number.isFinite(lastPollMs)) return true;
-      const cadenceMs = untilKickoffMs <= closeWindowMs ? closePollMs : earlyPollMs;
+      const cadenceMs = matchContext.lineupInterval({ status, event_date: new Date(kickoffMs).toISOString() },
+        lineupDoc, nowMs, { closeWindowMs, earlyPollMs, closePollMs });
       return nowMs - lastPollMs >= cadenceMs;
     })
     .map((event) => String(event._id));
@@ -769,16 +810,16 @@ function selectPrematchLineupEventIds(
 
 async function loadLineupPollCandidates(nowMs = Date.now()) {
   const liveIds = [...new Set(liveEventIds.map(String))];
-  const startIso = new Date(nowMs).toISOString();
+  const startIso = new Date(nowMs - 3 * 60 * 60 * 1000).toISOString();
   const endIso = new Date(nowMs + PREMATCH_LINEUP_WINDOW_MS).toISOString();
   const upcomingEvents = await getBsdRecords(
     "bsd_events",
     {
-      status: "notstarted",
+      status: { $in: ["notstarted", "not_started", "upcoming"] },
       event_date: { $gte: startIso, $lte: endIso },
     },
     {
-      projection: { _id: 1, status: 1, event_date: 1, payload: 1 },
+      projection: { _id: 1, status: 1, event_date: 1 },
       sort: { event_date: 1 },
     }
   );
@@ -789,7 +830,8 @@ async function loadLineupPollCandidates(nowMs = Date.now()) {
   const lineupsById = new Map(lineupDocs.map((doc) => [String(doc._id), doc]));
   const unconfirmedLiveIds = liveIds.filter((id) => {
     const doc = lineupsById.get(id);
-    return String(
+    const lastPoll = Date.parse(doc?.updated_at || "");
+    return (!Number.isFinite(lastPoll) || nowMs - lastPoll >= 60_000) && String(
       (doc && doc.lineup_status) || (doc && doc.payload && doc.payload.lineup_status) || ""
     ).toLowerCase() !== "confirmed";
   });
@@ -799,12 +841,12 @@ async function loadLineupPollCandidates(nowMs = Date.now()) {
     liveIds,
     nowMs
   );
-  return [...new Set([...unconfirmedLiveIds, ...prematchIds])];
+  for (const [id, until] of lineupRetryAfter) if (until <= nowMs) lineupRetryAfter.delete(id);
+  return [...new Set([...unconfirmedLiveIds, ...prematchIds])]
+    .filter(id => !lineupRetryAfter.has(id)).slice(0, 40);
 }
 
-// Poll lineups for live matches and upcoming matches inside the pre-match
-// window. The candidate selector slows down outside the final 45 minutes and
-// stops as soon as BSD reports a confirmed lineup.
+// Prioritise live/near-kickoff fixtures; distant predictions refresh slowly.
 async function pollLineups() {
   if (lineupsPollInFlight) return;
   lineupsPollInFlight = true;
@@ -813,11 +855,13 @@ async function pollLineups() {
     await mapWithConcurrency(ids, DETAIL_FETCH_CONCURRENCY, async (id) => {
       try {
         const lineups = await bsd.getLineups(id, { initiator: "bsd_runtime" });
+        matchContext.validateLineups(lineups, id);
         await upsertBsdRecord("bsd_lineups", id, lineups, {
           event_id: lineups && lineups.event_id != null ? lineups.event_id : id,
           lineup_status: (lineups && lineups.lineup_status) || null,
         });
       } catch (error) {
+        lineupRetryAfter.set(id, Date.now() + 60_000);
         console.error(`[bsd-runtime] lineups event ${id} failed: ${error.message || error}`);
       }
     });
@@ -826,6 +870,33 @@ async function pollLineups() {
   } finally {
     lineupsPollInFlight = false;
   }
+}
+
+// Warm optional context in bounded batches, separately from critical lineups.
+// Match-detail reads also request a background refresh for cold historical games.
+async function pollMatchContext() {
+  if (contextPollInFlight) return;
+  contextPollInFlight = true;
+  try {
+    const now = Date.now();
+    const events = await getBsdRecords("bsd_events", {
+      status: { $in: ["notstarted", "not_started", "upcoming"] },
+      event_date: { $gte: new Date(now).toISOString(), $lte: new Date(now + 14 * 86400_000).toISOString() },
+    }, { projection: { _id: 1, payload: 1 }, sort: { event_date: 1 } });
+    const ids = events.map(event => event._id);
+    if (!ids.length) return;
+    const [h2h, metadata] = await Promise.all(["h2h", "metadata"].map(resource =>
+      getBsdRecords(`bsd_${resource}`, { _id: { $in: ids } }, { projection: { _id: 1, updated_at: 1 } })));
+    const h2hById = new Map(h2h.map(doc => [String(doc._id), doc]));
+    const metadataById = new Map(metadata.map(doc => [String(doc._id), doc]));
+    const due = events.filter(doc => matchContext.due("h2h", doc.payload, h2hById.get(String(doc._id))) ||
+      matchContext.due("metadata", doc.payload, metadataById.get(String(doc._id)))).slice(0, 10);
+    await mapWithConcurrency(due, 2, async doc => {
+      try {
+        await matchContext.refresh(doc.payload, { h2h: h2hById.get(String(doc._id)), metadata: metadataById.get(String(doc._id)) });
+      } catch (error) { console.warn(`[bsd-context] event ${doc._id}: ${error.message}`); }
+    });
+  } finally { contextPollInFlight = false; }
 }
 
 // Initial on-start population: leagues + standings, so a freshly deployed
@@ -949,6 +1020,8 @@ function start() {
   refreshManagers();
   pollLiveEvents();
   pollLineups();
+  void pollMatchContext().catch(error => console.warn(`[bsd-context] ${error.message}`));
+  refreshFinishedMomentum();
   scheduleStandingsDailyRefresh();
   // Due competitions refresh daily; hourly checks retry failures and avoid a
   // complete re-ingestion whenever the poller is restarted.
@@ -957,7 +1030,10 @@ function start() {
   timers.push(setInterval(pollLiveEvents, LIVE_POLL_MS));
   timers.push(setInterval(pollIncidents, INCIDENTS_POLL_MS));
   timers.push(setInterval(pollLineups, LINEUPS_POLL_MS));
+  timers.push(setInterval(() => void pollMatchContext().catch(error => console.warn(`[bsd-context] ${error.message}`)), 60_000));
   timers.push(setInterval(pollPlayerStats, 60_000));
+  timers.push(setInterval(pollMomentum, 60_000));
+  timers.push(setInterval(refreshFinishedMomentum, 60_000));
   timers.push(setInterval(refreshFinishedPlayerStats, 60_000));
   timers.push(setInterval(pollLiveStandings, STANDINGS_LIVE_POLL_MS));
   timers.push(setInterval(refreshEvents, EVENTS_REFRESH_MS));
@@ -1002,6 +1078,8 @@ module.exports = {
   pollIncidents,
   pollLineups,
   pollPlayerStats,
+  pollMomentum,
+  refreshFinishedMomentum,
   pollLiveStandings,
   flushSettledStandings,
   reconcileSettledEvent,
