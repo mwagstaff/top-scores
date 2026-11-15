@@ -7,6 +7,8 @@ struct MatchMomentumCard: View {
     let homeTeam: String
     let awayTeam: String
     let isLive: Bool
+    var embedded = false
+    var hideHeading = false
     @ObservedObject private var colors = TeamColorCatalog.shared
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -15,35 +17,7 @@ struct MatchMomentumCard: View {
     @State private var plotWidth: CGFloat = 280
 
     private func teamColors(_ side: String) -> TeamLineupNumberColors {
-        func visible(_ side: String) -> Color {
-            let palette = colors.lineupColors(for: side == "home" ? homeTeam : awayTeam,
-                                             opponentTeamName: side == "home" ? awayTeam : homeTeam,
-                                             isAway: side == "away")
-            let components = rgb(palette.background)
-            let luminance = zip(components, [0.2126, 0.7152, 0.0722]).reduce(0.0) { sum, pair in
-                let linear = pair.0 <= 0.04045 ? pair.0 / 12.92 : pow((pair.0 + 0.055) / 1.055, 2.4)
-                return sum + linear * pair.1
-            }
-            return (colorScheme == .dark ? luminance >= 0.12 : luminance <= 0.3) ? palette.background : palette.foreground
-        }
-        let home = visible("home")
-        var fill = side == "home" ? home : visible("away")
-        if side == "away", distance(home, fill) < 0.35 {
-            let blue = Color(red: 0.165, green: 0.659, blue: 1)
-            fill = distance(home, blue) > 0.35 ? blue : Color(red: 0.937, green: 0.706, blue: 0.235)
-        }
-        return TeamLineupNumberColors(background: fill, foreground: .primary.opacity(0.6), outline: nil)
-    }
-
-    private func rgb(_ color: Color) -> [Double] {
-        var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
-        UIColor(color).resolvedColor(with: UITraitCollection(userInterfaceStyle: colorScheme == .dark ? .dark : .light))
-            .getRed(&red, green: &green, blue: &blue, alpha: &alpha)
-        return [Double(red), Double(green), Double(blue)]
-    }
-
-    private func distance(_ first: Color, _ second: Color) -> Double {
-        sqrt(zip(rgb(first), rgb(second)).reduce(0) { $0 + pow($1.0 - $1.1, 2) })
+        MatchAnalysisPalette.colors(side, catalog: colors, homeTeam: homeTeam, awayTeam: awayTeam, colorScheme: colorScheme)
     }
 
     private func description(_ annotation: MatchMomentum.Annotation) -> String {
@@ -53,13 +27,15 @@ struct MatchMomentumCard: View {
     var body: some View {
         if momentum.isRenderable {
             VStack(alignment: .leading, spacing: 12) {
-                ViewThatFits(in: .horizontal) {
-                    HStack(alignment: .firstTextBaseline) {
+                if !hideHeading {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .firstTextBaseline) {
+                            Text("Momentum").font(.headline)
+                            Spacer()
+                            Text("Relative pressure").font(.caption).foregroundStyle(.secondary)
+                        }
                         Text("Momentum").font(.headline)
-                        Spacer()
-                        Text("Relative pressure").font(.caption).foregroundStyle(.secondary)
                     }
-                    Text("Momentum").font(.headline)
                 }
                 ViewThatFits(in: .horizontal) {
                     HStack { teamLabel("home"); Spacer(minLength: 12); teamLabel("away") }
@@ -89,9 +65,9 @@ struct MatchMomentumCard: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            .padding(20)
-            .background(.background.opacity(0.7), in: RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(.primary.opacity(0.12), lineWidth: 1))
+            .padding(embedded ? 0 : 20)
+            .background(.background.opacity(embedded ? 0 : 0.7), in: RoundedRectangle(cornerRadius: 14))
+            .overlay(RoundedRectangle(cornerRadius: 14).stroke(.primary.opacity(embedded ? 0 : 0.12), lineWidth: 1))
         }
     }
 

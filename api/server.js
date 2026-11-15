@@ -12713,6 +12713,7 @@ function watchabilityIndexForMatch(match, competitionWeight) {
 
   const index = calculateWatchability({
     competitionName: match.league,
+    isNationalTeamMatch: useNationalRatings,
     homeTeamName: clubHome?.Name || match.home_team,
     awayTeamName: clubAway?.Name || match.away_team,
     competitionWeight,

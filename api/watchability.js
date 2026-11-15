@@ -1,6 +1,6 @@
 "use strict";
 
-const MODEL_VERSION = "v6";
+const MODEL_VERSION = "v7";
 
 // Editorial UK audience appeal, independent of current strength/form. These
 // tiers are policy, not measured supporter counts; review them deliberately.
@@ -178,8 +178,8 @@ function factorDetail(key, score, input) {
       return `${input.competitionName || "Competition"} carries a ${rounded(score)}/100 competition weighting.`;
     case "team_quality":
       return input.homeElo != null && input.awayElo != null
-        ? "Based on both clubs’ pre-match team-strength ratings."
-        : "Uses the available club rating, or a neutral baseline when neither rating is available.";
+        ? "Based on both teams’ pre-match team-strength ratings."
+        : "Uses the available team rating, or a neutral baseline when neither rating is available.";
     case "competitive_balance":
       return input.homeElo != null && input.awayElo != null
         ? "Closer team-strength ratings indicate a more evenly matched contest."
@@ -289,6 +289,34 @@ function calculateWatchability(input = {}) {
         contribution: Math.round(eliteStrength * (isPremierLeague ? 7 : 6) * 10) / 10,
         detail: "Two elite clubs add marquee appeal, with a slightly larger Premier League boost for a UK audience.",
       });
+    }
+  }
+
+  // National Elo has a different scale from club Elo. Require both teams
+  // to exceed 2000, ramping to the full marquee bonus at 2100.
+  if (input.isNationalTeamMatch === true) {
+    if ([input.homeTeamName, input.awayTeamName].some(name => String(name || "").trim().toLowerCase() === "england")) {
+      components.push({
+        key: "england_audience",
+        label: "England audience appeal",
+        score: 100,
+        weight: 0,
+        contribution: 8,
+        detail: "England's national team adds 8 points of editorial appeal for an English UK audience; competition importance still applies.",
+      });
+    }
+    if (input.homeElo != null && input.awayElo != null) {
+      const eliteStrength = clamp((Math.min(input.homeElo, input.awayElo) - 2000) / 100, 0, 1);
+      if (eliteStrength > 0) {
+        components.push({
+          key: "elite_international",
+          label: "Elite international matchup",
+          score: rounded(eliteStrength * 100),
+          weight: 0,
+          contribution: Math.round(eliteStrength * 6 * 10) / 10,
+          detail: "Two elite national teams add up to 6 points of marquee appeal, based on the weaker team's National Elo rating.",
+        });
+      }
     }
   }
 

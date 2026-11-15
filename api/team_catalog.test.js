@@ -64,6 +64,19 @@ test("filterTeamCatalog browses by competition and ranks search matches", () => 
   assert.equal(search[0].id, "norwich-city");
 });
 
+test("iOS team search keeps Wales separate from regional TV channel names", () => {
+  const teams = buildTeamCatalog([
+    { league: "UEFA Nations League", home_team: "Norway", away_team: "Wales", home_team_id: "488", away_team_id: "727" },
+    { league: "UEFA Nations League", home_team: "Northern Ireland", away_team: "Ukraine", home_team_id: "728", away_team_id: "723",
+      tv_channels: [{ name: "BBC Two Wales", countryCode: "GB" }] },
+  ], [{ id: "uefa-nations-league", name: "UEFA Nations League", aliases: [] }]);
+  for (const query of ["Wales", " WALES ", "wal"]) {
+    const results = filterTeamCatalog(teams, { query });
+    assert.deepEqual(results.map(team => team.name), ["Wales"]);
+    assert.deepEqual(results[0].source_team_ids, ["727"]);
+  }
+});
+
 test("team catalogue search includes English exonyms, initials, and ASCII transliterations", () => {
   const teams = buildTeamCatalog(
     [

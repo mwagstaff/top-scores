@@ -1,4 +1,4 @@
-import { MatchMomentumCard } from "./MatchMomentumCard";
+import { MatchAnalysisCard } from "./MatchAnalysisCard";
 import { FunFacts, HeadToHead, LineupStatusBadge, MatchPreview } from "./MatchContextSections";
 import { isContextPrematch } from "../matchContext";
 import { useEffect, useMemo, useRef, useState, memo, type CSSProperties } from "react";
@@ -135,7 +135,7 @@ export function MatchCard({
   // Standalone match pages already poll. Expanded cards need their own bounded
   // refresh while momentum is pending/live, including late post-match coverage.
   useEffect(() => {
-    const intervals = [details?.momentum?.refresh_after_seconds, details?.matchContext?.refresh_after_seconds]
+    const intervals = [details?.momentum?.refresh_after_seconds, details?.matchStats?.refresh_after_seconds, details?.matchContext?.refresh_after_seconds]
       .filter((value): value is number => typeof value === "number" && value > 0);
     const seconds = intervals.length ? Math.min(...intervals) : null;
     if (detailOnly || !isExpanded || !match.matchDetailsId || !seconds) return;
@@ -147,12 +147,12 @@ export function MatchCard({
       try {
         clearMatchDetailsCache(match.matchDetailsId!);
         const next = await fetchMatchDetails(match.matchDetailsId!);
-        if (!cancelled) setDetails(next);
-      } catch { /* Retain the last valid graph during a failed refresh. */ }
+        if (!cancelled) { setDetails(next); setDetailsError(null); }
+      } catch { if (!cancelled) setDetailsError("Match information couldn’t refresh."); }
       finally { inFlight = false; }
     }, Math.max(15, seconds) * 1000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [detailOnly, isExpanded, match.matchDetailsId, details?.momentum?.refresh_after_seconds, details?.matchContext?.refresh_after_seconds]);
+  }, [detailOnly, isExpanded, match.matchDetailsId, details?.momentum?.refresh_after_seconds, details?.matchStats?.refresh_after_seconds, details?.matchContext?.refresh_after_seconds]);
 
   // Fetch details on expand
   useEffect(() => {
@@ -345,7 +345,7 @@ export function MatchCard({
           {!detailOnly && <MatchTeamLeaguePositionsLink match={match} />}
           {!detailOnly && !isFinished && !isAbandoned && <WhereToWatch channels={match.tvChannels} />}
           <MatchPreview context={details?.matchContext} prematch={prematch} />
-          {showMatchUpdates && details?.momentum && <MatchMomentumCard key={match.id} momentum={details.momentum} homeTeam={match.homeTeam} awayTeam={match.awayTeam} isLive={isLive} />}
+          {showMatchUpdates && <MatchAnalysisCard key={match.id} momentum={details?.momentum} stats={details?.matchStats} homeTeam={match.homeTeam} awayTeam={match.awayTeam} isLive={isLive} refreshFailed={!!detailsError} />}
           {showMatchUpdates && (
             <div className="match-feed-picker" role="group" aria-label="Match updates">
               <button type="button" aria-pressed={!showCommentary} onClick={() => setShowCommentary(false)}>Key events</button>
@@ -355,7 +355,7 @@ export function MatchCard({
           {showMatchUpdates && showCommentary && <MatchCommentary key={match.matchDetailsId} matchId={match.matchDetailsId!} isLive={isLive} />}
           {detailsLoading ? (
             <div className="match-details-message">Loading match details…</div>
-          ) : detailsError ? (
+          ) : detailsError && !details ? (
             <div className="match-details-message is-error">{detailsError}</div>
           ) : details ? (
             <ExpandedMatchDetails

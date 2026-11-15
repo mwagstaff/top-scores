@@ -1,6 +1,6 @@
 import { normalizeMatch } from './api';
 import { isMatchAbandoned, isMatchFinished, isMatchLive } from './matchState';
-import { browserTimeZone, ukChannels, moveDate, dateLabel } from './football';
+import { browserTimeZone, ukChannels, moveDate, dateLabel, matchesSearchQuery } from './football';
 import type { Match } from './types';
 type DateFilters = { scope?: false | 'top' | 'epl'; tv?: boolean; query?: string; leagues?: string[] };
 function matchesFilters(match: Match, names: string[], results: boolean, filters: DateFilters) {
@@ -9,7 +9,7 @@ function matchesFilters(match: Match, names: string[], results: boolean, filters
     && (!filters.leagues || filters.leagues.includes(match.league))
     && (!results || finished)
     && (!filters.tv || (!finished && ukChannels(match.tvChannels).length > 0))
-    && `${match.homeTeam} ${match.awayTeam} ${match.league} ${match.tvChannels.map(c => c.name).join(' ')}`.toLowerCase().includes((filters.query || '').toLowerCase().trim());
+    && matchesSearchQuery(match, filters.query || '');
 }
 function applyScope(query: URLSearchParams, filters: DateFilters) {
   if (filters.scope === 'top') query.set('view_option', 'preset:top-teams');

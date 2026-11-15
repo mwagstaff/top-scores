@@ -87,3 +87,11 @@ test("ingestion coalesces concurrent requests, caches empty coverage and preserv
   now += 15 * 60000;
   assert.equal(invalid.canFetch("42"), true);
 });
+
+test("stats-only responses are retained even when momentum is not supplied", async () => {
+  const payload = { event_id: 42, stats: { home: { ball_possession: 54 }, away: { ball_possession: 46 } } };
+  let saved;
+  const ingest = createMomentumIngestor({ client: { getEventStats: async () => payload }, save: async (...args) => { saved = args; } });
+  await ingest("42");
+  assert.deepEqual(saved[2], payload);
+});

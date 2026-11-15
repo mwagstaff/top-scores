@@ -1,5 +1,6 @@
 import { Navigate, useLocation, Route, Routes } from "react-router-dom";
 import { lazy, Suspense, type ComponentType } from "react";
+import { KeyboardNavigation } from "./keyboard";
 import { AppShell } from "./components/AppShell";
 import { MatchesScreen } from "./components/MatchesScreen";
 const TablesScreen = lazy(() =>
@@ -35,7 +36,7 @@ function FixturesRedirect() {
 export default function App({ pages = defaultPages }: { pages?: Pages }) {
   const { MatchPage, CompetitionPage, TablesScreen, TeamPage, FantasyScreen } = pages;
   return (
-    <AppShell>
+    <KeyboardNavigation><AppShell>
       <Suspense
         fallback={
           <div className="football-empty" role="status">
@@ -64,6 +65,6 @@ export default function App({ pages = defaultPages }: { pages?: Pages }) {
           />
         </Routes>
       </Suspense>
-    </AppShell>
+    </AppShell></KeyboardNavigation>
   );
 }

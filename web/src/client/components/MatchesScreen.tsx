@@ -1,3 +1,4 @@
+import { KeyHint, useMatchKeyboard } from "../keyboard";
 import { useEffect, useMemo, useState, useRef } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { competitionDateCounts, preferredCompetitionDate, nextMatchDate, nextMatchDateLabel } from "../competitionDates";
@@ -11,6 +12,7 @@ import {
   rankedTVMatches,
   dateLabel,
   matchPath,
+  matchesSearchQuery,
   moveDate,
   ukChannels,
   localDate,
@@ -97,6 +99,7 @@ export function MatchesScreen({
   );
   const [query, setQuery] = useState<string>(location.state?.restoredMatchQuery || "");
   const [searchOpen, setSearchOpen] = useState(false);
+  const searchInput = useRef<HTMLInputElement>(null);
   const [data, setData] = useState(() => ({
     key: `${date}:${dayScope}`,
     value:
@@ -258,20 +261,6 @@ export function MatchesScreen({
       return next;
     }, { state: location.state?.matchGuideReturn ? { matchGuideReturn: location.state.matchGuideReturn } : null });
   };
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented || event.isComposing || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
-      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-      const target = event.target;
-      if (target instanceof HTMLElement && (target.isContentEditable || target.closest('input, textarea, select, [role="slider"], [role="tablist"], [role="menu"], [role="listbox"], [role="combobox"], [role="spinbutton"], dialog, [role="dialog"]'))) return;
-      const nextDate = moveDate(date, event.key === "ArrowLeft" ? -1 : 1);
-      if ((tv && nextDate < today) || (mode === "results" && nextDate > latestResultDate)) return;
-      event.preventDefault();
-      setParams(current => { const next = new URLSearchParams(current); next.set("date", nextDate); return next; }, { state: location.state?.matchGuideReturn ? { matchGuideReturn: location.state.matchGuideReturn } : null });
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [date, tv, today, mode, latestResultDate, setParams]);
   const relevant = useMemo(
     () =>
       (payload?.matches || []).filter((match) => {
@@ -289,9 +278,7 @@ export function MatchesScreen({
       relevant.filter((match) => {
         if (filter === "tv" && !ukChannels(match.tvChannels).length)
           return false;
-        return `${match.homeTeam} ${match.awayTeam} ${match.league} ${match.tvChannels.map((c) => c.name).join(" ")}`
-          .toLowerCase()
-          .includes(query.toLowerCase().trim());
+        return matchesSearchQuery(match, query);
       }),
     [relevant, filter, query],
   );
@@ -322,6 +309,29 @@ export function MatchesScreen({
       matchGuideReturn: { url: `${location.pathname}?${previous}`, query, undoView }
     } });
   };
+  useEffect(() => {
+    if (location.state?.keyboardReturn) {
+      setQuery(location.state.restoredMatchQuery || "");
+      setSearchOpen(Boolean(location.state.restoredMatchQuery) || Boolean(location.state.keyboardSearch));
+      if (location.state.keyboardSearch) searchInput.current?.focus();
+    }
+  }, [location.key]);
+  useMatchKeyboard({
+    date, scope, query,
+    openSearch: () => { setSearchOpen(true); searchInput.current?.focus(); },
+    changeDate: step => {
+      const nextDate = moveDate(date, step);
+      if ((tv && nextDate < today) || (mode === "results" && nextDate > latestResultDate)) return false;
+      change({ date: nextDate });
+      return true;
+    },
+    setScope: competition ? undefined : next => change({ scope: next, comps: "" }),
+    toggleDetails: detailsAvailable ? () => change({ details: showDetails ? "0" : "1" }) : undefined,
+    openTV: () => {
+      if (date < today) navigate(`/tv?date=${today}&scope=all`);
+      else openDayTVGuide();
+    },
+  });
   const isEnglishEuropean = useEnglishEuropeanMatcher(useMemo(() => relevant.some(match => isEuropeanClubCompetition(match.league)), [relevant]));
   // Ignores the search box so the toggle stays put while typing.
   const highlightAvailable = useMemo(() => {
@@ -538,15 +548,16 @@ export function MatchesScreen({
                 setQuery("");
               }}
             >
-              ⌕ <span>Search</span>
+              ⌕ <span>Search</span> <KeyHint>/</KeyHint>
             </button>
             {searchOpen && (
               <label className="match-search-field">
                 <span aria-hidden="true">⌕</span>
                 <input
+                  ref={searchInput}
                   type="search"
-                  aria-label="Search teams, competitions or channels"
-                  placeholder="Find a team, competition or channel"
+                  aria-label="Search teams or competitions"
+                  placeholder="Find a team or competition"
                   autoFocus
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
@@ -555,12 +566,13 @@ export function MatchesScreen({
             )}
             {!competition && (
               <div className="scope-toggles" role="group" aria-label="Competition scope">
-                {[["all", "All competitions"], ["top", "Top teams"], ["epl", "Premier League teams"]].map(([value, label]) => <button key={value} aria-pressed={scope === value} onClick={() => change({ scope: value, comps: "" })}>{value === 'top' && <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M7 3h10v5a5 5 0 0 1-10 0V3Zm0 2H3v3a4 4 0 0 0 5 4m9-7h4v3a4 4 0 0 1-5 4M12 13v6m-5 2h10m-8-2h6" /></svg>}{value === 'epl' && <img src="/competition-logos/FantasyPremierLeagueLion.webp" width="22" height="22" alt="" />}<span>{label}</span></button>)}
+                {[["all", "All competitions"], ["top", "Top teams"], ["epl", "Premier League teams"]].map(([value, label]) => <button key={value} aria-pressed={scope === value} onClick={() => change({ scope: value, comps: "" })}>{value === 'top' && <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden="true"><path d="M7 3h10v5a5 5 0 0 1-10 0V3Zm0 2H3v3a4 4 0 0 0 5 4m9-7h4v3a4 4 0 0 1-5 4M12 13v6m-5 2h10m-8-2h6" /></svg>}{value === 'epl' && <img src="/competition-logos/FantasyPremierLeagueLion.webp" width="22" height="22" alt="" />}<span>{label}</span><KeyHint>{value === "all" ? "A" : value === "top" ? "O" : "P"}</KeyHint></button>)}
               </div>
             )}
             {highlightAvailable && <label className="match-details-toggle"><input type="checkbox" checked={highlightEnglish} onChange={event => change({ highlight: event.target.checked ? "1" : "0" })} />Highlight English clubs in Europe</label>}
-            {detailsAvailable && <label className="match-details-toggle"><input type="checkbox" checked={showDetails} onChange={event => change({ details: event.target.checked ? "1" : "0" })} />Show details</label>}
+            {detailsAvailable && <label className="match-details-toggle"><input type="checkbox" checked={showDetails} onChange={event => change({ details: event.target.checked ? "1" : "0" })} />Show details<KeyHint>D</KeyHint></label>}
           </div>
+          <div className="match-keyboard-guide" aria-hidden="true"><KeyHint>← →</KeyHint> dates <span>·</span> <KeyHint>↑ ↓</KeyHint> matches <span>·</span> <KeyHint>Enter</KeyHint> open</div>
           <div className="fixture-date-heading">
             <h2>{dateLabel(date)}</h2>
             <span>
@@ -711,7 +723,7 @@ export function MatchesScreen({
                 : date === today ? "Show all today's matches" : "Show all matches for this day"}
             </button>
             <button disabled={availableTVCount === undefined || availableTVCount === 0 || date < today}
-              onClick={openDayTVGuide}>
+              onClick={openDayTVGuide} data-key-hint="V">
               {availableTVCount === undefined ? "Checking TV listings…" : availableTVCount === 0 || date < today
                 ? date === today ? "No matches on TV today" : "No matches on TV this day"
                 : "Show TV guide"}

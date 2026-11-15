@@ -39,6 +39,11 @@ export function dateLabel(date: string, short = false): string {
     month: short ? "short" : "long",
   }).format(new Date(year, month - 1, day));
 }
+export function matchesSearchQuery(match: Match, query: string): boolean {
+  // Regional broadcaster names (e.g. BBC Two Wales) do not identify a team playing.
+  return `${match.homeTeam} ${match.awayTeam} ${match.league}`
+    .toLowerCase().includes(query.toLowerCase().trim());
+}
 export function ukChannels(channels: TvChannel[]): TvChannel[] {
   const unique = new Map<string, TvChannel>();
   for (const channel of channels) {

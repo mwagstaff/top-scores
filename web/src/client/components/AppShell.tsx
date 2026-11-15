@@ -1,3 +1,4 @@
+import { KeyHint } from "../keyboard";
 import { Link, NavLink, useLocation } from "react-router-dom";
 import { useEffect, useState, type PropsWithChildren } from "react";
 import { competitionPath, dateLabel, localDate, validDate } from "../football";
@@ -102,6 +103,7 @@ export function AppShell({ children }: PropsWithChildren) {
               <NavLink key={item.to} to={item.to}>
                 <span aria-hidden="true">{item.to === "/fpl" ? <img className="nav-fpl-icon" src="/generated-assets/fpl-lion.png" width="20" height="22" alt="" /> : item.mark}</span>
                 <span>{item.label}</span>
+                <KeyHint>{{ "/": "S", "/tv": "V", "/results": "R", "/tables": "T", "/fpl": "F" }[item.to]!}</KeyHint>
               </NavLink>
             ))}
           </nav>
@@ -109,7 +111,8 @@ export function AppShell({ children }: PropsWithChildren) {
       </header>
       <div className={`site-layout${isFantasy ? " site-layout-fantasy" : ""}`}>
         {!isFantasy && <aside className="league-rail" aria-label="Competitions">
-          <span className="eyebrow">Competitions</span>
+          <span className="eyebrow">Competitions <KeyHint>C</KeyHint></span>
+          <span className="competition-keyboard-guide" aria-hidden="true">↑ ↓ move · Enter open</span>
           {catalogError && <p>Competitions unavailable. Reload to retry.</p>}
           {competitions.map(({ id, name, aliases }, index) => {
             const names = [name, ...aliases];

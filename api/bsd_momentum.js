@@ -126,8 +126,10 @@ function createMomentumIngestor({ client = bsd, save = upsertBsdRecord, now = Da
     if (failures.has(id)) return Promise.resolve();
     const task = (async () => {
       const payload = await client.getEventStats(id, { initiator: "bsd_runtime", ...options });
-      if (String(payload?.event_id) !== id || !Array.isArray(payload?.momentum) ||
-          payload.momentum.some(p => !finite(p?.m) || !finite(p?.v))) {
+      const hasStats = payload?.stats && typeof payload.stats === "object" && !Array.isArray(payload.stats);
+      if (String(payload?.event_id) !== id || (!hasStats && !Array.isArray(payload?.momentum)) ||
+          (payload.momentum != null && (!Array.isArray(payload.momentum) ||
+          payload.momentum.some(p => !finite(p?.m) || !finite(p?.v))))) {
         throw new Error("Invalid BSD momentum response");
       }
       await save("bsd_event_stats", id, payload, { event_id: id });

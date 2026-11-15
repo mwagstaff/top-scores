@@ -255,3 +255,31 @@ test("elite boost requires two strong rated clubs in an eligible competition", (
     assert.ok(!result.components.some(c => c.key === "elite_matchup"));
   }
 });
+
+const eliteEnglandInternational = {
+  competitionName: "UEFA Nations League", competitionWeight: 69,
+  isNationalTeamMatch: true, homeTeamName: "Spain", awayTeamName: "England",
+  homeElo: 2290, awayElo: 2150, stage: "League",
+};
+
+test("international appeal preserves competition importance and stronger opposition", () => {
+  const rate = (overrides) => calculateWatchability({ ...eliteEnglandInternational, ...overrides });
+  assert.equal(rate({}).score, 82);
+  assert.equal(rate({ competitionName: "International Friendly", competitionWeight: 10 }).stars, 2);
+  assert.equal(rate({ competitionName: "FIFA World Cup", competitionWeight: 100 }).stars, 5);
+  assert.ok(rate({ homeElo: 1500 }).score < rate({}).score);
+  assert.equal(rate({ homeTeamName: "France" }).score, rate({}).score);
+  assert.equal(rate({ homeTeamName: "England", awayTeamName: "Spain", homeElo: 2150, awayElo: 2290 }).score, rate({}).score);
+});
+
+test("national audience and elite appeal are bounded and excluded from club fixtures", () => {
+  const rate = (overrides) => calculateWatchability({ ...eliteEnglandInternational, ...overrides });
+  const bonuses = (result) => result.components.filter(c => ["england_audience", "elite_international"].includes(c.key));
+  assert.equal(bonuses(rate({ isNationalTeamMatch: false })).length, 0);
+  assert.equal(bonuses(rate({ isNationalTeamMatch: undefined })).length, 0);
+  assert.equal(bonuses(rate({ awayTeamName: "France" })).some(c => c.key === "england_audience"), false);
+  assert.equal(bonuses(rate({ homeElo: null })).some(c => c.key === "elite_international"), false);
+  assert.equal(bonuses(rate({ homeElo: 2000 })).some(c => c.key === "elite_international"), false);
+  assert.equal(bonuses(rate({ homeElo: 2050 })).find(c => c.key === "elite_international").contribution, 3);
+  assert.equal(bonuses(rate({ homeElo: 2500, awayElo: 2500 })).reduce((sum, c) => sum + c.contribution, 0), 14);
+});

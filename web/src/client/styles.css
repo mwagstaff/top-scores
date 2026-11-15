@@ -2785,3 +2785,22 @@ button.match-row:hover {
 .momentum-event { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; min-height: 44px; font-size: 13px; }
 .momentum-event button { width: 44px; min-height: 44px; flex: 0 0 44px; color: #f2f5fa; background: transparent; border: 0; font-size: 22px; cursor: pointer; }
 @media (max-width: 600px) { .momentum-card { padding: 14px 20px; } }
+
+/* Shared momentum / match stats panel. */
+.match-analysis-card { margin: 12px 0 20px; padding: 16px 20px; border: 1px solid #91a3b830; border-radius: 10px; background: #0a131de6; }
+.match-analysis-card > h3 { margin: 0 0 12px; font-size: 16px; }
+.match-analysis-card .match-feed-picker { margin: 0 0 12px; }
+.match-analysis-card .momentum-embedded { margin: 0; padding: 0; border: 0; background: none; }
+.match-analysis-card .match-stats-periods { width: min(100%, 300px); margin-top: 12px; }
+.match-stat-row { padding: 9px 0; }
+.match-stat-values { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr); gap: 8px; align-items: center; font-size: 14px; font-variant-numeric: tabular-nums; }
+.match-stat-values > span { text-align: center; font-size: 13px; color: #c7d2df; overflow-wrap: anywhere; }
+.match-stat-values > strong { overflow-wrap: anywhere; }
+.match-stat-values > strong:last-child { text-align: right; }
+.match-stat-bar { display: flex; height: 4px; gap: 3px; margin-top: 8px; border-radius: 3px; background: #142235; overflow: hidden; }
+.match-stat-bar i { display: block; min-width: 0; border-radius: 3px; }
+.match-stats-summary { border-top: 1px solid #91a3b830; margin-top: 16px; padding-top: 8px; }
+.match-stats-more { display: block; width: 100%; min-height: 44px; margin-top: 12px; padding: 12px 8px 4px; border: 0; border-top: 1px solid #91a3b830; background: none; color: #2aa8ff; cursor: pointer; font: inherit; font-size: 13px; font-weight: 600; }
+.match-stats-more:focus-visible { outline: 2px solid #2aa8ff; outline-offset: 3px; }
+.match-stats-group { margin: 20px 0 4px; padding-top: 16px; border-top: 1px solid #91a3b830; font-size: 12px; color: #91a3b8; }
+@media (max-width: 600px) { .match-analysis-card { padding: 14px 16px; } }

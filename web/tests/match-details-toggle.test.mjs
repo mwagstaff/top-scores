@@ -32,6 +32,8 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 globalThis.document = {
   visibilityState: "visible",
   documentElement: { dataset: {} },
+  querySelectorAll: () => [],
+  getElementById: () => null,
   querySelector: () => ({ setAttribute() {}, content: "", rel: "", href: "" }),
   addEventListener() {}, removeEventListener() {},
 };
@@ -46,7 +48,64 @@ globalThis.localStorage = {
   getItem: key => stored.get(key) ?? null,
   setItem: (key, value) => stored.set(key, value),
 };
+const { KeyboardNavigation } = await import("../src/client/keyboard.tsx");
 const { MatchesScreen } = await import("../src/client/components/MatchesScreen.tsx");
+
+test("team search excludes regional broadcast names on fixtures, results and TV", async t => {
+  t.mock.timers.enable({ apis: ["Date"], now: new Date("2027-03-14T21:00:00Z") });
+  const originalFetch = globalThis.fetch;
+  try {
+    for (const [index, props] of [{}, { mode: "results" }, { tv: true }].entries()) {
+      stored.clear();
+      const date = `2027-03-${14 - index}`;
+      globalThis.fetch = async url => {
+        if (!new URL(String(url), "https://example.test").pathname.endsWith("/matches")) return new Response("[]");
+        return new Response(JSON.stringify([
+          { home_team: "Norway", away_team: "Wales" },
+          { home_team: "Northern Ireland", away_team: "Ukraine" },
+        ].map((teams, i) => ({
+          ...teams, match_details_id: `wales-search-${index}-${i}`, date, time: "19:45",
+          league: "UEFA Nations League", score_status: props.mode === "results" ? "FT" : "72",
+          tv_channels: [{ name: "BBC iPlayer", country_code: "GB" }, { name: "BBC Two Wales", country_code: "GB" }],
+        }))));
+      };
+      let renderer;
+      try {
+        await act(async () => { renderer = create(React.createElement(MemoryRouter, { initialEntries: [`/?date=${date}&scope=all`] }, React.createElement(MatchesScreen, props))); });
+        await act(async () => { renderer.root.findByProps({ "aria-label": "Search matches" }).props.onClick(); });
+        const search = renderer.root.findAllByType("input").find(node => node.props.type === "search");
+        const rows = () => renderer.root.findAll(node => node.type === "a" && node.props.className === "fixture-details-link").map(node => node.props["aria-label"]);
+        for (const query of ["wales", " WALES ", "wal"]) {
+          await act(async () => { search.props.onChange({ target: { value: query } }); });
+          assert.deepEqual(rows(), ["Match details: Norway v Wales"], JSON.stringify({ props, query }));
+        }
+        await act(async () => { search.props.onChange({ target: { value: "Nations League" } }); });
+        assert.equal(rows().length, 2);
+        await act(async () => { search.props.onChange({ target: { value: "" } }); });
+        assert.equal(rows().length, 2);
+      } finally {
+        if (renderer) await act(async () => { renderer.unmount(); });
+      }
+    }
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("search date counts and next-date lookup ignore regional broadcast names", async () => {
+  const { nextMatchDate, competitionDateCounts } = await import("../src/client/competitionDates.ts");
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify([
+    { date: "2026-11-15", home_team: "Northern Ireland", away_team: "Ukraine" },
+    { date: "2026-11-16", home_team: "Norway", away_team: "Wales" },
+  ].map((teams, i) => ({
+    ...teams, match_details_id: `wales-dates-${i}`, time: "19:45", league: "UEFA Nations League", score_status: "NS",
+    tv_channels: [{ name: "BBC Two Wales", country_code: "GB" }],
+  }))));
+  try {
+    assert.equal(await nextMatchDate([], "2026-11-14", "2026-11-20", false, { query: "wales" }), "2026-11-16");
+    const activity = await competitionDateCounts([], "2026-11-15", "2026-11-20", false, { query: "wales" });
+    assert.deepEqual(activity.counts, { "2026-11-16": 1 });
+  } finally { globalThis.fetch = originalFetch; }
+});
 
 test("match view choices survive dates, routes, and a new visit while URLs can override them", async t => {
   t.mock.timers.enable({ apis: ["Date"], now: new Date("2026-10-25T12:00:00Z") });
@@ -346,6 +405,8 @@ test("arrow keys navigate dates, preserve filters, and respect controls and date
     constructor(control = false, editable = false) { this.control = control; this.isContentEditable = editable; }
     closest() { return this.control ? this : null; }
   }
+  const originalObserver = globalThis.MutationObserver;
+  globalThis.MutationObserver = class { observe() {} disconnect() {} };
   const originalElement = globalThis.HTMLElement;
   globalThis.HTMLElement = Element;
   t.mock.method(globalThis, "fetch", async () => new Response(JSON.stringify([])));
@@ -365,7 +426,7 @@ test("arrow keys navigate dates, preserve filters, and respect controls and date
   }
   const date = () => new URLSearchParams(location.search).get("date");
   try {
-    await act(async () => { renderer = create(React.createElement(MemoryRouter, { initialEntries: ["/?date=2026-11-15&scope=top&highlight=1"] }, React.createElement(Harness))); });
+    await act(async () => { renderer = create(React.createElement(MemoryRouter, { initialEntries: ["/?date=2026-11-15&scope=top&highlight=1"] }, React.createElement(KeyboardNavigation, null, React.createElement(Harness)))); });
     assert.equal(listeners.size, 1);
     assert.equal(await key("ArrowLeft"), true);
     assert.equal(date(), "2026-11-14");
@@ -396,6 +457,7 @@ test("arrow keys navigate dates, preserve filters, and respect controls and date
   } finally {
     if (renderer) await act(async () => { renderer.unmount(); });
     globalThis.HTMLElement = originalElement;
+    globalThis.MutationObserver = originalObserver;
   }
   assert.equal(listeners.size, 0);
 });

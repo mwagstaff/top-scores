@@ -1601,7 +1601,7 @@ async function projectBsdMatchDetails(eventId, options = {}) {
       : Promise.resolve([]),
     options.playerStatsDoc || getBsdRecords("bsd_player_stats", { _id: id }).then((r) => r[0] || null),
     options.statsDoc || getBsdRecords("bsd_event_stats", { _id: id }, {
-      projection: { "payload.momentum": 1, updated_at: 1 },
+      projection: { "payload.momentum": 1, "payload.stats": 1, "payload.shotmap": 1, updated_at: 1 },
     }).then(rows => rows[0] || null).catch(() => null),
   ]);
   const lineupsDoc = options.lineupsDoc || contextResult.docs.lineups;
@@ -1629,6 +1629,7 @@ async function projectBsdMatchDetails(eventId, options = {}) {
     statsDoc, eventDoc.payload, incidentsDoc?.payload?.incidents
   );
   if (match) {
+    match.match_stats = require("./bsd_match_stats").projectMatchStats(statsDoc, eventDoc.payload);
     match.match_context = contextResult.context;
     if (match.match_context.lineup_status === "unavailable") match.team_lineups = null;
   }

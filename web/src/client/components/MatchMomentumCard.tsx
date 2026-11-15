@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { annotationLanes, momentumPath, momentumSymbol, momentumColors, type MatchMomentum, type MomentumAnnotation } from "../momentum";
 import { useTeamColorCatalog } from "../teamColors";
 
-export function MatchMomentumCard({ momentum, homeTeam, awayTeam, isLive }: {
+export function MatchMomentumCard({ momentum, homeTeam, awayTeam, isLive, embedded = false, hideHeading = false }: {
   momentum: MatchMomentum; homeTeam: string; awayTeam: string; isLive: boolean;
+  embedded?: boolean; hideHeading?: boolean;
 }) {
   const catalog = useTeamColorCatalog();
   const plot = useRef<HTMLDivElement>(null);
@@ -33,8 +34,8 @@ export function MatchMomentumCard({ momentum, homeTeam, awayTeam, isLive }: {
       </button>)}
     </div>;
   };
-  return <section className="momentum-card" aria-label="Match momentum">
-    <div className="momentum-heading"><h3>Momentum</h3><span>Relative pressure</span></div>
+  return <section className={embedded ? "momentum-card momentum-embedded" : "momentum-card"} aria-label="Match momentum">
+    {!hideHeading && <div className="momentum-heading"><h3>Momentum</h3><span>Relative pressure</span></div>}
     <div className="momentum-teams">
       {(["home", "away"] as const).map(side => <span key={side}>
         <i aria-hidden="true" style={{ background: colors[side].background, borderColor: colors[side].foreground }} />

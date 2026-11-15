@@ -11,7 +11,7 @@ const source = fs.readFileSync(require.resolve("./server"), "utf8");
 const start = source.indexOf("function watchabilityIndexForMatch(");
 const end = source.indexOf("\nfunction ", start + 1);
 assert.ok(start >= 0 && end > start);
-function adapter({ premierLeagueTeams = [], ratings = {} } = {}) {
+function adapter({ premierLeagueTeams = [], ratings = {}, nationalRatings = {} } = {}) {
   const context = {
     watchabilityIndexByMatchKey: new Map(),
     matchKey: (match) => `${match.home_team}:${match.away_team}`,
@@ -25,9 +25,10 @@ function adapter({ premierLeagueTeams = [], ratings = {} } = {}) {
         clubEloTeamForName: (name) => ratings[name] || null,
         isPremierLeagueTeam: (name) => premierLeagueTeams.includes(name),
       },
+      nationalEloTeamForName: (name) => nationalRatings[name] || null,
       tables: [],
     }),
-    isLikelyNationalTeamName: () => false,
+    isLikelyNationalTeamName: (name) => Object.hasOwn(nationalRatings, name),
     watchabilityTableForLeague: () => null,
     watchabilityStandingForTeam: () => null,
     watchabilityRivalryForMatch: () => null,
@@ -64,4 +65,20 @@ test("server keeps absent ratings unknown and missing membership does not award 
   assert.equal(result.components.find(c => c.key === "team_quality").score, 45);
   assert.equal(result.components.find(c => c.key === "competitive_balance").score, 55);
   assert.equal(result.confidence, 0.74);
+});
+
+// Public national Elo ratings and fixture scores captured on 14 November 2026.
+test("elite England Nations League fixtures outrank Belgium-Italy without reaching five stars", () => {
+  const rate = adapter({ nationalRatings: {
+    Spain: { Name: "Spain", Points: 2290 }, England: { Name: "England", Points: 2150 },
+    Belgium: { Name: "Belgium", Points: 1971 }, Italy: { Name: "Italy", Points: 1948 },
+  } });
+  const fixture = { ...match, league: "UEFA Nations League", league_subcategory: "League" };
+  const spainEngland = rate({ ...fixture, home_team: "Spain", away_team: "England" }, 69);
+  const belgiumItaly = rate({ ...fixture, home_team: "Belgium", away_team: "Italy" }, 69);
+  assert.equal(spainEngland.score, 82);
+  assert.equal(spainEngland.stars, 4);
+  assert.equal(belgiumItaly.score, 71);
+  assert.ok(spainEngland.score > belgiumItaly.score);
+  assert.equal(rate({ ...fixture, home_team: "England", away_team: "Spain" }, 69).score, spainEngland.score);
 });

@@ -19,6 +19,8 @@ struct MatchDetailView: View {
     @State private var refreshedMatch: Match?
     @State private var detailedMatch: Match?
     @State private var momentum: MatchMomentum?
+    @State private var matchStats: MatchStats?
+    @State private var analysisRefreshFailed = false
     @State private var matchContext: MatchContext?
     @State private var contextNow = Date()
     @State private var detailsRefreshTask: Task<Void, Never>?
@@ -274,9 +276,10 @@ struct MatchDetailView: View {
                             }
                         }
 
-                        if (activeMatch.isInProgress || activeMatch.isFinished), let momentum, momentum.isRenderable {
-                            MatchMomentumCard(momentum: momentum, homeTeam: activeMatch.homeTeam,
-                                              awayTeam: activeMatch.awayTeam, isLive: activeMatch.isInProgress)
+                        if activeMatch.isInProgress || activeMatch.isFinished {
+                            MatchAnalysisCard(momentum: momentum, stats: matchStats, homeTeam: activeMatch.homeTeam,
+                                              awayTeam: activeMatch.awayTeam, isLive: activeMatch.isInProgress, refreshFailed: analysisRefreshFailed)
+                                .id(activeMatch.matchDetailsID)
                                 .padding(.horizontal)
                         }
 
@@ -567,6 +570,8 @@ struct MatchDetailView: View {
         refreshedMatch = nil
         detailedMatch = nil
         momentum = nil
+        matchStats = nil
+        analysisRefreshFailed = false
         matchContext = nil
 
         guard let baseURL = URL(string: preferences.apiBaseURL) else {
@@ -604,6 +609,7 @@ struct MatchDetailView: View {
                 if let cached {
                     detailedMatch = baseMatch.withDetails(cached)
                     momentum = cached.momentum
+                    matchStats = cached.matchStats
                     matchContext = cached.matchContext
                     contextNow = Date()
                 }
@@ -719,6 +725,8 @@ struct MatchDetailView: View {
                     refreshedMatch = refreshed
                 }
                 momentum = details.momentum
+                matchStats = details.matchStats
+                analysisRefreshFailed = false
                 matchContext = details.matchContext
                 contextNow = Date()
                 let updated = base.withDetails(details)
@@ -733,7 +741,7 @@ struct MatchDetailView: View {
                 }
                 pendingEventsQuickRetry = updated.isFinished && !hasEvents
                 // Keep refreshing while momentum is pending or the match is settling.
-                if updated.isFinished && hasEvents && hasLineups && details.momentum?.refreshAfterSeconds == nil && details.matchContext?.refreshAfterSeconds == nil {
+                if updated.isFinished && hasEvents && hasLineups && details.momentum?.refreshAfterSeconds == nil && details.matchStats?.refreshAfterSeconds == nil && details.matchContext?.refreshAfterSeconds == nil {
                     detailsRefreshTask?.cancel()
                     detailsRefreshTask = nil
                 }
@@ -759,6 +767,7 @@ struct MatchDetailView: View {
                 detailsID, durationMs, String(describing: error)
             )
             await MainActor.run {
+                analysisRefreshFailed = true
                 detailsErrorMessage = detailedMatch == nil
                     ? "Unable to load match events."
                     : "Using latest available match events."
@@ -804,7 +813,7 @@ struct MatchDetailView: View {
         if pendingEventsQuickRetry {
             return Self.pendingEventsBackfillRefreshIntervalNanos
         }
-        if match.isFinished, let seconds = momentum?.refreshAfterSeconds {
+        if match.isFinished, let seconds = [momentum?.refreshAfterSeconds, matchStats?.refreshAfterSeconds].compactMap({ $0 }).min() {
             return UInt64(max(30, min(seconds, 3600))) * 1_000_000_000
         }
         return Self.idleDetailsRefreshIntervalNanos
