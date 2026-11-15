@@ -345,14 +345,14 @@ export function MatchCard({
           {!detailOnly && <MatchTeamLeaguePositionsLink match={match} />}
           {!detailOnly && !isFinished && !isAbandoned && <WhereToWatch channels={match.tvChannels} />}
           <MatchPreview context={details?.matchContext} prematch={prematch} />
-          {showMatchUpdates && <MatchAnalysisCard key={match.id} momentum={details?.momentum} stats={details?.matchStats} homeTeam={match.homeTeam} awayTeam={match.awayTeam} isLive={isLive} refreshFailed={!!detailsError} />}
+          {showMatchUpdates && <MatchAnalysisCard key={`analysis-${match.id}`} momentum={details?.momentum} stats={details?.matchStats} homeTeam={match.homeTeam} awayTeam={match.awayTeam} isLive={isLive} refreshFailed={!!detailsError} />}
           {showMatchUpdates && (
             <div className="match-feed-picker" role="group" aria-label="Match updates">
               <button type="button" aria-pressed={!showCommentary} onClick={() => setShowCommentary(false)}>Key events</button>
               <button type="button" aria-pressed={showCommentary} onClick={() => setShowCommentary(true)}>Commentary</button>
             </div>
           )}
-          {showMatchUpdates && showCommentary && <MatchCommentary key={match.matchDetailsId} matchId={match.matchDetailsId!} isLive={isLive} />}
+          {showMatchUpdates && showCommentary && <MatchCommentary key={`commentary-${match.matchDetailsId}`} matchId={match.matchDetailsId!} isLive={isLive} />}
           {detailsLoading ? (
             <div className="match-details-message">Loading match details…</div>
           ) : detailsError && !details ? (
