@@ -50,9 +50,9 @@ struct MatchHeadToHeadSection: View {
                     .font(.caption).foregroundStyle(.secondary)
                 let layout = dynamicTypeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: 12)) : AnyLayout(HStackLayout(alignment: .top, spacing: 12))
                 layout {
-                    summary(data.homeWins, label: "\(homeTeam) wins")
-                    summary(data.draws, label: "Draws")
-                    summary(data.awayWins, label: "\(awayTeam) wins")
+                    summary(data.homeWins, label: "\(homeTeam) \(data.homeWins == 1 ? "win" : "wins")")
+                    summary(data.draws, label: data.draws == 1 ? "Draw" : "Draws")
+                    summary(data.awayWins, label: "\(awayTeam) \(data.awayWins == 1 ? "win" : "wins")")
                 }
                 let meetings = Array(data.recentMatches.prefix(10))
                 if !meetings.isEmpty {
@@ -62,14 +62,10 @@ struct MatchHeadToHeadSection: View {
                         Divider()
                         if let match = meeting.match {
                             NavigationLink { MatchDetailView(match: match, showFantasyBadge: false) } label: {
-                                HStack(spacing: 10) {
-                                    row(meeting)
-                                    Image(systemName: "chevron.right").font(.caption.weight(.semibold))
-                                        .foregroundStyle(.secondary).accessibilityHidden(true)
-                                }
+                                meetingRow(meeting)
                             }
                                 .buttonStyle(.plain).accessibilityHint("Opens match details")
-                        } else { row(meeting) }
+                        } else { meetingRow(meeting) }
                     }
                 }
             }
@@ -83,6 +79,17 @@ struct MatchHeadToHeadSection: View {
             Text(label).font(.caption).multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity).accessibilityElement(children: .combine)
+    }
+
+    private func meetingRow(_ meeting: MatchHeadToHeadMeeting) -> some View {
+        HStack(spacing: 10) {
+            row(meeting)
+            Image(systemName: "chevron.right").font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                // Preserve the same team and score columns for non-navigable meetings.
+                .opacity(meeting.match == nil ? 0 : 1)
+                .accessibilityHidden(true)
+        }
     }
 
     private func row(_ meeting: MatchHeadToHeadMeeting) -> some View {

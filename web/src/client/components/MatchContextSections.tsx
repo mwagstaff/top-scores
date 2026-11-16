@@ -33,9 +33,9 @@ export function HeadToHead({ context, homeTeam, awayTeam }: {
     {data.total_matches === 0 ? <p className="match-context-note">No meetings available.</p> : <>
       <p className="match-context-note">{data.total_matches} recorded {data.total_matches === 1 ? "meeting" : "meetings"}</p>
       <div className="match-h2h-summary">
-        <div><strong>{data.home_wins ?? "–"}</strong><span>{homeTeam} wins</span></div>
-        <div><strong>{data.draws ?? "–"}</strong><span>Draws</span></div>
-        <div><strong>{data.away_wins ?? "–"}</strong><span>{awayTeam} wins</span></div>
+        <div><strong>{data.home_wins ?? "–"}</strong><span>{homeTeam} {data.home_wins === 1 ? "win" : "wins"}</span></div>
+        <div><strong>{data.draws ?? "–"}</strong><span>{data.draws === 1 ? "Draw" : "Draws"}</span></div>
+        <div><strong>{data.away_wins ?? "–"}</strong><span>{awayTeam} {data.away_wins === 1 ? "win" : "wins"}</span></div>
       </div>
       {data.recent_matches.length > 0 && <>
         <h3 className="match-context-subtitle">Latest {data.recent_matches.length} {data.recent_matches.length === 1 ? "meeting" : "meetings"}</h3>
