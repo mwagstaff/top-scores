@@ -11,7 +11,7 @@ struct FantasyTabBadgeTests {
         #expect(!fantasyShouldRefreshInBackground(selectedTab: 0, managerEntryID: "  \n "))
     }
 
-    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+    private let now = Calendar.current.date(from: DateComponents(year: 2027, month: 1, day: 15, hour: 8))!
 
     @Test func liveMatchShowsScore() {
         let match = makeMatch(status: "73", updatedAt: nil)
@@ -69,7 +69,7 @@ struct FantasyTabBadgeTests {
 
     private func makeMatch(status: String?, updatedAt: String?) -> Match {
         Match(
-            date: "15-01-2027",
+            date: "2027-01-15",
             time: "07:00",
             homeTeam: "Arsenal",
             awayTeam: "Chelsea",

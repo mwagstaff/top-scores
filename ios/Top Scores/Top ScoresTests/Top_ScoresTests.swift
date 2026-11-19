@@ -777,6 +777,7 @@ struct Top_ScoresTests {
         let snapshot = PreferencesSnapshot(
             selectedLeagues: PreferencesStore.defaultSelectedLeagues,
             selectedChannels: PreferencesStore.defaultSelectedChannels,
+            fixtureAllMajorMatchesEnabled: true,
             competitionFilterEnabled: false,
             channelFilterEnabled: false,
             englishPremierLeagueTeamsOnly: true,
@@ -1341,17 +1342,18 @@ struct Top_ScoresTests {
     }
 
     @Test func matchOrderPinning_keepsPreviouslyDisplayedOrderWhileMatchesAreInProgress() {
+        let kickoff = liveMatchKickoff()
         let brightonUpcoming = Match(
-            date: "2026-08-23",
-            time: "14:00",
+            date: kickoff.date,
+            time: kickoff.time,
             homeTeam: "Brighton & Hove Albion",
             awayTeam: "Aston Villa",
             league: "Premier League",
             tvChannels: []
         )
         let cityUpcoming = Match(
-            date: "2026-08-23",
-            time: "14:00",
+            date: kickoff.date,
+            time: kickoff.time,
             homeTeam: "Manchester City",
             awayTeam: "Bournemouth",
             league: "Premier League",
@@ -1373,9 +1375,10 @@ struct Top_ScoresTests {
     }
 
     @Test func matchOrderPinning_releasesOrderAfterInProgressMatchesFinish() {
+        let kickoff = liveMatchKickoff()
         let brightonLive = Match(
-            date: "2026-08-23",
-            time: "14:00",
+            date: kickoff.date,
+            time: kickoff.time,
             homeTeam: "Brighton & Hove Albion",
             awayTeam: "Aston Villa",
             league: "Premier League",
@@ -1385,8 +1388,8 @@ struct Top_ScoresTests {
             scoreStatus: "46"
         )
         let cityLive = Match(
-            date: "2026-08-23",
-            time: "14:00",
+            date: kickoff.date,
+            time: kickoff.time,
             homeTeam: "Manchester City",
             awayTeam: "Bournemouth",
             league: "Premier League",
@@ -2207,7 +2210,12 @@ struct Top_ScoresTests {
             selectedCompetitionIDs: [],
             competitions: competitions,
             fixtureViewOptionIDs: options,
-            includePostponed: false
+            includePostponed: false,
+            premierLeagueTeamMatcher: PremierLeagueTeamMatcher(teams: [
+                TeamCatalogEntry(id: "arsenal", name: "Arsenal", aliases: [],
+                                 competitionIDs: ["premier-league"], competitionNames: ["Premier League"],
+                                 sourceTeamIDs: ["18"])
+            ])
         )
 
         #expect(filtered.map(\.id) == [arsenal.id])
@@ -3264,7 +3272,7 @@ struct Top_ScoresTests {
                 homeTeam: "Arsenal",
                 awayTeam: "Watford",
                 league: "FA Cup",
-                matchDetailsID: "arsenal-cup",
+                matchDetailsID: "12345",
                 tvChannels: [],
                 homeScore: 2,
                 awayScore: 0,
@@ -3276,7 +3284,7 @@ struct Top_ScoresTests {
                 homeTeam: "West Ham United",
                 awayTeam: "Wolverhampton Wanderers",
                 league: "Championship",
-                matchDetailsID: "former-premier-league-teams",
+                matchDetailsID: "12346",
                 tvChannels: [],
                 homeScore: 4,
                 awayScore: 2,
@@ -3291,7 +3299,7 @@ struct Top_ScoresTests {
             premierLeagueTeamMatcher: currentRoster
         )
 
-        #expect(filtered.compactMap(\.matchDetailsID) == ["arsenal-cup"])
+        #expect(filtered.compactMap(\.matchDetailsID) == ["12345"])
     }
 
     @Test func applyPreferenceFilters_results_emptySelectionDoesNotHideServerResultsLocally() async throws {
@@ -6461,6 +6469,17 @@ struct Top_ScoresTests {
 
         #expect(TeamColorsCatalogCachePolicy.shouldPrefer(larger, over: smaller))
         #expect(!TeamColorsCatalogCachePolicy.shouldPrefer(smaller, over: larger))
+    }
+
+    private func liveMatchKickoff() -> (date: String, time: String) {
+        let kickoff = Date().addingTimeInterval(-45 * 60)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        let date = formatter.string(from: kickoff)
+        formatter.dateFormat = "HH:mm"
+        return (date, formatter.string(from: kickoff))
     }
 
     private func formattedDate(offsetDays: Int) -> String {

@@ -1174,14 +1174,18 @@ struct APIClient {
     }
 
     private func hydrateInProgressMatchStatesBestEffort(_ matches: [Match]) async -> [Match] {
-        let ids = matches.filter(\.isInProgress).compactMap(\.matchDetailsID)
+        // A stale minute can display as FT before the server has confirmed the result.
+        let ids = matches.compactMap { match -> String? in
+            guard let status = match.scoreStatus, MatchStatusFormatter.isInProgress(status),
+                  match.hasScore || match.isInProgress else { return nil }
+            return match.matchDetailsID
+        }
         guard !ids.isEmpty else { return matches }
 
         do {
             let statesByID = try await fetchMatchStates(matchIDs: ids, summaryOnly: true)
             return matches.map { match in
-                guard match.isInProgress,
-                      let matchDetailsID = match.matchDetailsID,
+                guard let matchDetailsID = match.matchDetailsID,
                       let details = statesByID[matchDetailsID] else {
                     return match
                 }
