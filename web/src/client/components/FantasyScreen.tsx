@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { managerInitials, seasonTotal, sortSquads, visibleLeagues, fetchFantasy, money, parseFplID, playerImageCandidates, teamName, type LeagueData, type Player, type PlayerData, type Preferences, type Profile, type Squad, type SquadPlayer } from '../fantasyData';
 import '../fantasy.css';
 import { displayTime, localDate, matchPath } from '../football';
@@ -11,6 +11,7 @@ import { buildPlayerNameLookup, matchPlayerNameLookup } from '../matchPlayerName
 import type { Match, MatchDetails } from '../types';
 import { useInitialSeed } from '../bootstrap';
 import { useFantasyPreferences } from '../fantasySync';
+import { PageMeta } from './PageMeta';
 import FantasyConnection from './FantasyConnection';
 
 function useResource<T>(path: string | null, interval = 0, initial?: { path: string; data: T }, fetchData: (path: string, signal: AbortSignal) => Promise<T> = fetchFantasy) {
@@ -45,7 +46,9 @@ export default function FantasyScreen() {
   const sync = useFantasyPreferences();
   const { preferences, ready, persist } = sync;
   const [message, setMessage] = useState('');
-  const [setup, setSetup] = useState(false);
+  const route = useLocation();
+  const navigate = useNavigate();
+  const setup = route.pathname === '/fpl/settings';
   const [metric, setMetric] = useState('opponent');
   const [view, setView] = useState('pitch');
   const section = ['team', 'leagues'].includes(params.get('section') || '') ? params.get('section')! : 'team';
@@ -53,7 +56,7 @@ export default function FantasyScreen() {
   const event = parseFplID(params.get('event') || '');
   const player = parseFplID(params.get('player') || '');
   const league = parseFplID(params.get('league') || '');
-  const squad = useResource<Squad>((ready || seed?.fantasy) && entry ? `/api/fpl/entry/${entry}${event ? `?event=${event}` : ''}` : null, 30_000, seed?.fantasy && seed.fantasyPath ? { path: seed.fantasyPath, data: seed.fantasy } : undefined);
+  const squad = useResource<Squad>(!setup && (ready || seed?.fantasy) && entry ? `/api/fpl/entry/${entry}${event ? `?event=${event}` : ''}` : null, 30_000, seed?.fantasy && seed.fantasyPath ? { path: seed.fantasyPath, data: seed.fantasy } : undefined);
   const data = squad.data;
   const pitch = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -75,8 +78,10 @@ export default function FantasyScreen() {
   const addRivalForm = useRef<HTMLDivElement>(null);
   useEffect(() => { if (addingRival) { addRivalForm.current?.scrollIntoView({ block: 'nearest' }); addRivalForm.current?.querySelector('input')?.focus(); } }, [addingRival]);
   const rivalIDs = [...new Set([preferences.manager || entry, ...preferences.rivals].filter((id): id is number => !!id))];
-  const rivals = useRivalSquads(rivalIDs.filter(id => id !== entry), data?.event.id);
+  const rivals = useRivalSquads(setup ? [] : rivalIDs.filter(id => id !== entry), data?.event.id);
   const pool = rivalIDs.flatMap(id => { const value = data?.profile.id === id ? data : rivals[id]; return value ? [value] : []; });
+  const trackedRivalIDs = rivalIDs.filter(id => id !== (preferences.manager || entry));
+  const trackedSquads = pool.filter(team => trackedRivalIDs.includes(team.profile.id));
   const completeRanks = pool.length === rivalIDs.length && pool.every(team => team.previousTotal != null);
   const ownSquad = pool.find(s => s.profile.id === (preferences.manager || entry));
   const ownProfile = ownSquad?.profile;
@@ -100,7 +105,8 @@ export default function FantasyScreen() {
   const openPlayer = (id: number) => change({ player: id });
   const saveManager = async (id: number) => {
     await fetchFantasy<Profile>(`/api/fpl/profile/${id}`);
-    persist({ ...preferences, manager: id }); setSetup(false); change({ entry: null, event: null });
+    persist({ ...preferences, manager: id });
+    navigate('/fpl?entry=' + id);
   };
   const addRival = async (id: number) => {
     if (preferences.rivals.length >= 100) throw new Error('You can follow up to 100 rivals. Remove one first.');
@@ -108,19 +114,22 @@ export default function FantasyScreen() {
     persist({ ...preferences, rivals: [...new Set([...preferences.rivals, id])].filter(value => value !== preferences.manager) });
   };
   return <div className="fpl-page">
-    <header className="fpl-heading"><div><h1>{data ? `${data.event.name}: ${data.profile.name}` : 'Fantasy Premier League'}</h1>{deadline && <p className={`fpl-deadline${deadlineClose ? ' is-close' : ''}`}>Next transfer deadline · <time dateTime={deadline.toISOString()}>{deadline.toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</time>{deadlineClose && <strong> · Less than 24 hours</strong>}</p>}</div>{entry && !setup && <div className="fpl-toolbar">{data && <label><select aria-label="Gameweek" value={data.event.id} onChange={e => change({ event: Number(e.target.value) })}>{[...data.events].reverse().map(gw => <option key={gw.id} value={gw.id}>{gw.name}</option>)}</select></label>}
+    <PageMeta title={setup ? 'FPL team settings' : 'Fantasy Premier League'} description={setup ? 'Connect your Top Scores app or choose your FPL team.' : 'Follow your FPL squad, live points, rivals and leagues.'} />
+    <header className="fpl-heading"><div><h1>{setup ? 'FPL team settings' : data ? `${data.event.name}: ${data.profile.name}` : 'Fantasy Premier League'}</h1>{!setup && deadline && <p className={`fpl-deadline${deadlineClose ? ' is-close' : ''}`}>Next transfer deadline · <time dateTime={deadline.toISOString()}>{deadline.toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</time>{deadlineClose && <strong> · Less than 24 hours</strong>}</p>}</div>{entry && !setup && <div className="fpl-toolbar">{data && <label><select aria-label="Gameweek" value={data.event.id} onChange={e => change({ event: Number(e.target.value) })}>{[...data.events].reverse().map(gw => <option key={gw.id} value={gw.id}>{gw.name}</option>)}</select></label>}
         <button onClick={squad.retry} disabled={squad.loading}> {squad.loading ? 'Refreshing…' : 'Refresh'}</button>
         <button onClick={async () => { try { const url = new URL(location.href); url.searchParams.set('entry', String(entry)); await navigator.clipboard.writeText(url.href); setMessage('Link copied. It shares public FPL data only.'); } catch { setMessage('Copy the page address to share this team.'); } }}>Share</button>
 </div>}</header>
-    {!entry || setup ? <section className="fpl-setup">
-      <h2>{entry ? 'Change your team' : 'Bring your team into the picture'}</h2>
+    {!entry || setup ? <>
+      <FantasyConnection sync={sync} onImport={id => navigate(id ? '/fpl?entry=' + id : '/fpl')} />
+      <section className="fpl-setup">
+      <h2>{sync.connected ? 'Change your FPL team' : 'Or add your FPL team manually'}</h2>
       <p>Follow your published squad, live points and rivals with your FPL manager ID. No password needed.</p>
       <IDForm label="Manager ID or FPL team link" onSubmit={saveManager} button="Follow my team" />
       <p className="fpl-muted">Find your ID in the address of your Points page on the official FPL website, for example /entry/123456/event/12.</p>
-      <p className="fpl-muted">Saved on this browser. Pre-deadline transfers and private lineups are not available.</p>
+      <p className="fpl-muted">{sync.connected ? 'Changing your team here also updates it in the app.' : 'Saved on this browser.'} Pre-deadline transfers and private lineups are not available.</p>
       <a href="https://fantasy.premierleague.com/" target="_blank" rel="noreferrer">Open Fantasy Premier League ↗</a>
-      {entry && <button onClick={() => setSetup(false)}>Cancel</button>}
-    </section> : <>
+      {setup && <button onClick={() => route.state?.fromFpl ? navigate(-1) : navigate('/fpl')}>Back to FPL</button>}
+    </section></> : <>
       {message && <p role="status">{message}</p>}
       {squad.error && <p className="fpl-error" role="alert">{squad.error} {data && 'Showing the last successful update.'} <button onClick={squad.retry}>Retry</button></p>}
       {!data && !squad.error && <div className="fpl-loading" role="status">Loading published squad…</div>}
@@ -146,8 +155,8 @@ export default function FantasyScreen() {
 
       </>}
     </>}
-    <footer className="fpl-settings"><button onClick={() => { setSetup(true); window.scrollTo({ top: 0 }); }}>Change team</button><FantasyConnection sync={sync} onImport={() => { setSetup(false); change({ entry: null, event: null, player: null, league: null }); }} /></footer>
-    {player && <PlayerPanel key={player} id={player} onClose={() => change({ player: null })} />}
+    {entry && !setup && <footer className="fpl-settings"><Link to="/fpl/settings" state={{ fromFpl: true }}>{sync.conflict ? 'Resolve sync in FPL team settings' : 'FPL team settings'}</Link></footer>}
+    {!setup && player && <PlayerPanel key={player} id={player} ownSquad={preferences.manager ? ownSquad : undefined} rivals={trackedSquads} picksComplete={ready && (!preferences.manager || !!ownSquad) && trackedSquads.length === trackedRivalIDs.length} onClose={() => change({ player: null })} />}
   </div>;
 }
 function Metric({ label, value }: { label: string; value: string | number | undefined }) { return <div><span>{label}</span><strong>{value ?? '—'}</strong></div>; }
@@ -328,10 +337,15 @@ function Leagues({ data, profile, selected, preferences, persist, select, select
   return <div className="fpl-leagues"><aside><h2>Leagues</h2>{leagues.map((l, index) => <div className="fpl-league-choice" key={l.id}><button aria-pressed={id === l.id} onClick={() => { setPage(1); select(l.id); }}>{l.name}</button><button aria-label={`Move ${l.name} up`} disabled={index === 0} onClick={() => { const next = leagues.map(l => l.id); [next[index - 1], next[index]] = [next[index], next[index - 1]]; persist({ ...preferences, leagueOrder: next }); }}>↑</button>{preferences.leagues.some(saved => saved.id === l.id) && !profile?.leagues.classic.some(owned => owned.id === l.id && owned.league_type === 'x') && <button aria-label={`Unsave ${l.name}`} onClick={() => persist({ ...preferences, leagues: preferences.leagues.filter(saved => saved.id !== l.id) })}>×</button>}</div>)}<IDForm kind="league" label="League ID or link" button="Save league" onSubmit={async id => { const value = await fetchFantasy<LeagueData>(`/api/fpl/league/${id}`); persist({ ...preferences, leagues: [...preferences.leagues.filter(l => l.id !== id), value.league] }); select(id); }} /></aside><section>
     <h2>{result.data?.league.name || 'League standings'}</h2><p className="fpl-muted">Official FPL standings update independently of live squad scores. GW points use FPL’s current gameweek.</p>
     {result.error && <p role="alert">{result.error} <button onClick={result.retry}>Retry</button></p>}{!id && <p>Add a classic league to see its standings.</p>}{id && result.loading && <p role="status">Updating standings…</p>}
-    {result.data && <><div className="fpl-table-scroll"><table className="fpl-table"><thead><tr><th>Rank</th><th>Change</th><th>Team / manager</th><th>GW</th><th>Overall</th></tr></thead><tbody>{result.data.standings.results.map(row => <tr key={row.entry} className={row.entry === preferences.manager ? 'is-you' : ''}><td>{row.rank.toLocaleString()}</td><td>{row.last_rank ? row.last_rank - row.rank > 0 ? `↑ ${row.last_rank - row.rank}` : row.last_rank - row.rank < 0 ? `↓ ${row.rank - row.last_rank}` : '—' : 'New'}</td><th><button className="fpl-league-team" onClick={() => selectManager(row.entry)}><ManagerBadge profile={{ id: row.entry, club_badge_src: row.club_badge_src || undefined, player_first_name: row.player_name.split(/\s+/)[0], player_last_name: row.player_name.split(/\s+/).slice(1).join(' ') }} /><span>{row.entry_name}{row.entry === preferences.manager ? ' · You' : ''}<small>{row.player_name}</small></span></button></th><td>{row.event_total}</td><td>{row.total.toLocaleString()}</td></tr>)}</tbody></table></div><div className="fpl-pagination"><button disabled={page <= 1} onClick={() => setPage(p => p - 1)}>Previous</button><span>Page {page}</span><button disabled={!result.data.standings.has_next} onClick={() => setPage(p => p + 1)}>Next</button></div></>}
+    {result.data && <><div className="fpl-table-scroll"><table className="fpl-table"><thead><tr><th>Rank</th><th>Change</th><th>Team / manager</th><th>GW</th><th>Overall</th></tr></thead><tbody>{result.data.standings.results.map(row => <tr key={row.entry} onClick={() => selectManager(row.entry)} className={row.entry === preferences.manager ? 'is-you' : ''}><td>{row.rank.toLocaleString()}</td><td>{row.last_rank ? row.last_rank - row.rank > 0 ? `↑ ${row.last_rank - row.rank}` : row.last_rank - row.rank < 0 ? `↓ ${row.rank - row.last_rank}` : '—' : 'New'}</td><th><button className="fpl-league-team"><ManagerBadge profile={{ id: row.entry, club_badge_src: row.club_badge_src || undefined, player_first_name: row.player_name.split(/\s+/)[0], player_last_name: row.player_name.split(/\s+/).slice(1).join(' ') }} /><span>{row.entry_name}{row.entry === preferences.manager ? ' · You' : ''}<small>{row.player_name}</small></span></button></th><td>{row.event_total}</td><td>{row.total.toLocaleString()}</td></tr>)}</tbody></table></div><div className="fpl-pagination"><button disabled={page <= 1} onClick={() => setPage(p => p - 1)}>Previous</button><span>Page {page}</span><button disabled={!result.data.standings.has_next} onClick={() => setPage(p => p + 1)}>Next</button></div></>}
   </section></div>;
 }
-function PlayerPanel({ id, onClose }: { id: number; onClose: () => void }) {
+function PlayerPanel({ id, ownSquad, rivals, picksComplete, onClose }: {
+  id: number; ownSquad?: Squad; rivals: Squad[]; picksComplete: boolean; onClose: () => void;
+}) {
+  const pickedPlayer = (team: Squad) => team.players.some(player => player.id === id);
+  const owners = sortSquads(rivals.filter(pickedPlayer));
+  if (ownSquad && pickedPlayer(ownSquad)) owners.unshift(ownSquad);
   const state = useResource<PlayerData>(`/api/fpl/player/${id}`);
   const [tab, setTab] = useState('overview');
   const [comparison, setComparison] = useState<number[]>([]);
@@ -344,7 +358,14 @@ function PlayerPanel({ id, onClose }: { id: number; onClose: () => void }) {
   const metrics: [string, (p: Player) => string | number][] = [['Price', p => money(p.now_cost)], ['Next GW xP', p => p.ep_next || '—'], ['Form', p => p.form], ['Points / match', p => p.points_per_game], ['Total points', p => p.total_points], ['Ownership', p => `${p.selected_by_percent}%`], ['Minutes', p => p.minutes], ['Goals', p => p.goals_scored], ['Assists', p => p.assists], ['Clean sheets', p => p.clean_sheets], ['Bonus', p => p.bonus], ['Expected goals', p => p.expected_goals], ['Expected assists', p => p.expected_assists], ['ICT index', p => p.ict_index]];
   return <dialog className={`fpl-player-panel${tab === 'comparison' ? ' fpl-panel-wide' : ''}`} ref={panel} aria-labelledby="fpl-player-title" onCancel={e => { e.preventDefault(); onClose(); }}><div className="fpl-panel-inner"><div className="fpl-section-heading"><h2 id="fpl-player-title">{p ? `${p.first_name} ${p.second_name}` : 'Player details'}</h2><button autoFocus onClick={onClose} aria-label="Close player details">×</button></div>
     {state.error && <p role="alert">{state.error} <button onClick={state.retry}>Retry</button></p>}{state.loading && <p role="status">Loading player analysis…</p>}
-    {data && p && <><div className="fpl-player-hero"><PlayerPortrait key={p.code} player={p} /><div><p>{teamName(data.teams, p.team)}</p><strong>{money(p.now_cost)}</strong><p className="fpl-xp">{p.ep_next ?? '—'} expected points next GW</p></div></div>{p.news && <p className="fpl-availability">{p.news}</p>}
+    {data && p && <><div className="fpl-player-hero"><PlayerPortrait key={p.code} player={p} /><div><p>{teamName(data.teams, p.team)}</p><strong>{money(p.now_cost)}</strong></div></div>
+      {owners.length > 0 && <section aria-label="Picked by"><h3>Picked by</h3>
+        <ul className="fpl-manager-strip fpl-picked-by">{owners.map(({ profile }) => <li className={profile.id === ownSquad?.profile.id && owners.length > 1 ? "fpl-manager-pill has-rival-separator" : "fpl-manager-pill"} key={profile.id}>
+          <ManagerBadge profile={profile} /><span>{profile.id === ownSquad?.profile.id ? 'You' : [profile.player_first_name, profile.player_last_name].filter(Boolean).join(' ') || profile.name}</span>
+        </li>)}</ul>
+      </section>}
+      {(!picksComplete || owners.length === 0) && <p className="fpl-muted">{picksComplete ? 'None of your rivals have picked this player' : 'Some picks are unavailable for this gameweek'}</p>}
+      <p className="fpl-xp">{p.ep_next ?? '—'} expected points next GW</p>{p.news && <p className="fpl-availability">{p.news}</p>}
       <nav className="fpl-tabs" aria-label="Player analysis">{['overview', 'history', 'stats', 'comparison'].map(name => <button key={name} aria-current={tab === name ? 'page' : undefined} onClick={() => setTab(name)}>{name[0].toUpperCase() + name.slice(1)}</button>)}</nav>
       {tab === 'overview' && <><div className="fpl-player-metrics">{metrics.slice(0, 6).map(([label, fn]) => <Metric key={label} label={label} value={fn(p)} />)}</div><h3>Upcoming fixtures</h3><div className="fpl-table-scroll"><table className="fpl-table"><thead><tr><th>GW</th><th>Opponent</th><th>Difficulty</th></tr></thead><tbody>{data.fixtures.slice(0, 10).map(f => <tr key={f.id}><td>{f.event || 'TBC'}</td><th>{teamName(data.teams, f.is_home ? f.team_a : f.team_h)} ({f.is_home ? 'H' : 'A'})</th><td><span className={`fpl-difficulty difficulty-${f.difficulty}`}>{f.difficulty ?? '—'} / 5</span></td></tr>)}</tbody></table></div>{!data.fixtures.length && <p>No upcoming fixtures published.</p>}</>}
       {tab === 'history' && <><h3>Gameweek history</h3><div className="fpl-table-scroll"><table className="fpl-table"><thead><tr><th>GW</th><th>Opponent</th><th>Pts</th><th>Mins</th><th>Goals</th><th>Assists</th><th>Bonus</th></tr></thead><tbody>{[...data.history].reverse().map(h => <tr key={h.fixture}><td>{h.round}</td><th>{teamName(data.teams, h.opponent_team)} ({h.was_home ? 'H' : 'A'})</th><td><strong>{h.total_points}</strong></td><td>{h.minutes}</td><td>{h.goals_scored}</td><td>{h.assists}</td><td>{h.bonus}</td></tr>)}</tbody></table></div>{!data.history.length && <p>No match history yet.</p>}</>}

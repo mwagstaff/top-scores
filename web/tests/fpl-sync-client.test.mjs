@@ -108,3 +108,33 @@ test('actual client keeps offline and in-flight edits, merges remote changes and
     globalThis.fetch = original; store.close();
   }
 });
+
+test('cookie-only discovery retries on wake and restores matching local preferences without a conflict', async () => {
+  const preferences = { manager: 9, rivals: [2], leagues: [], leagueOrder: [11] };
+  const storage = new Map([['top-scores.web.fpl.v1', JSON.stringify(preferences)]]);
+  const originalFetch = globalThis.fetch, originalListen = window.addEventListener;
+  let wake, state, root, calls = 0;
+  Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: {
+    getItem: k => storage.get(k) || null, setItem: (k, v) => storage.set(k, v), removeItem: k => storage.delete(k),
+  } });
+  window.addEventListener = (name, fn) => { if (name === 'online') wake = fn; };
+  globalThis.fetch = async () => {
+    if (++calls === 1) throw new Error('offline');
+    return Response.json({ preferences, revision: 1 });
+  };
+  function Harness() { state = useFantasyPreferences(); return null; }
+  try {
+    await act(async () => { root = create(React.createElement(Harness)); });
+    assert.equal(state.connectionChecked, false);
+    await act(async () => { wake(); });
+    assert.equal(state.connected, true);
+    assert.equal(state.conflict, null);
+    await act(async () => root.unmount());
+    storage.delete('top-scores.web.fpl.v1');
+    await act(async () => { root = create(React.createElement(Harness)); });
+    assert.deepEqual(JSON.parse(storage.get('top-scores.web.fpl.v1')), preferences);
+  } finally {
+    if (root) await act(async () => root.unmount());
+    globalThis.fetch = originalFetch; window.addEventListener = originalListen;
+  }
+});

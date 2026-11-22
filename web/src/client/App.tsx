@@ -53,6 +53,7 @@ export default function App({ pages = defaultPages }: { pages?: Pages }) {
           <Route path="/matches/:id" element={<MatchPage />} />
           <Route path="/competitions/:name" element={<CompetitionPage />} />
           <Route path="/fpl" element={<FantasyScreen />} />
+          <Route path="/fpl/settings" element={<FantasyScreen />} />
           <Route path="/tables" element={<TablesScreen />} />
           <Route
             path="*"

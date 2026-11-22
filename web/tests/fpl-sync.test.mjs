@@ -243,6 +243,16 @@ test('HTTP QR handoff sets browser-only credentials and serves scoped Universal 
     const finish = await request('browser-pair/status', { requestID: p.requestID }, { Cookie: owner, 'X-FPL-Client': 'ios' });
     assert.match(finish.headers.get('set-cookie'), /__Host-fpl-sync=.*HttpOnly; Secure/);
     const result = await finish.json(); assert.equal(result.token, undefined); assert.equal(result.status, 'connected');
+    const sessionCookie = finish.headers.get('set-cookie').split(';')[0];
+    for (const method of ['GET', 'PUT']) {
+      const state = await fetch(root + '/api/fpl-sync/state', { method,
+        headers: { Cookie: sessionCookie, 'Content-Type': 'application/json' },
+        body: method === 'PUT' ? JSON.stringify({ base: result, preferences: result.preferences }) : undefined });
+      assert.equal(state.status, 200);
+      assert.ok(state.headers.get('set-cookie').startsWith(sessionCookie + ';'));
+      assert.match(state.headers.get('set-cookie'), /Max-Age=15552000/);
+      assert.equal((await state.json()).token, undefined);
+    }
     const association = await (await fetch(root + '/.well-known/apple-app-site-association')).json();
     assert.deepEqual(association.applinks.details[0].appIDs, ['SJ8X4DLAN9.topscores.dev.skynolimit']);
     assert.equal(association.applinks.details[0].components[0]['/'], '/fpl/connect');

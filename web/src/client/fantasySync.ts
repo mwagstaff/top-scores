@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from 'react';
 import { readPreferences, savePreferences, type Preferences } from './fantasyData';
 
 export interface Snapshot { preferences: Preferences; revision: number }
-export interface SyncState extends Snapshot { deviceID?: string; devices?: { id: string; label: string }[] }
 export class SyncError extends Error {
   constructor(message: string, public status: number, public snapshot?: Snapshot) { super(message); }
 }
@@ -19,8 +18,9 @@ const equal = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b
 export function useFantasyPreferences() {
   const [preferences, setPreferences] = useState<Preferences>({ manager: null, rivals: [], leagues: [] });
   const [ready, setReady] = useState(false), [connected, setConnected] = useState(false);
+  const [connectionChecked, setConnectionChecked] = useState(false);
+  const probePending = useRef(true);
   const [status, setStatus] = useState(''), [conflict, setConflict] = useState<Snapshot | null>(null);
-  const [devices, setDevices] = useState<SyncState['devices']>([]);
   const current = useRef(preferences), base = useRef<Snapshot | null>(null), running = useRef(false), blocked = useRef(false);
   const mounted = useRef(false);
   const paused = useRef(false), generation = useRef(0);
@@ -29,6 +29,7 @@ export function useFantasyPreferences() {
     try { value ? localStorage.setItem(baseKey, JSON.stringify(value)) : localStorage.removeItem(baseKey); }
     catch { setStatus('Browser storage is unavailable. Keep this page open to sync your changes.'); }
     setConnected(!!value);
+    probePending.current = false; setConnectionChecked(true);
   };
   const persist = (value: Preferences) => {
     if (equal(current.current, value)) return;
@@ -46,11 +47,10 @@ export function useFantasyPreferences() {
     running.current = true;
     try {
       if (!base.current) {
-        const state = await syncRequest<SyncState>('state');
+        const state = await syncRequest<Snapshot>('state');
         if (!mounted.current || epoch !== generation.current) return;
-        setDevices(state.devices);
-        if (current.current.manager || current.current.rivals.length || current.current.leagues.length) {
-          blocked.current = true; setConflict(state); remember(state);
+        if ((current.current.manager || current.current.rivals.length || current.current.leagues.length) && !equal(current.current, state.preferences)) {
+          blocked.current = true; setConflict(state); setConnected(true); setConnectionChecked(true);
           setStatus('This browser has a connection and different local settings. Choose which to keep.');
         } else accept(state, true);
       } else {
@@ -68,15 +68,21 @@ export function useFantasyPreferences() {
         remember(null);
       } else if (error instanceof SyncError && error.snapshot) {
         blocked.current = true; setConflict(error.snapshot); setStatus(error.message);
-      } else if (base.current) setStatus('Sync unavailable. Your changes are saved here and will retry automatically.');
+      } else setStatus(base.current ? 'Sync unavailable. Your changes are saved here and will retry automatically.' : 'Unable to check the app connection. Retrying automatically…');
     } finally { running.current = false; }
   };
   useEffect(() => {
     mounted.current = true; persist(readPreferences());
-    try { const saved = JSON.parse(localStorage.getItem(baseKey) || 'null'); if (saved?.revision && saved?.preferences) remember(saved); } catch { /* No previous connection. */ }
+    try {
+      const saved = JSON.parse(localStorage.getItem(baseKey) || 'null');
+      if (saved?.revision && saved?.preferences) {
+        if (!localStorage.getItem('top-scores.web.fpl.v1')) persist(saved.preferences);
+        remember(saved);
+      }
+    } catch { /* No previous connection. */ }
     setReady(true); void sync();
-    const timer = window.setInterval(() => { if (base.current) void sync(); }, 15_000);
-    const wake = () => { if (base.current) void sync(); };
+    const wake = () => { if (base.current || probePending.current) void sync(); };
+    const timer = window.setInterval(wake, 15_000);
     const storage = (e: StorageEvent) => {
       if (e.key === 'top-scores.web.fpl.v1') { current.current = readPreferences(); setPreferences(current.current); }
       if (e.key === baseKey) { try { base.current = JSON.parse(e.newValue || 'null'); setConnected(!!base.current); } catch { /* Ignore invalid storage. */ } }
@@ -94,8 +100,7 @@ export function useFantasyPreferences() {
     if (running.current) throw new Error('Please wait for the current sync to finish.');
     await syncRequest('disconnect', {}); remember(null); blocked.current = false; setConflict(null); setStatus('Disconnected. Your settings remain on this browser.');
   };
-  const loadDevices = async () => { const state = await syncRequest<SyncState>('state'); setDevices(state.devices?.filter(d => d.id !== state.deviceID)); };
   const pause = () => { paused.current = true; generation.current++; };
   const resume = () => { paused.current = false; void sync(); };
-  return { preferences, ready, persist, connected, status, conflict, sync, accept, resolve, disconnect, devices, loadDevices, pause, resume };
+  return { preferences, ready, persist, connected, connectionChecked, status, conflict, sync, accept, resolve, disconnect, pause, resume };
 }

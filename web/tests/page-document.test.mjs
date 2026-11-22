@@ -160,3 +160,12 @@ test("shared presentation order applies to cached SSR data and its hydration see
     assert.equal(calls,1);
   } finally { globalThis.fetch = original; }
 });
+
+test("FPL team settings has a bookmarkable public page with its own heading and title", async () => {
+  const render = createPageRenderer("https://example.test/api");
+  const { html, status } = await render(template, "/fpl/settings", "https://football.test");
+  assert.equal(status, 200);
+  assert.match(html, /<h1>FPL team settings<\/h1>/);
+  assert.match(html, /<title>FPL team settings · Top Scores<\/title>/);
+  assert.ok(html.includes('rel="canonical" href="https://football.test/fpl/settings"'));
+});

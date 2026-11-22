@@ -113,7 +113,7 @@ final class FantasyViewModel: ObservableObject {
     @Published private(set) var rivalScoreSnapshots: [Int: FantasyRivalScoreSnapshot] = [:]
     @Published private(set) var staleRivalEntryIDs: Set<Int> = []
     @Published private(set) var loadingRivalEntryIDs: Set<Int> = []
-    private var configuredRivals: [FantasyRivalManager] = []
+    @Published private(set) var configuredRivals: [FantasyRivalManager] = []
     private var rivalScoreStorageKey: String?
     @Published private(set) var rivalScoreGameweekID: Int?
 
@@ -1826,6 +1826,33 @@ final class FantasyViewModel: ObservableObject {
                 baseURLKey: bootstrapBaseURLKey
             )
         }
+    }
+
+    func ownTeamPickedPlayer(elementID: Int, gameweekID: Int, entryID: Int) -> Bool? {
+        if authenticatedEntryID == entryID,
+           let squad = [data, previousTeamData].compactMap({ $0 }).first(where: { $0.gameweekID == gameweekID }) {
+            return squad.allPlayers.contains { $0.elementID == elementID }
+        }
+        let key = "\(entryID)|\(activeFantasySeasonKey)|\(gameweekID)"
+        return historicalMatchRecordsByKey[key]?.picksResponse.picks.contains { $0.element == elementID }
+    }
+
+    func rivalsPickingPlayer(
+        elementID: Int, gameweekID: Int, historicalPicks: [Int: Set<Int>]
+    ) -> (owners: [FantasyRivalManager], incomplete: Bool) {
+        var selections = historicalPicks.mapValues { $0.contains(elementID) }
+        for rival in rivalSquads where rival.squad.gameweekID == gameweekID {
+            selections[rival.entryID] = rival.squad.allPlayers.contains { $0.elementID == elementID }
+        }
+        return (
+            configuredRivals.filter { selections[$0.entryID] == true },
+            configuredRivals.contains { selections[$0.entryID] == nil }
+        )
+    }
+
+    func publishedPlayerPicks(entryID: Int, gameweekID: Int) async throws -> Set<Int> {
+        let picks = try await fantasyPublicClient.fetchPicks(entryID: entryID, eventID: gameweekID)
+        return Set(picks.picks.map(\.element))
     }
 
     private func deduplicatedRivals(

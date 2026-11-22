@@ -204,6 +204,10 @@ export function createPageRenderer(
       title = `${decodeURIComponent(url.pathname.slice(7))} · Team details`;
       description = `${title}: season statistics, fixtures, results, squad and manager.`;
       content = `<h1>${escape(title)}</h1><p>Loading team details…</p>`;
+    } else if (url.pathname === "/fpl/settings") {
+      title = "FPL team settings";
+      description = "Connect your Top Scores app or choose your FPL team.";
+      content = "<h1>FPL team settings</h1>";
     } else if (url.pathname === "/fpl") {
       title = "Fantasy Premier League";
       const entry = url.searchParams.get("entry");

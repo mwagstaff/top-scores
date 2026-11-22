@@ -263,7 +263,7 @@ async function start() {
     const manifest = JSON.parse(await fs.promises.readFile(path.join(productionClientRoot, ".vite/manifest.json"), "utf8"));
     const routeAssets = url => {
       const route = new URL(url, canonicalOrigin).pathname;
-      const component = route.startsWith("/matches/") ? "MatchPage" : route.startsWith("/competitions/") ? "CompetitionPage" : route === "/tables" ? "TablesScreen" : route === "/fpl" ? "FantasyScreen" : null;
+      const component = route.startsWith("/matches/") ? "MatchPage" : route.startsWith("/competitions/") ? "CompetitionPage" : route === "/tables" ? "TablesScreen" : (route === "/fpl" || route === "/fpl/settings") ? "FantasyScreen" : null;
       const visited = new Set(), css = new Set(), scripts = new Set();
       const visit = key => {
         if (visited.has(key) || !manifest[key]) return;

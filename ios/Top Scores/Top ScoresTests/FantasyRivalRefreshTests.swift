@@ -70,6 +70,26 @@ struct FantasyRivalRefreshTests {
         #expect(Set(restored.rivalScoreSnapshots.keys) == [2])
     }
 
+    @Test func playerOwnershipUsesPublishedPicksForTheSelectedWeek() async throws {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [RivalScoreURLProtocol.self]
+        let session = URLSession(configuration: configuration)
+        defer { session.invalidateAndCancel() }
+        let model = FantasyViewModel(fantasyPublicClient: FantasyPublicAPIClient(session: session))
+        model.prepareRivalScores(accountID: 100, gameweekID: 7, rivals: rivals([1, 2]))
+        RivalScoreURLProtocol.failingIDs = []
+        await refresh(model, ids: [1, 2])
+
+        let benchOwner = model.rivalsPickingPlayer(elementID: 1, gameweekID: 7, historicalPicks: [:])
+        #expect(benchOwner.owners.map(\.entryID) == [1])
+        #expect(!benchOwner.incomplete)
+        let empty = model.rivalsPickingPlayer(elementID: 99, gameweekID: 7, historicalPicks: [:])
+        #expect(empty.owners.isEmpty && !empty.incomplete)
+        let historical = model.rivalsPickingPlayer(elementID: 1, gameweekID: 6, historicalPicks: [2: [1], 100: [1]])
+        #expect(historical.owners.map(\.entryID) == [2])
+        #expect(historical.incomplete)
+    }
+
     @Test func publishesCompletedRivalsBeforeBatchFinishesAndIgnoresCancelledResults() async throws {
         let suite = "FantasyRivalRefreshTests.\(UUID())"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -149,7 +169,7 @@ private nonisolated final class RivalScoreURLProtocol: URLProtocol, @unchecked S
         let entryID = Int(url.pathComponents[3])!
         let status = Self.failingIDs.contains(entryID) ? 503 : 200
         let response = HTTPURLResponse(url: url, statusCode: status, httpVersion: nil, headerFields: nil)!
-        let data = Data(#"{"picks":[],"entry_history":{"event":7,"points":0,"total_points":100},"active_chip":null}"#.utf8)
+        let data = Data(#"{"picks":[{"element":\#(entryID),"position":12,"multiplier":0,"is_captain":false,"is_vice_captain":false}],"entry_history":{"event":7,"points":0,"total_points":100},"active_chip":null}"#.utf8)
         client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
         client?.urlProtocol(self, didLoad: data)
         client?.urlProtocolDidFinishLoading(self)

@@ -1,11 +1,11 @@
 # Login-free FPL preferences sync
 
-The website's **FPL → Connect to app** generates a ten-minute QR code. Scan
+First-time setup and **FPL team settings** (`/fpl/settings`) show a ten-minute QR code when the browser is disconnected. A connected browser offers **Unsync this browser**, which keeps its local preferences. Scan
 it using the phone camera, open Top Scores, check the matching six-digit code
 and tap **Connect this browser**. The website detects approval and imports the
 app setup automatically, with no further browser confirmation. The app is the
 source for the team ID. The website offers replace or merge (rivals/leagues)
-before scanning, plus **Import once only** if ongoing sync is unwanted.
+before scanning.
 
 A phone confirmation is intentional: opening an unsolicited link must not
 silently grant another browser ongoing access. This connects viewing preferences,
@@ -65,7 +65,8 @@ verified on a signed device after the app update; simulator URL tests are separa
 - Maximum 20 devices per connection, 100 rivals and 100 tracked leagues. Imports
   over the limit fail visibly rather than truncating data.
 - Connections expire after 180 days of device inactivity; browser cookies last
-  180 days. Clearing browser data requires pairing again. Orphaned spaces and
+  180 days and renew on successful website sync. Each website address has its own
+  connection. Clearing browser cookies requires pairing again. Orphaned spaces and
   expired links/credentials are cleaned up hourly and on startup.
 
 ## Sync and conflicts

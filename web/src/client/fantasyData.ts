@@ -37,8 +37,9 @@ export function readPreferences(): Preferences {
     const valid = (id: unknown): id is number => typeof id === 'number' && Number.isSafeInteger(id) && id > 0 && id < 1e9;
     return { manager: valid(value.manager) ? value.manager : null,
       rivals: Array.isArray(value.rivals) ? [...new Set<number>(value.rivals.filter(valid))].slice(0, 100) : [],
+      leagues: Array.isArray(value.leagues) ? value.leagues.filter((l: { id: number; name: string }) => l && valid(l.id) && typeof l.name === 'string').slice(0, 100) : [],
       ...(Array.isArray(value.leagueOrder) ? { leagueOrder: [...new Set<number>(value.leagueOrder.filter(valid))].slice(0, 100) } : {}),
-      leagues: Array.isArray(value.leagues) ? value.leagues.filter((l: { id: number; name: string }) => l && valid(l.id) && typeof l.name === 'string').slice(0, 100) : [] };
+    };
   } catch { return { manager: null, rivals: [], leagues: [] }; }
 }
 export function savePreferences(value: Preferences): boolean {

@@ -280,8 +280,15 @@ export function registerFantasySync(app, { store = createSyncStore(process.env.F
   }));
   router.post('/browser-pair/cancel', route((req, res) => { store.cancelBrowserPair(readCookie(req, pendingCookie), req.body.requestID); res.json({ ok: true }); }));
   router.post('/session', route((req, res) => send(req, res, store.create(req.body.preferences, native(req) ? 'ios' : 'web'))));
-  router.get('/state', route((req, res) => res.json(store.read(token(req)))));
-  router.put('/state', route((req, res) => res.json(store.update(token(req), req.body))));
+  const sendState = (req, res, state) => {
+    const cookie = readCookie(req, cookieName);
+    if (cookie && !req.get('Authorization')) {
+      res.cookie(cookieName, cookie, { httpOnly: true, secure, sameSite: 'strict', path: '/', maxAge: lifetime });
+    }
+    res.json(state);
+  };
+  router.get('/state', route((req, res) => sendState(req, res, store.read(token(req)))));
+  router.put('/state', route((req, res) => sendState(req, res, store.update(token(req), req.body))));
   router.post('/pair', route((req, res) => res.json(store.issue(token(req)))));
   router.post('/preview', route((req, res) => res.json(store.preview(req.body.secret))));
   router.post('/redeem', route((req, res) => {

@@ -33,6 +33,8 @@ struct FantasyPlayerDetailsSheet: View {
     @ObservedObject var fantasyViewModel: FantasyViewModel
     @Environment(\.dismiss) private var dismiss
 
+    @AppStorage("fantasy.managerEntryID") private var managerEntryID = ""
+    @State private var historicalPicks: [Int: Set<Int>] = [:]
     @State private var isLoading = true
     @State private var details: FantasyPlayerDetailsData?
     @State private var errorMessage: String?
@@ -73,6 +75,7 @@ struct FantasyPlayerDetailsSheet: View {
                             if details.hasStatusUpdateContent {
                                 availabilitySection(details)
                             }
+                            rivalPicksSection
                             expectedPointsSummary(details)
                             fixturesSection(details)
                             detailsTabBar
@@ -99,6 +102,65 @@ struct FantasyPlayerDetailsSheet: View {
         .task(id: selection.id) {
             selectedTab = .overview
             await loadDetails()
+        }
+    }
+
+    private var rivalPicksSection: some View {
+        let gameweek = selection.gameweekID
+        let historicalRivalIDs = gameweek < (fantasyViewModel.rivalScoreGameweekID ?? 0)
+            ? fantasyViewModel.configuredRivals.map(\.entryID) : []
+        let (owners, incomplete) = fantasyViewModel.rivalsPickingPlayer(
+            elementID: selection.player.elementID, gameweekID: gameweek, historicalPicks: historicalPicks
+        )
+        let ownID = Int(managerEntryID.trimmingCharacters(in: .whitespacesAndNewlines))
+        let ownPick = ownID.flatMap { entryID in
+            fantasyViewModel.ownTeamPickedPlayer(elementID: selection.player.elementID, gameweekID: gameweek, entryID: entryID)
+                ?? historicalPicks[entryID]?.contains(selection.player.elementID)
+        }
+        let missingOwnID = ownPick == nil ? ownID : nil
+        let lookupIDs = [missingOwnID].compactMap { $0 } + historicalRivalIDs
+        return VStack(alignment: .leading, spacing: 8) {
+            if ownPick == true || !owners.isEmpty {
+                Text("Picked by").font(.headline)
+                ScrollView(.horizontal) {
+                    HStack(alignment: .top, spacing: 14) {
+                        if let ownID, ownPick == true {
+                            VStack(spacing: 5) {
+                                FantasyManagerBadge(entryID: ownID, source: fantasyViewModel.myProfile?.clubBadgeSrc, size: 48)
+                                Text("You").font(.caption.weight(.semibold))
+                            }
+                            .accessibilityElement(children: .combine)
+                            if !owners.isEmpty {
+                                Divider().accessibilityHidden(true)
+                            }
+                        }
+                        ForEach(owners) { rival in
+                            VStack(spacing: 5) {
+                                FantasyManagerBadge(entryID: rival.entryID,
+                                    source: fantasyViewModel.rivalSquads.first { $0.entryID == rival.entryID }?.clubBadgeSrc ?? rival.clubBadgeSrc,
+                                    size: 48)
+                                Text(rival.managerDisplayName)
+                                    .font(.caption.weight(.semibold))
+                            }
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("\(rival.managerDisplayName), \(rival.teamName)")
+                        }
+                    }
+                }
+                .scrollIndicators(.hidden)
+            }
+            if incomplete || missingOwnID != nil || (owners.isEmpty && ownPick != true) {
+                Text(incomplete || missingOwnID != nil ? "Some picks are unavailable for this gameweek" : "None of your rivals have picked this player")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .task(id: lookupIDs) {
+            for entryID in lookupIDs where historicalPicks[entryID] == nil {
+                let picks = try? await fantasyViewModel.publishedPlayerPicks(entryID: entryID, gameweekID: gameweek)
+                guard !Task.isCancelled else { return }
+                historicalPicks[entryID] = picks
+            }
         }
     }
 

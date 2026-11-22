@@ -13,7 +13,7 @@ import { ScrollPosition } from "./ScrollPosition";
 
 export function AppShell({ children }: PropsWithChildren) {
   const location = useLocation();
-  const isFantasy = location.pathname === "/fpl";
+  const isFantasy = location.pathname === "/fpl" || location.pathname === "/fpl/settings";
   const [competitions, setCompetitions] = useState<Competition[]>([]);
   const [catalogError, setCatalogError] = useState(false);
   useEffect(() => { if (isFantasy) return; let active = true; loadCompetitions().then(items => { if (active) setCompetitions(items); }).catch(() => { if (active) setCatalogError(true); }); return () => { active = false; }; }, [isFantasy]);
