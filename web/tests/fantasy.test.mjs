@@ -52,3 +52,23 @@ test('squad exposes badges, league types and the next deadline',async()=>{
  assert.equal(result.profile.leagues.classic[0].league_type,'x');
  assert.equal(result.nextDeadline,'2099-01-01T11:00:00Z');
 });
+
+test('live squad exposes the prior season total and separates double-gameweek points by fixture', async () => {
+  const d = fixture();
+  d.bootstrap.events.push({ id: 2, deadline_time: '2020-01-08' });
+  d.live.elements[4].explain = [
+    { fixture: 71, stats: [{ points: 2 }, { points: 5 }] },
+    { fixture: 83, stats: [{ identifier: 'red_cards', value: 1, points: -3 }] },
+  ];
+  const service = createFantasyService(async url => {
+    const body = url.includes('bootstrap-static') ? d.bootstrap
+      : url.includes('event/1/picks') ? { entry_history: { total_points: 120 } }
+      : url.includes('/picks/') ? d.picks : url.includes('/live/') ? d.live
+      : url.includes('fixtures/') ? d.fixtures : { id: 1, started_event: 1 };
+    return new Response(JSON.stringify(body));
+  });
+  const squad = await service.squad(1, 2);
+  assert.equal(squad.previousTotal, 120);
+  assert.deepEqual(squad.players[4].fixturePoints, { 71: 7, 83: -3 });
+  assert.deepEqual(squad.players[4].redCardFixtures, [83]);
+});

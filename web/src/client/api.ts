@@ -1,3 +1,4 @@
+import { normalizeNextGoal } from "./nextGoal";
 import { normalizeMomentum } from "./momentum";
 import { normalizeMatchStats } from "./matchStats";
 import { normalizeMatchContext } from "./matchContext";
@@ -481,6 +482,7 @@ function normalizeTeamRanking(raw: unknown): TeamRankingEntry {
 export function normalizeMatchDetails(raw: Record<string, unknown>): MatchDetails {
   return {
     matchContext: normalizeMatchContext(raw.match_context),
+    nextGoal: normalizeNextGoal(raw.next_goal),
     momentum: normalizeMomentum(raw.momentum),
     matchStats: normalizeMatchStats(raw.match_stats),
     id: asString(raw.id),
@@ -771,7 +773,7 @@ function normalizeTeamLineup(value: unknown): MatchTeamLineup | null {
   const substitutes = normalizeLineupPlayers(source.substitutes);
   const substitutions = normalizeLineupSubstitutions(source.substitutions);
 
-  if (!team && !manager && !formation && startingLineup.length === 0 && substitutes.length === 0) {
+  if (!team && !manager && !formation && startingLineup.length === 0 && substitutes.length === 0 && substitutions.length === 0) {
     return null;
   }
 
@@ -851,7 +853,7 @@ function normalizeLineupPlayer(value: unknown): MatchLineupPlayer | null {
 }
 
 function shouldCacheMatchDetails(details: MatchDetails): boolean {
-  return !details.matchContext?.refresh_after_seconds && !details.momentum?.refresh_after_seconds && !details.matchStats?.refresh_after_seconds && !isIncompleteFinishedMatchDetails(details);
+  return !details.nextGoal?.refresh_after_seconds && !details.matchContext?.refresh_after_seconds && !details.momentum?.refresh_after_seconds && !details.matchStats?.refresh_after_seconds && !isIncompleteFinishedMatchDetails(details);
 }
 
 export function shouldRetryMatchDetails(details: MatchDetails): boolean {

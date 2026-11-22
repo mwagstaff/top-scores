@@ -722,6 +722,7 @@ nonisolated struct MatchVenueDetails: Codable, Hashable, Sendable {
 }
 
 nonisolated struct MatchDetailsPayload: Codable, Hashable, Sendable {
+    let nextGoal: NextGoal?
     let momentum: MatchMomentum?
     let matchStats: MatchStats?
     let matchContext: MatchContext?
@@ -764,6 +765,7 @@ nonisolated struct MatchDetailsPayload: Codable, Hashable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case id
+        case nextGoal = "next_goal"
         case momentum
         case matchStats = "match_stats"
         case matchContext = "match_context"
@@ -806,6 +808,7 @@ nonisolated struct MatchDetailsPayload: Codable, Hashable, Sendable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        nextGoal = try? container.decodeIfPresent(NextGoal.self, forKey: .nextGoal)
         momentum = try? container.decodeIfPresent(MatchMomentum.self, forKey: .momentum)
         matchStats = try? container.decodeIfPresent(MatchStats.self, forKey: .matchStats)
         matchContext = try? container.decodeIfPresent(MatchContext.self, forKey: .matchContext)

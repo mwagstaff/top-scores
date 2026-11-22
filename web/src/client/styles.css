@@ -2788,6 +2788,16 @@ button.match-row:hover {
 
 /* Shared momentum / match stats panel. */
 .match-analysis-card { margin: 12px 0 20px; padding: 16px 20px; border: 1px solid #91a3b830; border-radius: 10px; background: #0a131de6; }
+.next-goal .momentum-heading { flex-wrap: wrap; }
+.next-goal .momentum-heading > span { border: 1px solid #91a3b850; border-radius: 999px; padding: 3px 8px; color: #c7d2df; }
+.next-goal-bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; margin: 12px 0 8px; }
+.next-goal-bar[data-updating="true"] { opacity: 0.5; }
+.next-goal-labels { display: flex; gap: 8px; font-size: 14px; font-variant-numeric: tabular-nums; }
+.next-goal-labels > div { display: flex; flex-direction: column; justify-content: space-between; gap: 2px; flex: 1; min-width: 0; overflow-wrap: anywhere; text-align: center; }
+.next-goal-labels > :first-child { text-align: left; }
+.next-goal-labels > :last-child { text-align: right; }
+.next-goal p:last-child { margin-bottom: 0; }
+@media (prefers-reduced-motion: no-preference) { .next-goal-bar i { transition: width .25s ease; } }
 .match-analysis-card > h3 { margin: 0 0 12px; font-size: 16px; }
 .match-analysis-card .match-feed-picker { margin: 0 0 12px; }
 .match-analysis-card .momentum-embedded { margin: 0; padding: 0; border: 0; background: none; }

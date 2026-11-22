@@ -18,6 +18,7 @@ struct MatchDetailView: View {
     @State private var saveCalendarAsDefault = false
     @State private var refreshedMatch: Match?
     @State private var detailedMatch: Match?
+    @State private var nextGoal: NextGoal?
     @State private var momentum: MatchMomentum?
     @State private var matchStats: MatchStats?
     @State private var analysisRefreshFailed = false
@@ -277,6 +278,11 @@ struct MatchDetailView: View {
                         }
 
                         if activeMatch.isInProgress || activeMatch.isFinished {
+                            if let nextGoal {
+                                NextGoalCard(goal: nextGoal, homeTeam: activeMatch.homeTeam, awayTeam: activeMatch.awayTeam,
+                                             homeScore: activeMatch.homeScore, awayScore: activeMatch.awayScore)
+                                    .padding(.horizontal)
+                            }
                             MatchAnalysisCard(momentum: momentum, stats: matchStats, homeTeam: activeMatch.homeTeam,
                                               awayTeam: activeMatch.awayTeam, isLive: activeMatch.isInProgress, refreshFailed: analysisRefreshFailed)
                                 .id(activeMatch.matchDetailsID)
@@ -569,6 +575,7 @@ struct MatchDetailView: View {
 
         refreshedMatch = nil
         detailedMatch = nil
+        nextGoal = nil
         momentum = nil
         matchStats = nil
         analysisRefreshFailed = false
@@ -608,6 +615,7 @@ struct MatchDetailView: View {
                 guard !Task.isCancelled else { return }
                 if let cached {
                     detailedMatch = baseMatch.withDetails(cached)
+                    nextGoal = cached.nextGoal
                     momentum = cached.momentum
                     matchStats = cached.matchStats
                     matchContext = cached.matchContext
@@ -724,6 +732,7 @@ struct MatchDetailView: View {
                 if let refreshed = fallbackMatch {
                     refreshedMatch = refreshed
                 }
+                nextGoal = details.nextGoal
                 momentum = details.momentum
                 matchStats = details.matchStats
                 analysisRefreshFailed = false
@@ -741,7 +750,7 @@ struct MatchDetailView: View {
                 }
                 pendingEventsQuickRetry = updated.isFinished && !hasEvents
                 // Keep refreshing while momentum is pending or the match is settling.
-                if updated.isFinished && hasEvents && hasLineups && details.momentum?.refreshAfterSeconds == nil && details.matchStats?.refreshAfterSeconds == nil && details.matchContext?.refreshAfterSeconds == nil {
+                if updated.isFinished && hasEvents && hasLineups && details.nextGoal?.refreshAfterSeconds == nil && details.momentum?.refreshAfterSeconds == nil && details.matchStats?.refreshAfterSeconds == nil && details.matchContext?.refreshAfterSeconds == nil {
                     detailsRefreshTask?.cancel()
                     detailsRefreshTask = nil
                 }
@@ -813,7 +822,7 @@ struct MatchDetailView: View {
         if pendingEventsQuickRetry {
             return Self.pendingEventsBackfillRefreshIntervalNanos
         }
-        if match.isFinished, let seconds = [momentum?.refreshAfterSeconds, matchStats?.refreshAfterSeconds].compactMap({ $0 }).min() {
+        if match.isFinished, let seconds = [nextGoal?.refreshAfterSeconds, momentum?.refreshAfterSeconds, matchStats?.refreshAfterSeconds].compactMap({ $0 }).min() {
             return UInt64(max(30, min(seconds, 3600))) * 1_000_000_000
         }
         return Self.idleDetailsRefreshIntervalNanos

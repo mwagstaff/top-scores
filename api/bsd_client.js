@@ -534,6 +534,15 @@ function getVenue(id, options = {}) {
 
 // Events (matches) for a league filtered by status (notstarted | finished | ...).
 // Paginated. Returns the flat results array.
+function getNextGoal(options = {}) {
+  return _requestAllPages("/next-goal/", { source: "bsd_next_goal", ...options, strict: true });
+}
+
+function getNextGoalCalls({ eventId, dateFrom }, options = {}) {
+  return _requestAllPages("/next-goal/calls/", { source: "bsd_next_goal_calls", ...options, strict: true,
+    query: { event_id: eventId, date_from: dateFrom } });
+}
+
 function getEvents({ leagueId, status } = {}, options = {}) {
   return _requestAllPages("/events", {
     source: "bsd_events",
@@ -697,6 +706,8 @@ module.exports = {
   getTeams,
   getTeamSquad,
   getVenue,
+  getNextGoal,
+  getNextGoalCalls,
   getEvents,
   getBroadcasts,
   getLiveEvents,

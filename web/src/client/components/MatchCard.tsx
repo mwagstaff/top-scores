@@ -1,3 +1,5 @@
+import { NextGoalCard } from "./NextGoalCard";
+import { buildPlayerNameLookup, matchPlayerNameLookup, type MatchPlayerNameLookup } from '../matchPlayerNames';
 import { MatchAnalysisCard } from "./MatchAnalysisCard";
 import { FunFacts, HeadToHead, LineupStatusBadge, MatchPreview } from "./MatchContextSections";
 import { isContextPrematch } from "../matchContext";
@@ -135,7 +137,7 @@ export function MatchCard({
   // Standalone match pages already poll. Expanded cards need their own bounded
   // refresh while momentum is pending/live, including late post-match coverage.
   useEffect(() => {
-    const intervals = [details?.momentum?.refresh_after_seconds, details?.matchStats?.refresh_after_seconds, details?.matchContext?.refresh_after_seconds]
+    const intervals = [details?.nextGoal?.refresh_after_seconds, details?.momentum?.refresh_after_seconds, details?.matchStats?.refresh_after_seconds, details?.matchContext?.refresh_after_seconds]
       .filter((value): value is number => typeof value === "number" && value > 0);
     const seconds = intervals.length ? Math.min(...intervals) : null;
     if (detailOnly || !isExpanded || !match.matchDetailsId || !seconds) return;
@@ -152,7 +154,7 @@ export function MatchCard({
       finally { inFlight = false; }
     }, Math.max(15, seconds) * 1000);
     return () => { cancelled = true; window.clearInterval(timer); };
-  }, [detailOnly, isExpanded, match.matchDetailsId, details?.momentum?.refresh_after_seconds, details?.matchStats?.refresh_after_seconds, details?.matchContext?.refresh_after_seconds]);
+  }, [detailOnly, isExpanded, match.matchDetailsId, details?.nextGoal?.refresh_after_seconds, details?.momentum?.refresh_after_seconds, details?.matchStats?.refresh_after_seconds, details?.matchContext?.refresh_after_seconds]);
 
   // Fetch details on expand
   useEffect(() => {
@@ -345,6 +347,8 @@ export function MatchCard({
           {!detailOnly && <MatchTeamLeaguePositionsLink match={match} />}
           {!detailOnly && !isFinished && !isAbandoned && <WhereToWatch channels={match.tvChannels} />}
           <MatchPreview context={details?.matchContext} prematch={prematch} />
+          {details?.nextGoal && <NextGoalCard goal={details.nextGoal} homeTeam={match.homeTeam} awayTeam={match.awayTeam}
+            homeScore={match.homeScore} awayScore={match.awayScore} />}
           {showMatchUpdates && <MatchAnalysisCard key={`analysis-${match.id}`} momentum={details?.momentum} stats={details?.matchStats} homeTeam={match.homeTeam} awayTeam={match.awayTeam} isLive={isLive} refreshFailed={!!detailsError} />}
           {showMatchUpdates && (
             <div className="match-feed-picker" role="group" aria-label="Match updates">
@@ -1813,32 +1817,6 @@ function condensedLineupPlayerName(value: string) {
 
   const condensed = surnameParts.join(" ");
   return hasCaptain ? `${condensed} (c)` : condensed;
-}
-
-
-// ── Player name fuzzy matching ────────────────────────────────────
-
-interface MatchPlayerNameLookup { full: string; initialAndLast: string; last: string; }
-
-function buildPlayerNameLookup(name: string): MatchPlayerNameLookup {
-  const cleaned    = name.replace(/\(c\)/gi, "");
-  const normalized = cleaned.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-  const tokens     = normalized.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
-  const first      = tokens[0] ?? "";
-  const last       = tokens.at(-1) ?? "";
-  return {
-    full:           tokens.join(" "),
-    initialAndLast: first && last ? `${first[0]} ${last}` : tokens.join(" "),
-    last,
-  };
-}
-
-function matchPlayerNameLookup(left: MatchPlayerNameLookup, right: MatchPlayerNameLookup) {
-  if (!left.full || !right.full)                                         return 0;
-  if (left.full === right.full)                                          return 3;
-  if (left.initialAndLast && left.initialAndLast === right.initialAndLast) return 2;
-  if (left.last && left.last === right.last)                             return 1;
-  return 0;
 }
 
 

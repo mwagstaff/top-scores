@@ -1,12 +1,19 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { managerInitials, sortSquads, visibleLeagues, fetchFantasy, money, parseFplID, playerImageCandidates, teamName, type LeagueData, type Player, type PlayerData, type Preferences, type Profile, type Squad, type SquadPlayer } from '../fantasyData';
+import { Link, useSearchParams } from 'react-router-dom';
+import { managerInitials, seasonTotal, sortSquads, visibleLeagues, fetchFantasy, money, parseFplID, playerImageCandidates, teamName, type LeagueData, type Player, type PlayerData, type Preferences, type Profile, type Squad, type SquadPlayer } from '../fantasyData';
 import '../fantasy.css';
+import { displayTime, localDate, matchPath } from '../football';
+import { displayStatus, isMatchFinished, isMatchLive } from '../matchState';
+import { fetchTableMatches } from '../tableScores';
+import { teamIdentityKeys, useTeamColorCatalog } from '../teamColors';
+import { normalizeMatchDetails } from '../api';
+import { buildPlayerNameLookup, matchPlayerNameLookup } from '../matchPlayerNames';
+import type { Match, MatchDetails } from '../types';
 import { useInitialSeed } from '../bootstrap';
 import { useFantasyPreferences } from '../fantasySync';
 import FantasyConnection from './FantasyConnection';
 
-function useResource<T>(path: string | null, interval = 0, initial?: { path: string; data: T }) {
+function useResource<T>(path: string | null, interval = 0, initial?: { path: string; data: T }, fetchData: (path: string, signal: AbortSignal) => Promise<T> = fetchFantasy) {
   const [state, setState] = useState<{ path: string | null; data?: T; error?: string; loading: boolean }>({ path: initial?.path || null, data: initial?.data, loading: false });
   const [revision, setRevision] = useState(0);
   useEffect(() => {
@@ -18,7 +25,7 @@ function useResource<T>(path: string | null, interval = 0, initial?: { path: str
       running = true;
       setState(old => ({ path, data: old.path === path ? old.data : undefined, loading: true }));
       try {
-        const data = await fetchFantasy<T>(path, controller.signal);
+        const data = await fetchData(path, controller.signal);
         if (!stopped) setState({ path, data, loading: false });
       } catch (error) {
         if (!stopped) setState(old => ({ ...old, path, loading: false, error: error instanceof Error ? error.message : 'Unable to load FPL data.' }));
@@ -28,7 +35,7 @@ function useResource<T>(path: string | null, interval = 0, initial?: { path: str
     const timer = interval ? window.setInterval(load, interval) : undefined;
     document.addEventListener('visibilitychange', load);
     return () => { stopped = true; controller.abort(); clearInterval(timer); document.removeEventListener('visibilitychange', load); };
-  }, [path, interval, revision]);
+  }, [path, interval, revision, fetchData]);
   return { data: state.path === path ? state.data : undefined, error: state.path === path ? state.error : undefined, loading: state.path !== path || state.loading, retry: () => setRevision(value => value + 1) };
 }
 
@@ -68,9 +75,19 @@ export default function FantasyScreen() {
   const addRivalForm = useRef<HTMLDivElement>(null);
   useEffect(() => { if (addingRival) { addRivalForm.current?.scrollIntoView({ block: 'nearest' }); addRivalForm.current?.querySelector('input')?.focus(); } }, [addingRival]);
   const rivalIDs = [...new Set([preferences.manager || entry, ...preferences.rivals].filter((id): id is number => !!id))];
-  const rivals = useRivalSquads(rivalIDs, data?.event.id);
+  const rivals = useRivalSquads(rivalIDs.filter(id => id !== entry), data?.event.id);
   const pool = rivalIDs.flatMap(id => { const value = data?.profile.id === id ? data : rivals[id]; return value ? [value] : []; });
-  const ownProfile = pool.find(s => s.profile.id === preferences.manager)?.profile;
+  const completeRanks = pool.length === rivalIDs.length && pool.every(team => team.previousTotal != null);
+  const ownSquad = pool.find(s => s.profile.id === (preferences.manager || entry));
+  const ownProfile = ownSquad?.profile;
+  const historical = data && data.event.id !== data.events.at(-1)?.id;
+  const currentOwn = useResource<Squad>(historical && section === 'team' && (preferences.manager || entry)
+    ? `/api/fpl/entry/${preferences.manager || entry}` : null, 30_000);
+  useTeamColorCatalog();
+  const date = localDate();
+  const games = useResource<Match[]>(data && section === 'team' && !setup ? date : null, 30_000, undefined, fetchGames);
+  const details = usePitchMatchDetails(games.data, data, view === 'pitch');
+  const exits = playerExits(data, games.data, details);
   const leagues = visibleLeagues(ownProfile, preferences.leagues, preferences.leagueOrder);
   const deadline = data?.nextDeadline ? new Date(data.nextDeadline) : null;
   const deadlineClose = !!deadline && deadline.getTime() - Date.now() < 24 * 60 * 60 * 1000 && deadline.getTime() > Date.now();
@@ -113,10 +130,13 @@ export default function FantasyScreen() {
           {addingRival && <div ref={addRivalForm}><IDForm label="Rival manager ID or team link" button="Add rival" onSubmit={async id => { await addRival(id); setAddingRival(false); }} /></div>}
           <div className="fpl-dashboard"><section aria-label="Squad"><div className="fpl-pitch-controls"><div className="fpl-view-switch"><button aria-pressed={view === 'pitch'} onClick={() => setView('pitch')}>Pitch</button><button aria-pressed={view === 'table'} onClick={() => setView('table')}>Table</button></div>
             <div className="fpl-metric-select"><label>Player detail <select value={metric} onChange={e => setMetric(e.target.value)}>{[['opponent', 'Opposition'], ['now_cost', 'Price'], ['difficulty', 'Difficulty'], ['selected_by_percent', 'Ownership %'], ['ownership_count', 'Ownership count'], ['form', 'Form'], ['points_per_game', 'Points / match'], ['total_points', 'Total points'], ['minutes', 'Minutes / start'], ['ep_next', 'Next GW expected points']].map(([key, name]) => <option key={key} value={key}>{name}</option>)}</select></label></div></div>
-            {view === 'pitch' ? <><div className="fpl-pitch" ref={pitch}><PitchMarkings /><div className="fpl-pitch-stat fpl-points-stat"><span>{data.finalized ? 'Final points' : 'Live points'}</span><strong>{data.points}</strong><small>GW average: {data.event.average_entry_score}</small></div><div className="fpl-pitch-stat fpl-value-stat"><span>Team value</span><strong>{money(data.history.value)}</strong></div>{[1, 2, 3, 4].map(position => <div className="fpl-position" key={position}>{data.players.filter(p => p.pickPosition <= 11 && p.element_type === position).map(p => <PlayerCard key={p.id} player={p} data={data} metric={metric} onClick={() => openPlayer(p.id)} />)}</div>)}</div><div className="fpl-bench"><h3>Bench <span>In substitution order</span></h3><div className="fpl-position">{data.players.filter(p => p.pickPosition > 11).map(p => <PlayerCard key={p.id} player={p} data={data} metric={metric} onClick={() => openPlayer(p.id)} />)}</div></div></> : <div className="fpl-table-scroll"><table className="fpl-table"><thead><tr><th>Player</th><th>Role</th><th>Points</th><th>Price</th><th>Form</th><th>Owned</th></tr></thead><tbody>{data.players.map(p => <tr key={p.id}><th><button onClick={() => openPlayer(p.id)}>{p.web_name}</button></th><td>{p.isCaptain ? 'Captain' : p.isViceCaptain ? 'Vice captain' : p.pickPosition > 11 ? 'Bench' : 'Starter'}</td><td>{p.rawPoints} × {p.multiplier}</td><td>{money(p.now_cost)}</td><td>{p.form}</td><td>{p.selected_by_percent}%</td></tr>)}</tbody></table></div>}
+            {view === 'pitch' ? <><div className="fpl-pitch" ref={pitch}><PitchMarkings /><div className="fpl-pitch-stat fpl-points-stat"><span>{data.finalized ? 'Final points' : 'Live points'}</span><strong>{data.points}</strong><small>GW average: {data.event.average_entry_score}</small></div><div className="fpl-pitch-stat fpl-value-stat"><span>Team value</span><strong>{money(data.history.value)}</strong></div>{[1, 2, 3, 4].map(position => <div className="fpl-position" key={position}>{data.players.filter(p => p.pickPosition <= 11 && p.element_type === position).map(p => <PlayerCard key={p.id} exit={exits.get(p.id)} player={p} data={data} metric={metric} onClick={() => openPlayer(p.id)} />)}</div>)}</div><div className="fpl-bench"><h3>Bench <span>In substitution order</span></h3><div className="fpl-position">{data.players.filter(p => p.pickPosition > 11).map(p => <PlayerCard key={p.id} exit={exits.get(p.id)} player={p} data={data} metric={metric} onClick={() => openPlayer(p.id)} />)}</div></div></> : <div className="fpl-table-scroll"><table className="fpl-table"><thead><tr><th>Player</th><th>Role</th><th>Points</th><th>Price</th><th>Form</th><th>Owned</th></tr></thead><tbody>{data.players.map(p => <tr key={p.id}><th><button onClick={() => openPlayer(p.id)}>{p.web_name}</button></th><td>{p.isCaptain ? 'Captain' : p.isViceCaptain ? 'Vice captain' : p.pickPosition > 11 ? 'Bench' : 'Starter'}</td><td>{p.rawPoints} × {p.multiplier}</td><td>{money(p.now_cost)}</td><td>{p.form}</td><td>{p.selected_by_percent}%</td></tr>)}</tbody></table></div>}
             <details className="fpl-breakdown" open={data.notes.length > 0}><summary>How your score is calculated · {data.points} pts</summary><p>{data.grossPoints} squad points − {data.transferCost} transfer cost = <strong>{data.points} net points</strong>.</p>{data.notes.map(note => <p key={note}>{note}</p>)}<p className="fpl-muted">{data.finalized ? 'Official FPL multipliers and substitutions are applied.' : 'Points may change. Substitutions are projected after all of a player’s fixtures finish; official confirmation follows.'}</p></details>
-          </section><aside className="fpl-rivals"><div className="fpl-section-heading"><h2>Rivals</h2><span>GW {data.event.id}</span></div><div className="fpl-rivals-labels"><span>Team</span><span>GW</span><span>Total</span></div>
-            {sortSquads(pool, true).map(team => <Rival key={team.profile.id} data={team} selected={team.profile.id === entry} own={team.profile.id === preferences.manager} onSelect={() => selectManager(team.profile.id)} onRemove={() => persist({ ...preferences, rivals: preferences.rivals.filter(value => value !== team.profile.id) })} />)}
+          </section><aside className="fpl-rivals"><TodaysGames date={date} games={games} squad={historical ? currentOwn.data : ownSquad} /><div className="fpl-section-heading"><h2>Rivals</h2><span>GW {data.event.id}</span></div><div className="fpl-rivals-labels"><span>Team</span><span>GW</span><span>Total</span></div>
+            {sortSquads(pool, true).map(team => <Rival key={team.profile.id} data={team}
+              rank={1 + pool.filter(other => seasonTotal(other) > seasonTotal(team)).length}
+              previous={completeRanks ? 1 + pool.filter(other => other.previousTotal! > team.previousTotal!).length : 0}
+              selected={team.profile.id === entry} own={team.profile.id === preferences.manager} onSelect={() => selectManager(team.profile.id)} onRemove={() => persist({ ...preferences, rivals: preferences.rivals.filter(value => value !== team.profile.id) })} />)}
             {pool.length < rivalIDs.length && <p className="fpl-muted">Some teams are still loading. Retrying automatically.</p>}
             <button className="fpl-add-rival" onClick={() => setAddingRival(value => !value)}>＋ Add rival</button>
             <div className="fpl-section-heading"><h3>Your leagues</h3><button className="fpl-league-manage" onClick={() => change({ section: 'leagues' })}>Manage</button></div>{leagues.map(l => <button className="fpl-league-link" key={l.id} onClick={() => change({ section: 'leagues', league: l.id })}><span className="fpl-league-initial">{l.name[0]}</span><span>{l.name}</span><strong>{l.entry_rank ? `#${l.entry_rank.toLocaleString()}` : '›'}</strong><LeagueTrend rank={l.entry_rank} previous={l.entry_last_rank} /></button>)}{!leagues.length && <p className="fpl-muted">No private leagues yet.</p>}
@@ -136,8 +156,13 @@ function IDForm({ label, onSubmit, button, kind = 'entry' }: { label: string; on
   const submit = async (e: FormEvent) => { e.preventDefault(); const id = parseFplID(input, kind); if (!id) { setError(`Enter a valid ${kind === 'entry' ? 'manager' : 'league'} ID or official FPL link.`); return; } setBusy(true); setError(''); try { await onSubmit(id); setInput(''); } catch (error) { setError(error instanceof Error ? error.message : 'Unable to save.'); } finally { setBusy(false); } };
   return <form className="fpl-id-form" onSubmit={submit}><label>{label}<input value={input} onChange={e => setInput(e.target.value)} placeholder="e.g. 123456" required maxLength={300} /></label><button disabled={busy} type="submit">{busy ? 'Checking…' : button}</button>{error && <p className="fpl-error" role="alert">{error}</p>}</form>;
 }
-function PlayerCard({ player: p, data, metric, onClick }: { player: SquadPlayer; data: Squad; metric: string; onClick: () => void }) {
+type PitchExit = 'sent off' | 'substituted off';
+function PlayerCard({ player: p, data, metric, onClick, exit }: { exit?: PitchExit; player: SquadPlayer; data: Squad; metric: string; onClick: () => void }) {
   const incoming = data.substitutions.some(s => s.incoming === p.id), outgoing = data.substitutions.some(s => s.outgoing === p.id);
+  const sentOff = exit === 'sent off' || (p.fixtures.length === 1 ? p.stats.red_cards > 0 :
+    p.fixtures.some(f => f.started && !f.finished && !f.finished_provisional && p.redCardFixtures?.includes(f.id)));
+  const live = p.inPlay && !exit && !sentOff;
+  const displayPoints = p.pickPosition <= 11 ? p.rawPoints * p.multiplier : p.rawPoints;
   let detail: string;
   if (metric === 'opponent') detail = p.fixtures.map(f => `${teamName(data.teams, f.team_h === p.team ? f.team_a : f.team_h, true)} (${f.team_h === p.team ? 'H' : 'A'})`).join(' · ') || 'No fixture';
   else if (metric === 'difficulty') detail = p.fixtures.map(f => `FDR ${f.team_h === p.team ? f.team_h_difficulty : f.team_a_difficulty}/5`).join(' · ') || 'No fixture';
@@ -145,9 +170,9 @@ function PlayerCard({ player: p, data, metric, onClick }: { player: SquadPlayer;
   else if (metric === 'ownership_count') detail = `≈ ${Math.round(data.totalPlayers * Number(p.selected_by_percent) / 100).toLocaleString()}`;
   else if (metric === 'minutes') detail = `${Math.round(p.minutes / Math.max(p.starts, 1))} mins / start`;
   else detail = String(p[metric as keyof Player] ?? '—') + (metric === 'selected_by_percent' ? '%' : metric === 'ep_next' ? ' xP' : '');
-  return <button className={`fpl-player${p.inPlay ? ' is-live' : ''}${incoming ? ' is-incoming' : ''}${outgoing ? ' is-outgoing' : ''}`} onClick={onClick} aria-label={`${p.first_name} ${p.second_name}, ${p.rawPoints} points${p.isCaptain ? ', captain' : ''}${incoming ? ', included substitute' : ''}${outgoing ? ', replaced starter' : ''}`}>
+  return <button className={`fpl-player${live ? ' is-live' : ''}${incoming ? ' is-incoming' : ''}${outgoing ? ' is-outgoing' : ''}`} onClick={onClick} aria-label={`${p.first_name} ${p.second_name}, ${displayPoints} points${sentOff ? ', sent off' : exit ? ', substituted off' : ''}${p.isCaptain ? ', captain' : ''}${incoming ? ', included substitute' : ''}${outgoing ? ', replaced starter' : ''}`}>
     <span className={`fpl-player-detail difficulty-${p.fixtures[0] ? (p.fixtures[0].team_h === p.team ? p.fixtures[0].team_h_difficulty : p.fixtures[0].team_a_difficulty) : 0}`}>{detail}</span><span className="fpl-player-photo" data-initials={p.web_name.slice(0, 2).toUpperCase()}><PlayerPortrait key={p.code} player={p} />{(p.isCaptain || p.isViceCaptain) && <b>{p.isCaptain ? 'C' : 'V'}</b>}{p.status !== 'a' && <span title={p.news || 'Availability concern'} aria-label={p.news || 'Availability concern'}>!</span>}</span>
-    <strong>{p.web_name}</strong><span className="fpl-player-score">{p.started || p.stats.minutes ? p.rawPoints : '—'}{p.multiplier > 1 && <small> ×{p.multiplier}</small>}{p.inPlay && <small> LIVE</small>}</span><span className="fpl-player-events">{p.stats.goals_scored > 0 && <span title="Goals">⚽{p.stats.goals_scored}</span>}{p.stats.assists > 0 && <span title="Assists" aria-label={`${p.stats.assists} assists`}><b className="fpl-assist-icon">A</b>{p.stats.assists}</span>}{p.stats.yellow_cards > 0 && <span title="Yellow card">🟨</span>}{p.stats.red_cards > 0 && <span title="Red card">🟥</span>}</span>{incoming && <small>↑ Included</small>}{outgoing && <small>↓ Replaced</small>}
+    <strong>{p.web_name}</strong><span className="fpl-player-score">{p.started || p.stats.minutes ? displayPoints : '—'}{live && <small> LIVE</small>}</span><span className="fpl-player-events">{p.stats.goals_scored > 0 && <span title="Goals">⚽{p.stats.goals_scored}</span>}{p.stats.assists > 0 && <span title="Assists" aria-label={`${p.stats.assists} assists`}><b className="fpl-assist-icon">A</b>{p.stats.assists}</span>}{p.stats.yellow_cards > 0 && <span title="Yellow card">🟨</span>}{(sentOff || p.stats.red_cards > 0) && <span title="Sent off">🟥</span>}{exit === 'substituted off' && !sentOff && <span className="fpl-sub-off" title="Substituted off">↓</span>}</span>{incoming && <small>↑ Included</small>}{outgoing && <small>↓ Replaced</small>}
   </button>;
 }
 function PlayerPortrait({ player }: { player: Player }) {
@@ -164,8 +189,107 @@ function LeagueTrend({ rank, previous }: { rank: number; previous: number }) {
   const label = direction === 'new' ? 'No previous rank' : direction === 'same' ? 'Rank unchanged' : `${direction === 'up' ? 'Up' : 'Down'} ${Math.abs(previous - rank)} places`;
   return <span className={`fpl-league-trend trend-${direction}`} aria-label={label} title={label}>{direction === 'up' ? '↑' : direction === 'down' ? '↓' : direction === 'same' ? '=' : '—'}</span>;
 }
-function Rival({ data, selected, own, onSelect, onRemove }: { data: Squad; selected: boolean; own: boolean; onSelect: () => void; onRemove: () => void }) {
-  return <div className={`fpl-rival${own ? ' is-you' : ''}${selected ? ' selected' : ''}`}><button onClick={onSelect}><ManagerBadge profile={data.profile} /><span><strong>{data.profile.name}{own ? ' · You' : ''}</strong><small>{data.profile.player_first_name} {data.profile.player_last_name}</small></span><strong>{data.points}</strong><strong>{data.history.total_points.toLocaleString()}</strong></button>{own ? <span className="fpl-remove-space" aria-hidden="true" /> : <button className="fpl-remove" aria-label={`Remove rival ${data.profile.name}`} onClick={onRemove}>×</button>}</div>;
+const fetchGames = (date: string, signal: AbortSignal) => fetchTableMatches(['Premier League'], date, signal);
+
+function matchPlayers(match: Match, squad: Squad) {
+  const clubIDs = (name: string, short?: string | null) => {
+    const keys = [...teamIdentityKeys(name), ...teamIdentityKeys(short || name)];
+    return squad.teams.filter(team => [team.name, team.short_name].some(alias =>
+      teamIdentityKeys(alias).some(key => keys.includes(key)))).map(team => team.id);
+  };
+  const home = clubIDs(match.homeTeam, match.homeShortName);
+  const away = clubIDs(match.awayTeam, match.awayShortName);
+  return squad.players.flatMap(player => {
+    const fixture = player.fixtures.find(f => (home.includes(f.team_h) || away.includes(f.team_a))
+      && f.kickoff_time && localDate(new Date(f.kickoff_time)) === match.date);
+    return fixture ? [{ player, fixture, isHome: fixture.team_h === player.team }] : [];
+  });
+}
+
+function usePitchMatchDetails(matches: Match[] | undefined, squad: Squad | undefined, enabled: boolean) {
+  const [details, setDetails] = useState<Record<string, MatchDetails>>({});
+  const ids = enabled && squad ? (matches || []).filter(m => m.matchDetailsId && (isMatchLive(m) || isMatchFinished(m))
+    && matchPlayers(m, squad).length).map(m => m.matchDetailsId!).join(',') : '';
+  useEffect(() => {
+    if (!ids) return;
+    const controller = new AbortController();
+    void Promise.all(ids.split(',').map(async id => {
+      try {
+        const raw = await fetchFantasy<Record<string, unknown>>(`/api/v1/matches/${encodeURIComponent(id)}`, controller.signal);
+        const detail = normalizeMatchDetails(raw);
+        if (!controller.signal.aborted) setDetails(old => ({ ...old, [id]: detail }));
+      } catch { /* Retain the last incidents until the next scores refresh. */ }
+    }));
+    return () => controller.abort();
+  }, [ids, matches]);
+  return details;
+}
+
+function playerExits(squad: Squad | undefined, matches: Match[] | undefined, details: Record<string, MatchDetails>) {
+  const exits = new Map<number, PitchExit>();
+  if (!squad) return exits;
+  for (const match of matches || []) {
+    const detail = details[match.matchDetailsId || ''];
+    if (!detail) continue;
+    for (const { player, fixture, isHome } of matchPlayers(match, squad)) {
+      if (player.inPlay && (fixture.finished || fixture.finished_provisional)) continue;
+      const full = buildPlayerNameLookup([player.first_name, player.second_name].filter(Boolean).join(' '));
+      const short = buildPlayerNameLookup(player.web_name);
+      const samePlayer = (name: string) => {
+        const candidate = buildPlayerNameLookup(name);
+        return candidate.full === short.full || matchPlayerNameLookup(candidate, full) >= 2
+          || (!candidate.full.includes(' ') && candidate.full === full.last);
+      };
+      const lineup = isHome ? detail.teamLineups?.home : detail.teamLineups?.away;
+      if ((isHome ? detail.homeRedCards : detail.awayRedCards).some(card => samePlayer(card.player))) exits.set(player.id, 'sent off');
+      else if (lineup?.substitutions.some(sub => samePlayer(sub.playerOff.name))) exits.set(player.id, 'substituted off');
+    }
+  }
+  return exits;
+}
+
+function matchContribution(match: Match, squad?: Squad) {
+  if (!squad) return null;
+  let points = 0;
+  const names: string[] = [];
+  for (const { player, fixture } of matchPlayers(match, squad)) {
+    names.push(player.web_name);
+    points += player.multiplier * (player.fixtures.length === 1 ? player.rawPoints : player.fixturePoints?.[fixture.id] ?? 0);
+  }
+  return names.length ? { names, points } : null;
+}
+
+function pointsColour(points: number) {
+  if (points < 1) return 'red';
+  if (points <= 2) return 'orange';
+  if (points <= 4) return 'amber';
+  if (points <= 7) return 'light-green';
+  return 'green';
+}
+
+function TodaysGames({ squad, date, games }: { squad?: Squad; date: string; games: { data?: Match[]; error?: string } }) {
+  const matches = (games.data || []).filter(match => match.date === date && match.league === 'Premier League')
+    .sort((a, b) => a.time.localeCompare(b.time));
+  if (!matches.length && !games.error) return null;
+  return <section className="fpl-games"><div className="fpl-section-heading"><h2>Today's games</h2></div>
+    {games.error && <small>{matches.length ? 'Scores may be delayed.' : 'Scores temporarily unavailable.'}</small>}
+    {matches.map(match => {
+      const contribution = matchContribution(match, squad);
+      const score = match.homeScore != null && match.awayScore != null ? `${match.homeScore}–${match.awayScore}` : 'v';
+      const live = isMatchLive(match);
+      return <Link className="fpl-game" key={match.id} to={matchPath(match)} state={{ match }}>
+        <small className={live ? 'fixture-state live-clock' : undefined}>{live && <><span className="live-dot" aria-hidden="true" /><span className="sr-only">Live </span></>}
+          {match.scoreStatus === 'NS' ? displayTime(match.time) : displayStatus(match)}</small><span>{match.homeShortName || match.homeTeam}</span>
+        <strong>{score}</strong><span>{match.awayShortName || match.awayTeam}</span>
+        {contribution && <b className="fpl-game-points" data-colour={pointsColour(contribution.points)} title={contribution.names.join(', ')}
+          aria-label={`${contribution.points} FPL points from ${contribution.names.join(', ')}`}>{contribution.points} {Math.abs(contribution.points) === 1 ? 'pt' : 'pts'}</b>}
+      </Link>;
+    })}
+  </section>;
+}
+
+function Rival({ rank, previous, data, selected, own, onSelect, onRemove }: { rank: number; previous: number; data: Squad; selected: boolean; own: boolean; onSelect: () => void; onRemove: () => void }) {
+  return <div className={`fpl-rival${own ? ' is-you' : ''}${selected ? ' selected' : ''}`}><button onClick={onSelect}><ManagerBadge profile={data.profile} /><span><strong>{data.profile.name}{own ? ' · You' : ''}</strong><small>{data.profile.player_first_name} {data.profile.player_last_name}</small></span><strong>{data.points}</strong><strong>{seasonTotal(data).toLocaleString()}</strong><LeagueTrend rank={rank} previous={previous} /></button>{own ? <span className="fpl-remove-space" aria-hidden="true" /> : <button className="fpl-remove" aria-label={`Remove rival ${data.profile.name}`} onClick={onRemove}>×</button>}</div>;
 }
 function useRivalSquads(ids: number[], event?: number) {
   const [squads, setSquads] = useState<Record<number, Squad>>({});

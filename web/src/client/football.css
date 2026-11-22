@@ -565,7 +565,6 @@ button:disabled {
   overflow-wrap: anywhere;
   text-align: center;
 }
-.fixture-row.is-live .fixture-state,
 .fixture-row.is-live strong {
   color: var(--live);
 }
@@ -1614,7 +1613,7 @@ button:disabled {
 .fixture-row.is-live strong {
   color: var(--text);
 }
-.fixture-row.is-live .fixture-state {
+.fixture-state.live-clock {
   position: relative;
   isolation: isolate;
   flex-direction: row;
@@ -1628,7 +1627,7 @@ button:disabled {
   font-weight: 750;
   white-space: nowrap;
 }
-.fixture-row.is-live .fixture-state::before {
+.fixture-state.live-clock::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -1637,7 +1636,7 @@ button:disabled {
   background: #ff5474;
   animation: live-pill-pulse 1.6s ease-in-out infinite;
 }
-.fixture-row.is-live .live-dot {
+.live-clock .live-dot {
   background: white;
   width: 5px;
   height: 5px;
@@ -1653,7 +1652,7 @@ button:disabled {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .fixture-row.is-live .fixture-state::before {
+  .fixture-state.live-clock::before {
     animation: none;
   }
 }
@@ -1697,7 +1696,7 @@ button:disabled {
       26px minmax(0, 1fr) 14px minmax(54px, max-content) 14px minmax(0, 1fr)
       26px;
   }
-  .fixture-row.is-live .fixture-state {
+  .fixture-state.live-clock {
     font-size: 10px;
   }
 }

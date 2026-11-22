@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { parseFplID, readPreferences, visibleLeagues, sortSquads, managerInitials, playerImageCandidates } from '../src/client/fantasyData.ts';
+import { parseFplID, readPreferences, visibleLeagues, sortSquads, seasonTotal, managerInitials, playerImageCandidates } from '../src/client/fantasyData.ts';
 test('manager and league links are parsed only from the official origin', () => {
   assert.equal(parseFplID('123456'), 123456);
   assert.equal(parseFplID('https://fantasy.premierleague.com/entry/123456/event/10'), 123456);
@@ -28,4 +28,12 @@ test('portraits use current assets before the legacy fallback', () => {
   assert.match(urls[0],new RegExp(`premierleague25/photos/players/110x140/${code}.png$`));
   assert.match(urls[1],new RegExp(`/p${code}.png$`));
  }
+});
+
+test('live totals use net gameweek points and settled totals use official history', () => {
+  const leader = { profile: { id: 1 }, previousTotal: 190, history: { total_points: 190 }, points: 8 } as any;
+  const challenger = { profile: { id: 2 }, previousTotal: 185, history: { total_points: 185 }, points: 14 } as any;
+  assert.equal(seasonTotal(challenger), 199);
+  assert.deepEqual(sortSquads([leader, challenger], true), [challenger, leader]);
+  assert.equal(seasonTotal({ ...challenger, finalized: true }), 185);
 });

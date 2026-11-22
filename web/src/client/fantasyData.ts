@@ -6,12 +6,12 @@ export interface Player {
   minutes: number; starts: number; ep_next: string | null; news: string; status: string; ict_index: string;
   goals_scored: number; assists: number; clean_sheets: number; bonus: number; expected_goals: string; expected_assists: string;
 }
-export interface SquadPlayer extends Player { pickPosition: number; isCaptain: boolean; isViceCaptain: boolean; stats: Record<string, number>; rawPoints: number; multiplier: number; fixtures: Fixture[]; started: boolean; inPlay: boolean }
+export interface SquadPlayer extends Player { redCardFixtures?: number[]; fixturePoints?: Record<number, number>; pickPosition: number; isCaptain: boolean; isViceCaptain: boolean; stats: Record<string, number>; rawPoints: number; multiplier: number; fixtures: Fixture[]; started: boolean; inPlay: boolean }
 export interface League { id: number; name: string; entry_rank: number; entry_last_rank: number; league_type?: string }
 export interface Profile { club_badge_src?: string; id: number; name: string; player_first_name: string; player_last_name: string; summary_overall_points: number; summary_overall_rank: number; leagues: { classic: League[] } }
 export interface Event { id: number; name: string; deadline_time: string; data_checked: boolean; average_entry_score: number; highest_score: number }
 export interface Squad {
-  nextDeadline?: string | null; totalPlayers: number; profile: Profile; event: Event; events: Event[]; teams: Team[]; players: SquadPlayer[];
+  previousTotal: number | null; nextDeadline?: string | null; totalPlayers: number; profile: Profile; event: Event; events: Event[]; teams: Team[]; players: SquadPlayer[];
   substitutions: { incoming: number; outgoing: number; confirmed: boolean }[]; notes: string[];
   nextExpectedPoints: number | null; grossPoints: number; transferCost: number; points: number; finalized: boolean; chip: string | null;
   history: { total_points: number; overall_rank: number; bank: number; value: number; points: number }; updatedAt: string;
@@ -65,8 +65,13 @@ export function visibleLeagues(profile: Profile | undefined, saved: Preferences[
 export function managerInitials(profile?: Pick<Profile, 'player_first_name' | 'player_last_name'>): string {
   return profile ? [profile.player_first_name, ...profile.player_last_name.split(/[\s-]+/)].filter(Boolean).map(n => n[0]).join('').slice(0, 3).toUpperCase() : '…';
 }
+export function seasonTotal(team: Squad): number {
+  if (team.finalized || team.previousTotal == null) return team.history.total_points;
+  return team.previousTotal + team.points;
+}
+
 export function sortSquads(squads: Squad[], total = false): Squad[] {
-  return [...squads].sort((a, b) => (total ? b.history.total_points - a.history.total_points : b.points - a.points) || a.profile.id - b.profile.id);
+  return [...squads].sort((a, b) => (total ? seasonTotal(b) - seasonTotal(a) : b.points - a.points) || a.profile.id - b.profile.id);
 }
 
 export const playerImageCandidates = (player: Player) => [playerImage(player), `https://resources.premierleague.com/premierleague/photos/players/110x140/p${player.code}.png`];

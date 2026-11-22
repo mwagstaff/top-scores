@@ -1435,6 +1435,7 @@ test("match detail joins momentum and stats while fixture lists stay lightweight
       getBsdRecords: async (name, filter, options) => {
         reads.push({ name, filter, options });
         if (name === "bsd_events") return [{ _id: "123", payload: event }];
+        if (name === "bsd_next_goal_calls") return [{ _id: "456", payload: { minute: 10, side: "home", probability: 0.74, outcome: "hit", resolved_minute: 34 } }];
         if (name === "bsd_event_stats") return [{ _id: "123", updated_at: "2026-11-12T22:00:00Z", payload: { momentum: [{ m: 1, v: 20 }, { m: 2, v: -10 }], stats: { home: { ball_possession: 54 }, away: { ball_possession: 46 } } } }];
         if (name === "bsd_incidents") return [{ payload: { incidents: [{ type: "goal", minute: 1, is_home: true, player: "Scorer" }] } }];
         return [];
@@ -1444,6 +1445,9 @@ test("match detail joins momentum and stats while fixture lists stay lightweight
   });
   const details = await module.exports.projectBsdMatchDetails("123");
   assert.equal(details.momentum.status, "available");
+  assert.equal(details.next_goal.status, "settled");
+  assert.equal(details.next_goal.calls[0].summary, "10′ · Called Arsenal to score next (74%) · Correct · Arsenal scored at 34′");
+  assert.equal(reads.find(r => r.name === "bsd_next_goal_calls").filter.event_id, "123");
   assert.equal(details.momentum.annotations[0].label, "Goal · Scorer");
   assert.equal(details.momentum.updated_at, "2026-11-12T22:00:00Z");
   assert.equal(reads.find(r => r.name === "bsd_event_stats").options.projection["payload.momentum"], 1);

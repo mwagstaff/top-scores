@@ -154,6 +154,7 @@ export interface MatchTeamLineups {
 
 export interface MatchDetails {
   matchContext?: import("./matchContext").MatchContext | null;
+  nextGoal?: import("./nextGoal").NextGoal | null;
   momentum?: import("./momentum").MatchMomentum | null;
   matchStats?: import("./matchStats").MatchStats | null;
   id: string;

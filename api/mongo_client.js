@@ -137,6 +137,7 @@ async function ensureIndexes() {
       },
       { key: { event_date: 1 }, name: "event_date" },
     ]),
+    collection("bsd_next_goal_calls").createIndex({ event_id: 1 }),
     collection("bsd_incidents").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
     collection("bsd_broadcasts").createIndex({ updated_at: -1 }, { name: "updatedAt_desc" }),
     collection("live_football_tv_listings").createIndexes([
@@ -1070,6 +1071,25 @@ async function upsertBsdRecord(collectionName, id, payload, extra = {}) {
   const normalizedId = normalizeRecordId(id);
   if (!normalizedId) return null;
   const updatedAtIso = new Date().toISOString();
+  // Bulk and settlement fetches can overlap. Preserve a graded call if a slower
+  // request returns an open one, and avoid rewriting an unchanged call.
+  if (collectionName === "bsd_next_goal_calls") {
+    const preserve = { $or: [
+      { $eq: ["$payload", { $literal: payload }] },
+      { $and: [
+        { $ne: [{ $type: "$payload" }, "missing"] },
+        { $ne: ["$payload.outcome", "open"] },
+        { $eq: [{ $literal: payload.outcome }, "open"] },
+      ] },
+      { $gt: ["$payload.resolved_at", { $literal: payload.resolved_at ?? null }] },
+    ] };
+    await collection(collectionName).updateOne({ _id: normalizedId }, [{ $set: {
+      payload: { $cond: [preserve, "$payload", { $literal: payload }] },
+      updated_at: { $cond: [preserve, "$updated_at", updatedAtIso] },
+      event_id: { $literal: extra.event_id },
+    } }], { upsert: true });
+    return normalizedId;
+  }
   const update = collectionName === "bsd_lineups"
     ? [{ $set: bsdLineupsSetStage(payload, extra, updatedAtIso) }]
     : shouldMergeExistingBsdEventMetadata(collectionName, payload)

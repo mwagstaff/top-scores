@@ -130,7 +130,7 @@ export const FixtureRow = memo(function FixtureRow({
         <strong className="fixture-score">
           {scored ? match.homeScore : ""}
         </strong>
-        <span className="fixture-state">
+        <span className={live ? "fixture-state live-clock" : "fixture-state"}>
           {live && <span className="live-dot" />}
           <span>{abandoned ? "ABD" : displayStatus(match)}</span>
         </span>

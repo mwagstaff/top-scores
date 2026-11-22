@@ -1580,7 +1580,8 @@ async function projectBsdMatchDetails(eventId, options = {}) {
   const teamIds = [eventDoc.payload.home_team_id, eventDoc.payload.away_team_id]
     .filter((teamId) => teamId != null)
     .map(String);
-  const [incidentsDoc, contextResult, broadcastsDoc, supplementaryListings, venueDoc, previousLegDoc, leagues, teamDocs, playerStatsDoc, statsDoc] = await Promise.all([
+  const nextGoalEligible = Boolean(mapBsdStatus(eventDoc.payload));
+  const [incidentsDoc, contextResult, broadcastsDoc, supplementaryListings, venueDoc, previousLegDoc, leagues, teamDocs, playerStatsDoc, statsDoc, nextGoalDocs, nextGoalCalls] = await Promise.all([
     options.incidentsDoc || getBsdRecords("bsd_incidents", { _id: id }).then((r) => r[0] || null),
     matchContextService.load(eventDoc.payload, { refreshInBackground: options.refreshContext === true, lineupsDoc: options.lineupsDoc }),
     options.broadcastsDoc || getBsdRecords("bsd_broadcasts", { _id: id }).then((r) => r[0] || null),
@@ -1603,6 +1604,8 @@ async function projectBsdMatchDetails(eventId, options = {}) {
     options.statsDoc || getBsdRecords("bsd_event_stats", { _id: id }, {
       projection: { "payload.momentum": 1, "payload.stats": 1, "payload.shotmap": 1, updated_at: 1 },
     }).then(rows => rows[0] || null).catch(() => null),
+    nextGoalEligible ? getBsdRecords("bsd_next_goal", { _id: { $in: [id, "coverage", "settled:" + id] } }).catch(() => []) : [],
+    nextGoalEligible ? getBsdRecords("bsd_next_goal_calls", { event_id: id }).catch(() => []) : [],
   ]);
   const lineupsDoc = options.lineupsDoc || contextResult.docs.lineups;
   const leagueNameById = new Map();
@@ -1629,6 +1632,8 @@ async function projectBsdMatchDetails(eventId, options = {}) {
     statsDoc, eventDoc.payload, incidentsDoc?.payload?.incidents
   );
   if (match) {
+    const nextGoal = require("./bsd_next_goal").projectNextGoal(nextGoalDocs, nextGoalCalls, eventDoc.payload, match);
+    if (nextGoal) match.next_goal = nextGoal;
     match.match_stats = require("./bsd_match_stats").projectMatchStats(statsDoc, eventDoc.payload);
     match.match_context = contextResult.context;
     if (match.match_context.lineup_status === "unavailable") match.team_lineups = null;

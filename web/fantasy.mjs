@@ -39,17 +39,27 @@ export function createFantasyService(fetcher = fetch) {
       const published = bootstrap.events.filter(e => Date.parse(e.deadline_time) <= Date.now());
       const event = requestedEvent ? published.find(e => e.id === requestedEvent) : published.at(-1);
       if (!event) { const error = new Error('Picks are not published for this gameweek yet.'); error.status = 404; throw error; }
-      const [picks, live, fixtures] = await Promise.all([
+      const [picks, live, fixtures, previousTotal] = await Promise.all([
         get(`entry/${entry}/event/${event.id}/picks/`), get(`event/${event.id}/live/`), get(`fixtures/?event=${event.id}`),
+        event.id > (profile.started_event || 1) ? get(`entry/${entry}/event/${event.id - 1}/picks/`, 300_000)
+          .then(previous => previous.entry_history.total_points).catch(() => null) : 0,
       ]);
       // A failed component never publishes a partial score/status snapshot.
       const compactEvent = ({ id, name, deadline_time, data_checked, average_entry_score, highest_score }) => ({ id, name, deadline_time, data_checked, average_entry_score, highest_score });
       const { id, name, player_first_name, player_last_name, summary_overall_points, summary_overall_rank, club_badge_src } = profile;
-      return { profile: { id, name, player_first_name, player_last_name, summary_overall_points, summary_overall_rank, club_badge_src,
+      const score = scoring.scorePublicSquad({ bootstrap, picks, live, fixtures, event });
+      const livePlayers = new Map(live.elements.map(player => [player.id, player]));
+      for (const player of score.players) {
+        const explain = livePlayers.get(player.id)?.explain || [];
+        player.redCardFixtures = explain.filter(({ stats }) => stats.some(stat => stat.identifier === 'red_cards' && stat.value > 0)).map(row => row.fixture);
+        player.fixturePoints = Object.fromEntries(explain.map(({ fixture, stats }) =>
+          [fixture, stats.reduce((sum, stat) => sum + stat.points, 0)]));
+      }
+      return { previousTotal, profile: { id, name, player_first_name, player_last_name, summary_overall_points, summary_overall_rank, club_badge_src,
           leagues: { classic: (profile.leagues?.classic || []).map(({ id, name, entry_rank, entry_last_rank, league_type }) => ({ id, name, entry_rank, entry_last_rank, league_type })) } },
         nextDeadline: bootstrap.events.find(e => Date.parse(e.deadline_time) > Date.now())?.deadline_time || null,
         event: compactEvent(event), events: published.map(compactEvent), teams: bootstrap.teams.map(({ id, name, short_name }) => ({ id, name, short_name })), totalPlayers: bootstrap.total_players,
-        ...scoring.scorePublicSquad({ bootstrap, picks, live, fixtures, event }),
+        ...score,
         nextExpectedPoints: event.id === published.at(-1)?.id ? picks.picks.filter(p => p.position <= 11).reduce((sum, pick) => {
           const player = bootstrap.elements.find(p => p.id === pick.element);
           return sum + Number(player?.ep_next || 0) * (pick.is_captain ? 2 : 1);

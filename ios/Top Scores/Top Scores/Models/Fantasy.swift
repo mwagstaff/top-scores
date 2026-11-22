@@ -2063,6 +2063,7 @@ struct FantasyDisplayPlayer: Identifiable, Hashable, Sendable {
     let assists: Int
     let yellowCards: Int
     let redCards: Int
+    var sentOffInActiveFixture: Bool? = nil
     var surname: String? = nil
     var gameweekOpponentDisplay: String? = nil
     var hasParticipationData: Bool = true
@@ -2165,6 +2166,7 @@ struct FantasyDisplayPlayer: Identifiable, Hashable, Sendable {
             assists: assists,
             yellowCards: yellowCards,
             redCards: redCards,
+            sentOffInActiveFixture: sentOffInActiveFixture,
             surname: surname,
             gameweekOpponentDisplay: gameweekOpponentDisplay,
             hasParticipationData: hasParticipationData
@@ -2477,7 +2479,7 @@ enum FantasyLiveScoringEngine {
         )
     }
 
-    private nonisolated static func namesMatch(
+    nonisolated static func namesMatch(
         _ candidate: String,
         playerFullName: String,
         playerDisplayName: String
@@ -4227,6 +4229,13 @@ enum FantasySquadBuilder {
                 assists: assists,
                 yellowCards: yellowCards,
                 redCards: redCards,
+                sentOffInActiveFixture: fixtures.contains { fixture in
+                    guard redCards > 0, fixtureIsLive(fixture),
+                          fixture.teamH == element?.team || fixture.teamA == element?.team else { return false }
+                    let teamFixtures = fixtures.filter { $0.teamH == element?.team || $0.teamA == element?.team }
+                    return teamFixtures.count == 1 || (liveResponse.elements.first { $0.id == pick.element }?
+                        .statValue("red_cards", forFixtureID: fixture.id) ?? 0) > 0
+                },
                 surname: element?.secondName,
                 gameweekOpponentDisplay: orderedGameweekFixtures
                     .compactMap { fixture -> String? in

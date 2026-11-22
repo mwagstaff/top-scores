@@ -2948,7 +2948,7 @@ struct FantasyView: View {
         showsPoints: Bool = true,
         finalPointsMetricTitle: String = "Final Points"
     ) -> some View {
-        let substitutedOffElementIDs = substitutedOffElementIDs(in: data)
+        let pitchExits = pitchExits(in: data)
         let pointsMetricTitle: String
         let pointsMetricValue: Double?
         let pointsMetricDisplayValue: String?
@@ -2996,7 +2996,7 @@ struct FantasyView: View {
                         playerSelectionEnabled: playerSelectionEnabled,
                         detailMode: detailMode.wrappedValue,
                         scorePhase: data.scorePhase,
-                        substitutedOffElementIDs: substitutedOffElementIDs,
+                        pitchExits: pitchExits,
                         hasTripleCaptainActive: data.hasTripleCaptainActive,
                         contributions: data.benchContributions,
                         showsPoints: showsPoints
@@ -3007,7 +3007,7 @@ struct FantasyView: View {
                         playerSelectionEnabled: playerSelectionEnabled,
                         detailMode: detailMode.wrappedValue,
                         scorePhase: data.scorePhase,
-                        substitutedOffElementIDs: substitutedOffElementIDs,
+                        pitchExits: pitchExits,
                         hasTripleCaptainActive: data.hasTripleCaptainActive,
                         contributions: data.benchContributions,
                         showsPoints: showsPoints
@@ -3018,7 +3018,7 @@ struct FantasyView: View {
                         playerSelectionEnabled: playerSelectionEnabled,
                         detailMode: detailMode.wrappedValue,
                         scorePhase: data.scorePhase,
-                        substitutedOffElementIDs: substitutedOffElementIDs,
+                        pitchExits: pitchExits,
                         hasTripleCaptainActive: data.hasTripleCaptainActive,
                         contributions: data.benchContributions,
                         showsPoints: showsPoints
@@ -3029,7 +3029,7 @@ struct FantasyView: View {
                         playerSelectionEnabled: playerSelectionEnabled,
                         detailMode: detailMode.wrappedValue,
                         scorePhase: data.scorePhase,
-                        substitutedOffElementIDs: substitutedOffElementIDs,
+                        pitchExits: pitchExits,
                         hasTripleCaptainActive: data.hasTripleCaptainActive,
                         contributions: data.benchContributions,
                         showsPoints: showsPoints
@@ -3204,7 +3204,7 @@ struct FantasyView: View {
         playerSelectionEnabled: Bool,
         detailMode: FantasyPitchPlayerDetailMode,
         scorePhase: FantasySquadDisplayData.ScorePhase,
-        substitutedOffElementIDs: Set<Int>,
+        pitchExits: [Int: FantasyPitchExit],
         hasTripleCaptainActive: Bool,
         contributions: [FantasyBenchContribution],
         showsPoints: Bool = true
@@ -3230,7 +3230,7 @@ struct FantasyView: View {
                         playerSelectionEnabled: playerSelectionEnabled,
                         detailMode: detailMode,
                         scorePhase: scorePhase,
-                        isSubstitutedOff: substitutedOffElementIDs.contains(player.elementID),
+                        pitchExit: pitchExits[player.elementID],
                         isTripleCaptain: hasTripleCaptainActive && player.isCaptain,
                         showsPoints: showsPoints,
                         contributions: contributions
@@ -3248,7 +3248,8 @@ struct FantasyView: View {
         detailMode: FantasyPitchPlayerDetailMode,
         showsPoints: Bool = true
     ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let exits = pitchExits(in: data)
+        return VStack(alignment: .leading, spacing: 10) {
             Text("Bench")
                 .font(.headline)
 
@@ -3273,6 +3274,7 @@ struct FantasyView: View {
                             playerSelectionEnabled: playerSelectionEnabled,
                             detailMode: detailMode,
                             scorePhase: data.scorePhase,
+                            pitchExit: exits[player.elementID],
                             isTripleCaptain: data.hasTripleCaptainActive && player.isCaptain,
                             showsPoints: showsPoints,
                             contributions: data.benchContributions
@@ -3327,7 +3329,7 @@ struct FantasyView: View {
         playerSelectionEnabled: Bool,
         detailMode: FantasyPitchPlayerDetailMode,
         scorePhase: FantasySquadDisplayData.ScorePhase,
-        isSubstitutedOff: Bool = false,
+        pitchExit: FantasyPitchExit? = nil,
         isTripleCaptain: Bool = false,
         showsPoints: Bool = true,
         contributions: [FantasyBenchContribution] = []
@@ -3342,7 +3344,7 @@ struct FantasyView: View {
                         width: width,
                         detailMode: detailMode,
                         scorePhase: scorePhase,
-                        isSubstitutedOff: isSubstitutedOff,
+                        pitchExit: pitchExit,
                         isTripleCaptain: isTripleCaptain,
                         showsPoints: showsPoints
                     )
@@ -3354,7 +3356,7 @@ struct FantasyView: View {
                     width: width,
                     detailMode: detailMode,
                     scorePhase: scorePhase,
-                    isSubstitutedOff: isSubstitutedOff,
+                    pitchExit: pitchExit,
                     isTripleCaptain: isTripleCaptain,
                     showsPoints: showsPoints
                 )
@@ -3367,36 +3369,39 @@ struct FantasyView: View {
         ))
     }
 
-    private func substitutedOffElementIDs(in data: FantasySquadDisplayData) -> Set<Int> {
-        guard data.hasActiveFixtures else { return [] }
+    private func pitchExits(in data: FantasySquadDisplayData) -> [Int: FantasyPitchExit] {
+        guard data.hasActiveFixtures else { return [:] }
 
-        var elementIDs = Set<Int>()
+        var exits: [Int: FantasyPitchExit] = [:]
         for baseMatch in matchesStore.matches
         where baseMatch.isInProgress && isPremierLeagueMatch(baseMatch) {
             let match = detailedLiveMatchesByID[baseMatch.id] ?? baseMatch
-            collectSubstitutedOffElementIDs(
+            collectPitchExits(
                 from: data.matchSquadSection(forTeamName: match.homeTeam),
-                lineup: match.teamLineups?.home,
-                into: &elementIDs
+                lineup: match.teamLineups?.home, redCards: match.homeRedCards,
+                into: &exits
             )
-            collectSubstitutedOffElementIDs(
+            collectPitchExits(
                 from: data.matchSquadSection(forTeamName: match.awayTeam),
-                lineup: match.teamLineups?.away,
-                into: &elementIDs
+                lineup: match.teamLineups?.away, redCards: match.awayRedCards,
+                into: &exits
             )
         }
-        return elementIDs
+        return exits
     }
 
-    private func collectSubstitutedOffElementIDs(
+    private func collectPitchExits(
         from section: FantasyMatchTeamSquadSection?,
         lineup: MatchTeamLineup?,
-        into elementIDs: inout Set<Int>
+        redCards: [MatchRedCardEvent],
+        into exits: inout [Int: FantasyPitchExit]
     ) {
-        guard let section, let lineup else { return }
+        guard let section else { return }
         for player in section.starters + section.bench where player.hasActiveFixtureThisGameweek {
-            if FantasyLiveScoringEngine.hasBeenSubstitutedOff(player: player, lineup: lineup) {
-                elementIDs.insert(player.elementID)
+            if redCards.contains(where: { FantasyLiveScoringEngine.namesMatch($0.player, playerFullName: player.fullName, playerDisplayName: player.displayName) }) {
+                exits[player.elementID] = .sentOff
+            } else if FantasyLiveScoringEngine.hasBeenSubstitutedOff(player: player, lineup: lineup) {
+                exits[player.elementID] = .substitutedOff
             }
         }
     }
@@ -5143,6 +5148,8 @@ private struct FantasyPitchLivePill: View {
     }
 }
 
+enum FantasyPitchExit { case substitutedOff, sentOff }
+
 struct FantasyPlayerCard: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @ScaledMetric(relativeTo: .caption) private var labelHeight = 20.0
@@ -5150,7 +5157,9 @@ struct FantasyPlayerCard: View {
     let width: CGFloat
     let detailMode: FantasyPitchPlayerDetailMode
     let scorePhase: FantasySquadDisplayData.ScorePhase
-    let isSubstitutedOff: Bool
+    let pitchExit: FantasyPitchExit?
+    private var isSubstitutedOff: Bool { pitchExit == .substitutedOff && !isSentOff }
+    private var isSentOff: Bool { pitchExit == .sentOff || (player.sentOffInActiveFixture ?? (player.redCards > 0)) }
     let isTripleCaptain: Bool
     let showsPoints: Bool
     @ObservedObject private var teamColorCatalog = TeamColorCatalog.shared
@@ -5160,7 +5169,7 @@ struct FantasyPlayerCard: View {
         width: CGFloat,
         detailMode: FantasyPitchPlayerDetailMode,
         scorePhase: FantasySquadDisplayData.ScorePhase,
-        isSubstitutedOff: Bool = false,
+        pitchExit: FantasyPitchExit? = nil,
         isTripleCaptain: Bool = false,
         showsPoints: Bool = true
     ) {
@@ -5168,7 +5177,7 @@ struct FantasyPlayerCard: View {
         self.width = width
         self.detailMode = detailMode
         self.scorePhase = scorePhase
-        self.isSubstitutedOff = isSubstitutedOff
+        self.pitchExit = pitchExit
         self.isTripleCaptain = isTripleCaptain
         self.showsPoints = showsPoints
     }
@@ -5178,7 +5187,7 @@ struct FantasyPlayerCard: View {
     }
 
     private var isInPlay: Bool {
-        player.hasActiveFixtureThisGameweek
+        player.hasActiveFixtureThisGameweek && !isSubstitutedOff && !isSentOff
     }
 
     private enum ScorePresentation {
@@ -5215,7 +5224,7 @@ struct FantasyPlayerCard: View {
         case .expected:
             switch scoreState {
             case .live:
-                return .live(player.displayPoints)
+                return isInPlay ? .live(player.displayPoints) : .provisional(player.displayPoints)
             case .upcoming:
                 if let playerExpectedPoints {
                     return .expected(playerExpectedPoints)
@@ -5229,7 +5238,7 @@ struct FantasyPlayerCard: View {
         case .provisional:
             guard player.hasAnyFixtureThisGameweek else { return .noFixture }
             guard player.hasStartedFixtureThisGameweek else { return .pending }
-            return player.hasActiveFixtureThisGameweek
+            return isInPlay
                 ? .live(player.displayPoints)
                 : .provisional(player.displayPoints)
         case .final:
@@ -5253,13 +5262,14 @@ struct FantasyPlayerCard: View {
 
     private var accessibilityLabelText: String {
         let fixtureDifficultyText = player.fixtureDifficulty.map { ", fixture difficulty \($0)" } ?? ""
-        let substitutionText = isSubstitutedOff ? ", substituted off" : ""
+        let substitutionText = isSentOff ? ", sent off" : isSubstitutedOff ? ", substituted off" : ""
+        let stateText = isSubstitutedOff || isSentOff ? "" : ", \(scoreState.accessibilityDescription)"
         let captainText = isTripleCaptain ? ", Triple Captain" : ""
-        return "\(player.displayName), \(secondaryDisplayText)\(fixtureDifficultyText), \(scorePresentation.accessibilityDescription), \(scoreState.accessibilityDescription)\(substitutionText)\(captainText)"
+        return "\(player.displayName), \(secondaryDisplayText)\(fixtureDifficultyText), \(scorePresentation.accessibilityDescription)\(stateText)\(substitutionText)\(captainText)"
     }
 
     private var hasEventStats: Bool {
-        player.goalsScored > 0 || player.assists > 0 || player.yellowCards > 0 || player.redCards > 0
+        player.goalsScored > 0 || player.assists > 0 || player.yellowCards > 0 || player.redCards > 0 || isSentOff
     }
 
     private var opponentDisplayText: String {
@@ -5317,18 +5327,6 @@ struct FantasyPlayerCard: View {
                     .padding(4)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
-                if isInPlay {
-                    Text("LIVE")
-                        .font(.system(size: 8, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color.mint)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 2)
-                        .background(Color(red: 0.02, green: 0.16, blue: 0.10), in: Capsule())
-                        .overlay(Capsule().strokeBorder(Color.mint.opacity(0.6), lineWidth: 0.7))
-                        .padding(3)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-                }
-
                 if player.isUnavailable || player.hasFutureAvailabilityIssue {
                     VStack(alignment: .leading, spacing: 3) {
                         if player.isUnavailable {
@@ -5356,7 +5354,7 @@ struct FantasyPlayerCard: View {
                         if player.yellowCards > 0 {
                             cardStatBadge(fill: Color.yellow, count: player.yellowCards, textColor: .black)
                         }
-                        if player.redCards > 0 {
+                        if player.redCards > 0 || isSentOff {
                             cardStatBadge(fill: Color.red, count: player.redCards, textColor: .white)
                         }
                     }
@@ -5396,14 +5394,14 @@ struct FantasyPlayerCard: View {
                 .background(Color(red: 0.02, green: 0.12, blue: 0.08))
 
             if showsPoints {
-                Text(scoreLabel)
-                    .font(.caption.weight(.medium))
+                Text(isInPlay ? "\(scoreLabel) LIVE" : scoreLabel)
+                    .font(.caption.bold())
                     .monospacedDigit()
                     .lineLimit(1)
-                    .minimumScaleFactor(0.65)
-                    .foregroundStyle(Color(red: 0.06, green: 0.22, blue: 0.15))
+                    .minimumScaleFactor(0.4)
+                    .foregroundStyle(isInPlay ? Color.white : Color(red: 0.06, green: 0.22, blue: 0.15))
                     .frame(width: width, height: labelHeight)
-                    .background(Color(red: 0.82, green: 0.90, blue: 0.84))
+                    .background(isInPlay ? Color(red: 0.90, green: 0, blue: 0.23) : Color(red: 0.82, green: 0.90, blue: 0.84))
             }
 
         }
@@ -5516,7 +5514,7 @@ struct FantasyPlayerCard: View {
         switch scorePresentation {
         case .expected(let points): return "\(fantasyExpectedPointsText(points)) xP"
         case .live(let points), .provisional(let points), .confirmed(let points):
-            return "\(points) \(points == 1 ? "pt" : "pts")"
+            return String(points)
         case .pending: return "—"
         case .expectedUnavailable: return "… xP"
         case .noFixture: return "No game"

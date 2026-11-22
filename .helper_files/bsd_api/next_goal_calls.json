@@ -1,0 +1,26 @@
+{
+  "id": 1874,
+  "event": {
+    "id": 210909,
+    "event_date": "2026-11-22T11:15:00Z",
+    "status": "2nd_half",
+    "home_team_id": 178,
+    "home_team": "FC Twente",
+    "away_team_id": 2053,
+    "away_team": "Willem II Tilburg",
+    "league_id": 10,
+    "league_name": "Eredivisie"
+  },
+  "minute": 65,
+  "side": "home",
+  "team": "FC Twente",
+  "probability": 0.741,
+  "score_at_call": {
+    "home": 1,
+    "away": 1
+  },
+  "outcome": "hit",
+  "resolved_minute": 82,
+  "called_at": "2026-11-22T12:41:05Z",
+  "resolved_at": "2026-11-22T12:58:04Z"
+}

@@ -54,7 +54,7 @@
 .fpl-bench { background: #0a131d; border: 1px solid #91a3b830; padding: 12px 8px; border-radius: 0 0 8px 8px; }
 .fpl-bench h3 { margin: 0 8px 4px; font-size: 13px; }
 .fpl-bench h3 span { color: #91a3b8; font-weight: 400; margin-left: 10px; font-size: 11px; }
-.fpl-breakdown { border-bottom: 1px solid #91a3b830; padding: 20px 0; font-size: 14px; line-height: 1.6; }
+.fpl-breakdown { padding: 20px 0; font-size: 14px; line-height: 1.6; }
 .fpl-breakdown summary { cursor: pointer; min-height: 32px; }
 .fpl-rivals { border-left: 1px solid #91a3b830; padding-left: 24px; }
 .fpl-rival { display: flex; border-bottom: 1px solid #91a3b830; }
@@ -189,9 +189,9 @@
 .fpl-pitch-stat small { font-size: 10px; }
 .fpl-bench { margin-top: 16px; border-radius: 22px; background: #0c1921; }
 .fpl-rivals { border: 1px solid #91a3b825; border-radius: 20px; padding: 18px; align-self: start; background: #0a131d80; }
-.fpl-rivals-labels { display: grid; grid-template-columns: 1fr 40px 60px; gap: 8px; padding: 18px 22px 6px 0; color: #91a3b8; font-size: 11px; text-align: right; }
+.fpl-rivals-labels { display: grid; grid-template-columns: 1fr 26px 42px; gap: 8px; padding: 18px 44px 6px 0; color: #91a3b8; font-size: 11px; text-align: right; }
 .fpl-rivals-labels > :first-child { text-align: left; }
-.fpl-page .fpl-rival > button:first-child { grid-template-columns: 36px minmax(0, 1fr) 32px 52px; align-items: center; gap: 8px; padding: 12px 2px; }
+.fpl-page .fpl-rival > button:first-child { grid-template-columns: 36px minmax(0, 1fr) 26px 42px 14px; align-items: center; gap: 8px; padding: 12px 2px; }
 .fpl-rival .fpl-manager-badge { width: 36px; height: 36px; display: grid; font-size: 11px; }
 .fpl-rival button > strong { text-align: right; }
 .fpl-rival button > span:nth-child(2) { text-align: left; }
@@ -287,3 +287,23 @@
 
 .fpl-page .fpl-league-team { display: flex; align-items: center; gap: 10px; text-align: left; }
 .fpl-league-team .fpl-manager-badge { width: 34px; height: 34px; flex: 0 0 34px; font-size: 11px; }
+
+.fpl-games { margin-bottom: 24px; }
+.fpl-game { color: inherit; text-decoration: none; display: grid; grid-template-columns: 4.25rem minmax(0, 1fr) 4ch minmax(0, 1fr) 3.4rem; gap: 6px; align-items: center; padding: 12px 0; border-bottom: 1px solid #91a3b830; font-size: 13px; }
+.fpl-game:hover, .fpl-game:focus-visible { background: #91a3b815; }
+.fpl-game:focus-visible { outline: 2px solid var(--accent); }
+.fpl-game strong { text-align: center; }
+.fpl-game .live-clock { justify-self: center; min-width: 54px; }
+.fpl-game small:not(.live-clock) { display: flex; justify-content: center; align-items: center; gap: 4px; white-space: nowrap; color: #91a3b8; }
+.fpl-game span { overflow-wrap: anywhere; }
+.fpl-game strong, .fpl-game-points { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.fpl-game-points { text-align: center; border-radius: 20px; color: white; padding: 3px 6px; font-size: 11px; }
+.fpl-rival .trend-up { color: #29ca70; }
+.fpl-rival .trend-down { color: #fa6c75; }
+
+.fpl-game-points[data-colour="red"] { background: #ab2c2a; }
+.fpl-game-points[data-colour="orange"] { background: #ed873f; color: #291406; }
+.fpl-game-points[data-colour="amber"] { background: #f2ba48; color: #281d06; }
+.fpl-game-points[data-colour="light-green"] { background: #9ad984; color: #12250e; }
+.fpl-game-points[data-colour="green"] { background: #13763d; }
+.fpl-sub-off { background: #b81838; color: white; border-radius: 50%; width: 16px; height: 16px; justify-content: center; font-weight: bold; }

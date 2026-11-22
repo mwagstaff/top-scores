@@ -83,8 +83,8 @@ struct FantasyManagerSwitcherTests {
     @Test func renderPlayerCardsAtStandardAndAccessibilitySizes() async throws {
         for (label, typeSize) in [("players", DynamicTypeSize.large), ("players-accessibility", DynamicTypeSize.accessibility3)] {
             let view = HStack(alignment: .top, spacing: 8) {
-                FantasyPlayerCard(player: player(name: "Gabriel", points: 8, live: false), width: 72, detailMode: .opponent, scorePhase: .provisional)
-                FantasyPlayerCard(player: player(name: "De Cuyper", points: 6, live: true), width: 72, detailMode: .opponent, scorePhase: .provisional)
+                FantasyPlayerCard(player: player(name: "Gabriel", points: 8, live: true), width: 72, detailMode: .opponent, scorePhase: .provisional, pitchExit: .substitutedOff)
+                FantasyPlayerCard(player: player(name: "De Cuyper", points: 6, live: true), width: 72, detailMode: .opponent, scorePhase: .provisional, pitchExit: .sentOff)
                 FantasyPlayerCard(player: player(name: "Haaland", points: 12, live: true, captain: true), width: 72, detailMode: .opponent, scorePhase: .provisional)
                 FantasyPlayerCard(player: player(name: "Manzambi", points: 0, live: false, started: false), width: 72, detailMode: .opponent, scorePhase: .provisional)
             }

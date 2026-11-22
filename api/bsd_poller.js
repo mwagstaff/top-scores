@@ -366,6 +366,7 @@ async function reconcileSettledEvent(eventId) {
     );
   }
   // Secondary enrichment must not delay the final score/lineup projection.
+  void nextGoal.calls({ eventId }).catch(error => console.warn(`[bsd-runtime] next goal calls ${eventId} failed: ${error.message}`));
   void ingestMomentum(eventId, options).catch(error => {
     console.warn(`[bsd-runtime] settled momentum ${eventId} failed: ${error.message}`);
   });
@@ -390,6 +391,10 @@ async function reconcileSettledEvents(eventIds, reason) {
 function scheduleSettledEventReconciliation(eventIds) {
   const ids = [...new Set((eventIds || []).map(String).filter(Boolean))];
   if (ids.length === 0) return;
+  for (const id of ids) {
+    void upsertBsdRecord("bsd_next_goal", "settled:" + id, { at: Date.now() }).catch(error =>
+      console.warn(`[bsd-runtime] next goal settlement ${id} failed: ${error.message}`));
+  }
   SETTLEMENT_DELAYS_MS.forEach((delayMs) => {
     if (delayMs === 0) {
       void reconcileSettledEvents(ids, "immediate");
@@ -507,6 +512,19 @@ async function pollPlayerStats() {
   } finally {
     playerStatsPollInFlight = false;
   }
+}
+
+const nextGoal = require("./bsd_next_goal").createNextGoalIngestor();
+const nextGoalInFlight = new Set();
+async function pollNextGoal(kind) {
+  if (!liveEventIds.length || nextGoalInFlight.has(kind)) return;
+  nextGoalInFlight.add(kind);
+  try {
+    if (kind === "reads") await nextGoal.reads();
+    else await nextGoal.calls({ dateFrom: new Date(Date.now() - 4 * 3_600_000).toISOString().slice(0, 10) });
+  } catch (error) {
+    console.warn(`[bsd-runtime] next goal ${kind} failed: ${error.message}`);
+  } finally { nextGoalInFlight.delete(kind); }
 }
 
 // Match-level statistics are stored independently of the score feed. UI reads
@@ -1032,6 +1050,8 @@ function start() {
   timers.push(setInterval(pollLineups, LINEUPS_POLL_MS));
   timers.push(setInterval(() => void pollMatchContext().catch(error => console.warn(`[bsd-context] ${error.message}`)), 60_000));
   timers.push(setInterval(pollPlayerStats, 60_000));
+  timers.push(setInterval(() => pollNextGoal("reads"), Number(process.env.BSD_NEXT_GOAL_POLL_MS) || 30_000));
+  timers.push(setInterval(() => pollNextGoal("calls"), 60_000));
   timers.push(setInterval(pollMomentum, 60_000));
   timers.push(setInterval(refreshFinishedMomentum, 60_000));
   timers.push(setInterval(refreshFinishedPlayerStats, 60_000));
