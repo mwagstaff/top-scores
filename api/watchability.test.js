@@ -174,6 +174,33 @@ test("a curated marquee derby remains must-watch when its domestic table is unav
   assert.equal(result.score, 85);
 });
 
+// Production fixture and pre-kickoff component scores, 24 November 2026.
+test("Bodø/Glimt vs LASK earns three stars in the Champions League league phase", () => {
+  const input = {
+    competitionName: "UEFA Champions League", competitionWeight: 90, stage: "League",
+    homeElo: 1810.75, awayElo: 1697.44,
+    homeStanding: standing(25, 4, { team_count: 36, played: 4, goals_for: 4, form: ["W", "L", "W", "L", "D"] }),
+    awayStanding: standing(16, 6, { team_count: 36, played: 4, goals_for: 10, form: ["W", "L", "L", "W", "W"] }),
+  };
+  const result = calculateWatchability(input);
+  assert.deepEqual(result.components.filter(c => c.key !== "competition").map(c => c.contribution),
+    [10.6, 8.6, 3.2, 2.3, 2.4]);
+  assert.equal(result.stars, 3);
+  assert.equal(result.score, 63);
+  for (const stage of ["League phase", "Group Stage"]) {
+    const reversed = calculateWatchability({ ...input, stage, homeElo: input.awayElo, awayElo: input.homeElo });
+    assert.equal(reversed.components[0].score, result.components[0].score);
+  }
+});
+
+test("Champions League competition weighting stays full for marquee clubs, knockouts and incomplete ratings", () => {
+  const input = { competitionName: "Champions League", competitionWeight: 90, stage: "League", homeElo: 1700, awayElo: 1750 };
+  for (const overrides of [{ homeElo: 2015 }, { stage: "Quarter-final" }, { homeElo: null }, { competitionName: "Europa League" }]) {
+    assert.equal(calculateWatchability({ ...input, ...overrides }).components[0].score, 90);
+  }
+  assert.equal(calculateWatchability(input).components[0].score, 60);
+});
+
 test("a Champions League final can be must-watch without a rivalry modifier", () => {
   const result = calculateWatchability({
     competitionName: "UEFA Champions League",

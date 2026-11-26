@@ -1,6 +1,6 @@
 "use strict";
 
-const MODEL_VERSION = "v7";
+const MODEL_VERSION = "v8";
 
 // Editorial UK audience appeal, independent of current strength/form. These
 // tiers are policy, not measured supporter counts; review them deliberately.
@@ -175,6 +175,9 @@ function championshipClubStatureAdjustment(input) {
 function factorDetail(key, score, input) {
   switch (key) {
     case "competition":
+      if (score < rounded(input.competitionWeight)) {
+        return `The Champions League league-phase weighting is reduced from ${rounded(input.competitionWeight)} to ${score}/100 based on the stronger club’s pre-match rating.`;
+      }
       return `${input.competitionName || "Competition"} carries a ${rounded(score)}/100 competition weighting.`;
     case "team_quality":
       return input.homeElo != null && input.awayElo != null
@@ -201,8 +204,18 @@ function factorDetail(key, score, input) {
 
 function calculateWatchability(input = {}) {
   input = { ...input, homeElo: ratingValue(input.homeElo), awayElo: ratingValue(input.awayElo) };
+  const competition = String(input.competitionName || "").trim().toLowerCase();
+  const isChampionsLeague = ["champions league", "uefa champions league"].includes(competition);
+  let competitionScore = clamp(input.competitionWeight);
+  const leaguePhase = /^(?:league(?: phase| stage)?|group(?: phase| stage| [a-h])?)$/i.test(String(input.stage || "").trim());
+  if (isChampionsLeague && leaguePhase && input.homeElo != null && input.awayElo != null) {
+    // At 1750 or below, discount the competition contribution by 15 points.
+    // Taper the discount to zero when either club reaches 1900.
+    const strongestClub = Math.max(input.homeElo, input.awayElo);
+    competitionScore = clamp(competitionScore - 30 * clamp((1900 - strongestClub) / 150, 0, 1));
+  }
   const factorScores = {
-    competition: clamp(input.competitionWeight),
+    competition: competitionScore,
     team_quality: qualityScore(input.homeElo, input.awayElo),
     competitive_balance: balanceScore(input.homeElo, input.awayElo),
     table_stakes: tableStakesScore(input.homeStanding, input.awayStanding),
@@ -261,7 +274,6 @@ function calculateWatchability(input = {}) {
 
   // UK cup appeal includes the draw of a Premier League participant, even
   // when the opponent makes the contest look one-sided on team strength.
-  const competition = String(input.competitionName || "").trim().toLowerCase();
   const isEnglishCup = ["fa cup", "english fa cup", "efl cup", "english league cup", "carabao cup"].includes(competition);
   if (isEnglishCup && (input.homeIsPremierLeague === true || input.awayIsPremierLeague === true)) {
     components.push({
@@ -277,7 +289,6 @@ function calculateWatchability(input = {}) {
   // Reward two elite clubs, not a single big name against weaker opposition.
   // Ramp in gradually and keep the existing competition calibration intact.
   const isPremierLeague = ["premier league", "english premier league"].includes(competition);
-  const isChampionsLeague = ["champions league", "uefa champions league"].includes(competition);
   if ((isPremierLeague || isChampionsLeague) && input.homeElo != null && input.awayElo != null) {
     const eliteStrength = clamp((Math.min(input.homeElo, input.awayElo) - 1850) / 100, 0, 1);
     if (eliteStrength > 0) {
